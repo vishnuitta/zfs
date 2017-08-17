@@ -59,6 +59,7 @@
 #include <time.h>
 
 #include <libzfs.h>
+#include <libuzfs.h>
 #include <libzfs_core.h>
 #include <zfs_prop.h>
 #include <zfs_deleg.h>
@@ -7088,7 +7089,12 @@ main(int argc, char **argv)
 		(void) fprintf(stderr, "%s", libzfs_error_init(errno));
 		return (1);
 	}
-
+#ifdef _UZFS
+	if (0 > libuzfs_client_init(g_zfs)) {
+		(void) fprintf(stderr, "%s", "failed to initialize libuzfs client\n");
+		return (1);
+	}
+#endif
 	mnttab_file = g_zfs->libzfs_mnttab;
 
 	zfs_save_arguments(argc, argv, history_str, sizeof (history_str));

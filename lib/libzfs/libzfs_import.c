@@ -65,6 +65,7 @@
 #include "libzfs.h"
 #include "libzfs_impl.h"
 #include <libzfs.h>
+#include <libuzfs.h>
 
 /*
  * Intermediate structures used to gather configuration information.
@@ -848,7 +849,7 @@ refresh_config(libzfs_handle_t *hdl, nvlist_t *config)
 		return (NULL);
 	}
 
-	while ((err = ioctl(hdl->libzfs_fd, ZFS_IOC_POOL_TRYIMPORT,
+	while ((err = uzfs_ioctl(hdl->libzfs_fd, ZFS_IOC_POOL_TRYIMPORT,
 	    &zc)) != 0 && errno == ENOMEM) {
 		if (zcmd_expand_dst_nvlist(hdl, &zc) != 0) {
 			zcmd_free_nvlists(&zc);

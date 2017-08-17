@@ -1,5 +1,7 @@
 include $(top_srcdir)/config/Rules.am
 
+AM_CFLAGS += -D_UZFS
+
 libzfs_pcdir = $(datarootdir)/pkgconfig
 libzfs_pc_DATA = libzfs.pc libzfs_core.pc
 
@@ -21,7 +23,10 @@ USER_C = \
 	libzfs_pool.c \
 	libzfs_sendrecv.c \
 	libzfs_status.c \
-	libzfs_util.c
+	libzfs_util.c \
+    libuzfs_ioctl.c \
+    libuzfs_handle.c \
+    libuzfs_server.c
 
 KERNEL_C =
 

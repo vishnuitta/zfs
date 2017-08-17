@@ -85,8 +85,9 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/zfs_ioctl.h>
+#include <libuzfs.h>
 
-static int g_fd = -1;
+int g_fd = -1;
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static int g_refcount;
 
@@ -95,11 +96,13 @@ libzfs_core_init(void)
 {
 	(void) pthread_mutex_lock(&g_lock);
 	if (g_refcount == 0) {
+#ifndef _UZFS
 		g_fd = open("/dev/zfs", O_RDWR);
 		if (g_fd < 0) {
 			(void) pthread_mutex_unlock(&g_lock);
 			return (errno);
 		}
+#endif
 	}
 	g_refcount++;
 	(void) pthread_mutex_unlock(&g_lock);
@@ -154,7 +157,7 @@ lzc_ioctl(zfs_ioc_t ioc, const char *name,
 		}
 	}
 
-	while (ioctl(g_fd, ioc, &zc) != 0) {
+	while (uzfs_ioctl(g_fd, ioc, &zc) != 0) {
 		if (errno == ENOMEM && resultp != NULL) {
 			free((void *)(uintptr_t)zc.zc_nvlist_dst);
 			zc.zc_nvlist_dst_size *= 2;

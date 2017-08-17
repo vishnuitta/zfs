@@ -47,6 +47,7 @@
 #include <unistd.h>
 #include <libintl.h>
 #include <libuutil.h>
+#include <libuzfs.h>
 
 #include "libzfs_impl.h"
 
@@ -133,7 +134,7 @@ namespace_reload(libzfs_handle_t *hdl)
 
 	for (;;) {
 		zc.zc_cookie = hdl->libzfs_ns_gen;
-		if (ioctl(hdl->libzfs_fd, ZFS_IOC_POOL_CONFIGS, &zc) != 0) {
+		if (uzfs_ioctl(hdl->libzfs_fd, ZFS_IOC_POOL_CONFIGS, &zc) != 0) {
 			switch (errno) {
 			case EEXIST:
 				/*
@@ -279,7 +280,7 @@ zpool_refresh_stats(zpool_handle_t *zhp, boolean_t *missing)
 		return (-1);
 
 	for (;;) {
-		if (ioctl(zhp->zpool_hdl->libzfs_fd, ZFS_IOC_POOL_STATS,
+		if (uzfs_ioctl(zhp->zpool_hdl->libzfs_fd, ZFS_IOC_POOL_STATS,
 		    &zc) == 0) {
 			/*
 			 * The real error is returned in the zc_cookie field.

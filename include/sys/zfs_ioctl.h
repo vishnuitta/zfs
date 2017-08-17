@@ -432,12 +432,13 @@ typedef struct zfs_useracct {
 
 #define	ZPOOL_EXPORT_AFTER_SPLIT 0x1
 
-#ifdef _KERNEL
-
 typedef struct zfs_creat {
 	nvlist_t	*zct_zplprops;
 	nvlist_t	*zct_props;
 } zfs_creat_t;
+
+
+#ifdef _KERNEL
 
 extern int zfs_secpolicy_snapshot_perms(const char *name, cred_t *cr);
 extern int zfs_secpolicy_rename_perms(const char *from,
