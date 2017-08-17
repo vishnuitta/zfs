@@ -48,6 +48,7 @@
 #include <sys/wait.h>
 
 #include <libzfs.h>
+#include <libuzfs.h>
 #include <libzfs_core.h>
 
 #include "libzfs_impl.h"
@@ -942,7 +943,7 @@ libzfs_envvar_is_set(char *envvar)
  * - ZFS_MODULE_LOADING="YES|yes|ON|on" - Attempt to load modules.
  * - ZFS_MODULE_TIMEOUT="<seconds>"     - Seconds to wait for ZFS_DEV
  */
-static int
+static inline int
 libzfs_load_module(const char *module)
 {
 	char *argv[4] = {"/sbin/modprobe", "-q", (char *)module, (char *)0};
@@ -1007,15 +1008,18 @@ libzfs_handle_t *
 libzfs_init(void)
 {
 	libzfs_handle_t *hdl;
-	int error;
 
-	error = libzfs_load_module(ZFS_DRIVER);
-	if (error) {
-		errno = error;
+	if ((hdl = calloc(1, sizeof (libzfs_handle_t))) == NULL) {
 		return (NULL);
 	}
 
-	if ((hdl = calloc(1, sizeof (libzfs_handle_t))) == NULL) {
+#ifdef _UZFS
+	hdl->libzfs_fd = -1;
+#else
+	int error = libzfs_load_module(ZFS_DRIVER);
+	if (error) {
+		errno = error;
+		free(hdl);
 		return (NULL);
 	}
 
@@ -1023,6 +1027,7 @@ libzfs_init(void)
 		free(hdl);
 		return (NULL);
 	}
+#endif
 
 #ifdef HAVE_SETMNTENT
 	if ((hdl->libzfs_mnttab = setmntent(MNTTAB, "r")) == NULL) {
@@ -1445,7 +1450,7 @@ zcmd_read_dst_nvlist(libzfs_handle_t *hdl, zfs_cmd_t *zc, nvlist_t **nvlp)
 int
 zfs_ioctl(libzfs_handle_t *hdl, int request, zfs_cmd_t *zc)
 {
-	return (ioctl(hdl->libzfs_fd, request, zc));
+	return (uzfs_ioctl(hdl->libzfs_fd, request, zc));
 }
 
 /*

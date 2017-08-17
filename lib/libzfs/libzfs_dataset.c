@@ -59,6 +59,7 @@
 #include <sys/spa.h>
 #include <sys/zap.h>
 #include <libzfs.h>
+#include <libuzfs.h>
 
 #include "zfs_namecheck.h"
 #include "zfs_prop.h"
@@ -317,7 +318,7 @@ get_stats_ioctl(zfs_handle_t *zhp, zfs_cmd_t *zc)
 
 	(void) strlcpy(zc->zc_name, zhp->zfs_name, sizeof (zc->zc_name));
 
-	while (ioctl(hdl->libzfs_fd, ZFS_IOC_OBJSET_STATS, zc) != 0) {
+	while (uzfs_ioctl(hdl->libzfs_fd, ZFS_IOC_OBJSET_STATS, zc) != 0) {
 		if (errno == ENOMEM) {
 			if (zcmd_expand_dst_nvlist(hdl, zc) != 0) {
 				return (-1);

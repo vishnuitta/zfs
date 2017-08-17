@@ -43,6 +43,7 @@
 #include <sys/vtoc.h>
 #include <sys/zfs_ioctl.h>
 #include <dlfcn.h>
+#include <libuzfs.h>
 
 #include "zfs_namecheck.h"
 #include "zfs_prop.h"
@@ -74,7 +75,7 @@ zpool_get_all_props(zpool_handle_t *zhp)
 	if (zcmd_alloc_dst_nvlist(hdl, &zc, 0) != 0)
 		return (-1);
 
-	while (ioctl(hdl->libzfs_fd, ZFS_IOC_POOL_GET_PROPS, &zc) != 0) {
+	while (uzfs_ioctl(hdl->libzfs_fd, ZFS_IOC_POOL_GET_PROPS, &zc) != 0) {
 		if (errno == ENOMEM) {
 			if (zcmd_expand_dst_nvlist(hdl, &zc) != 0) {
 				zcmd_free_nvlists(&zc);
@@ -3841,7 +3842,7 @@ zpool_log_history(libzfs_handle_t *hdl, const char *message)
 	fnvlist_add_string(args, "message", message);
 	err = zcmd_write_src_nvlist(hdl, &zc, args);
 	if (err == 0)
-		err = ioctl(hdl->libzfs_fd, ZFS_IOC_LOG_HISTORY, &zc);
+		err = uzfs_ioctl(hdl->libzfs_fd, ZFS_IOC_LOG_HISTORY, &zc);
 	nvlist_free(args);
 	zcmd_free_nvlists(&zc);
 	return (err);
@@ -3868,7 +3869,7 @@ get_history(zpool_handle_t *zhp, char *buf, uint64_t *off, uint64_t *len)
 	zc.zc_history_len = *len;
 	zc.zc_history_offset = *off;
 
-	if (ioctl(hdl->libzfs_fd, ZFS_IOC_POOL_GET_HISTORY, &zc) != 0) {
+	if (uzfs_ioctl(hdl->libzfs_fd, ZFS_IOC_POOL_GET_HISTORY, &zc) != 0) {
 		switch (errno) {
 		case EPERM:
 			return (zfs_error_fmt(hdl, EZFS_PERM,
