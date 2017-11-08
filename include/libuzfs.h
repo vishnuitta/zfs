@@ -8,6 +8,8 @@
 extern "C" {
 #endif
 
+extern int kthread_nr;
+
 #define UZFS_PORT 8971
 #define UZFS_IP "127.0.0.1"
 

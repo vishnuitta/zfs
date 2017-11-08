@@ -24,9 +24,10 @@ USER_C = \
 	libzfs_sendrecv.c \
 	libzfs_status.c \
 	libzfs_util.c \
-    libuzfs_ioctl.c \
-    libuzfs_handle.c \
-    libuzfs_server.c
+	libuzfs_ioctl.c \
+	libuzfs_handle.c \
+	libuzfs_server.c \
+	libuzfs_gtest.c
 
 KERNEL_C =
 
