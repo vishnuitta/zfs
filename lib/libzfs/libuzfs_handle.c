@@ -103,7 +103,8 @@ libuzfs_client_init(libzfs_handle_t *g_zfs)
 	g_fd = uzfs_client_init(UZFS_IP, UZFS_PORT);
 	if (g_fd < 0)
 		return (-1);
-	g_zfs->libzfs_fd = g_fd;
+	if (g_zfs)
+		g_zfs->libzfs_fd = g_fd;
 	return (0);
 }
 

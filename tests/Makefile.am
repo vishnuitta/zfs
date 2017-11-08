@@ -1,1 +1,1 @@
-SUBDIRS = runfiles test-runner zfs-tests
+SUBDIRS = runfiles test-runner zfs-tests cbtest

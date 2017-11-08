@@ -47,6 +47,7 @@ AC_CONFIG_HEADERS([zfs_config.h], [
 
 AC_PROG_INSTALL
 AC_PROG_CC
+AC_PROG_CXX
 AC_PROG_LIBTOOL
 AM_PROG_AS
 AM_PROG_CC_C_O
@@ -144,6 +145,7 @@ AC_CONFIG_FILES([
 	scripts/zpool-config/Makefile
 	scripts/common.sh
 	tests/Makefile
+	tests/cbtest/Makefile
 	tests/test-runner/Makefile
 	tests/test-runner/cmd/Makefile
 	tests/test-runner/include/Makefile
