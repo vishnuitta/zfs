@@ -1,7 +1,5 @@
 include $(top_srcdir)/config/Rules.am
 
-AM_CFLAGS += -D_UZFS
-
 libzfs_pcdir = $(datarootdir)/pkgconfig
 libzfs_pc_DATA = libzfs.pc libzfs_core.pc
 

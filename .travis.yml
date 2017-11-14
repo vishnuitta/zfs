@@ -16,7 +16,14 @@ before_install:
     - sudo apt-get install lcov
     # packages for tests
     - sudo apt-get install --yes -qq parted lsscsi ksh attr acl nfs-kernel-server fio
+    - sudo apt-get install --yes -qq libgtest-dev cmake
 install:
+    - pushd .
+    - cd /usr/src/gtest
+    - sudo cmake CMakeLists.txt
+    - sudo make
+    - sudo cp *.a /usr/lib
+    - popd
     - cd ..
     - git clone https://github.com/zfsonlinux/spl
     - cd spl
@@ -31,10 +38,11 @@ install:
       fi
     - cd ../ZoL
     - sh autogen.sh
-    - ./configure --enable-code-coverage=yes
     - if [ $ZFS_BUILD_TAGS = 0 ]; then
+        ./configure --enable-code-coverage=yes --enable-uzfs=yes;
         make;
       else
+        ./configure --enable-code-coverage=yes;
         make --no-print-directory -s pkg-utils pkg-kmod;
         sudo dpkg -i *.deb;
       fi

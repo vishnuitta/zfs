@@ -1,7 +1,5 @@
 include $(top_srcdir)/config/Rules.am
 
-AM_CFLAGS += -D_UZFS
-
 DEFAULT_INCLUDES += \
 	-I$(top_srcdir)/include \
 	-I$(top_srcdir)/lib/libspl/include
