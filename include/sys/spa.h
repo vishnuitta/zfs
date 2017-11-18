@@ -720,7 +720,7 @@ typedef struct spa_stats_history {
 	uint64_t		count;
 	uint64_t		size;
 	kstat_t			*kstat;
-	void			*private;
+	void			*priv;
 	list_t			list;
 } spa_stats_history_t;
 
@@ -888,7 +888,7 @@ extern void spa_history_log_internal_dd(dsl_dir_t *dd, const char *operation,
 /* error handling */
 struct zbookmark_phys;
 extern void spa_log_error(spa_t *spa, zio_t *zio);
-extern void zfs_ereport_post(const char *class, spa_t *spa, vdev_t *vd,
+extern void zfs_ereport_post(const char *cls, spa_t *spa, vdev_t *vd,
     zio_t *zio, uint64_t stateoroffset, uint64_t length);
 extern nvlist_t *zfs_event_create(spa_t *spa, vdev_t *vd, const char *type,
     const char *name, nvlist_t *aux);

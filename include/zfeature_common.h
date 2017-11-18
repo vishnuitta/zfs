@@ -63,6 +63,7 @@ typedef enum spa_feature {
 #define	SPA_FEATURE_DISABLED	(-1ULL)
 
 typedef enum zfeature_flags {
+	ZFEATURE_FLAG_INVALID = 0,
 	/* Can open pool readonly even if this feature is not supported. */
 	ZFEATURE_FLAG_READONLY_COMPAT =		(1 << 0),
 	/* Is this feature necessary to read the MOS? */
