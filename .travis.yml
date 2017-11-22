@@ -3,6 +3,7 @@ sudo: required
 env:
   global:
     # Travis limits maximum log size, we have to cut tests output 
+    - CODECOV_TOKEN="987cf0f1-ae3b-477e-b645-954e682f99ec"
     - ZFS_TEST_TRAVIS_LOG_MAX_LENGTH=800
   matrix:
     # tags are mainly in ascending order
@@ -12,6 +13,7 @@ before_install:
    # - sudo apt-get -qq update
     - sudo apt-get install --yes -qq build-essential autoconf libtool gawk alien fakeroot linux-headers-$(uname -r)
     - sudo apt-get install --yes -qq zlib1g-dev uuid-dev libattr1-dev libblkid-dev libselinux-dev libudev-dev libssl-dev
+    - sudo apt-get install lcov
     # packages for tests
     - sudo apt-get install --yes -qq parted lsscsi ksh attr acl nfs-kernel-server fio
 install:
@@ -29,7 +31,7 @@ install:
       fi
     - cd ../ZoL
     - sh autogen.sh
-    - ./configure
+    - ./configure --enable-code-coverage=yes
     - if [ $ZFS_BUILD_TAGS = 0 ]; then
         make;
       else
@@ -38,7 +40,8 @@ install:
       fi
 script:
     - if [ $ZFS_BUILD_TAGS = 0 ]; then
-        echo "UDone..";
+        cd cmd/ztest;
+        travis_wait 60 ./ztest -V;
       else
         travis_wait 100 /usr/share/zfs/zfs-tests.sh -v;
       fi
@@ -46,3 +49,4 @@ after_failure:
     - find /var/tmp/test_results/current/log -type f -name '*' -printf "%f\n" -exec cut -c -$ZFS_TEST_TRAVIS_LOG_MAX_LENGTH {} \;
 after_success:
     - find /var/tmp/test_results/current/log -type f -name '*' -printf "%f\n" -exec cut -c -$ZFS_TEST_TRAVIS_LOG_MAX_LENGTH {} \;
+    - bash <(curl -s https://codecov.io/bash)
