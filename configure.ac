@@ -149,6 +149,7 @@ AC_CONFIG_FILES([
 	scripts/common.sh
 	tests/Makefile
 	tests/cbtest/Makefile
+	tests/cbtest/gtest/Makefile
 	tests/test-runner/Makefile
 	tests/test-runner/cmd/Makefile
 	tests/test-runner/include/Makefile

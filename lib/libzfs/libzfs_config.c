@@ -134,7 +134,8 @@ namespace_reload(libzfs_handle_t *hdl)
 
 	for (;;) {
 		zc.zc_cookie = hdl->libzfs_ns_gen;
-		if (uzfs_ioctl(hdl->libzfs_fd, ZFS_IOC_POOL_CONFIGS, &zc) != 0) {
+		if (uzfs_ioctl(hdl->libzfs_fd, ZFS_IOC_POOL_CONFIGS, &zc)
+		    != 0) {
 			switch (errno) {
 			case EEXIST:
 				/*

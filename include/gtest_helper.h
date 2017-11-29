@@ -1,4 +1,5 @@
-/* ****************************************************************************
+/*
+ * ****************************************************************************
  *  (C) Copyright 2017 CloudByte, Inc.
  *  All Rights Reserved.
  *
@@ -13,10 +14,11 @@
  *  lending are violations of federal copyright laws and state trade
  *  secret laws, punishable by civil and criminal penalties.
  *
- ****************************************************************************/
+ * ***************************************************************************
+ */
 
-#ifndef _TEST_UZFS_
-#define _TEST_UZFS_
+#ifndef	_GTEST_HELPER_H_
+#define	_GTEST_HELPER_H_
 
 #ifdef __cplusplus
 extern "C" {
@@ -30,4 +32,4 @@ extern boolean_t gtest_libuzfs_client_init(void);
 }
 #endif
 
-#endif /* _TEST_UZFS_ */
+#endif /* _GTEST_HELPER_H_ */
