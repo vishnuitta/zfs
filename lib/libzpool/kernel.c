@@ -741,9 +741,19 @@ vn_rdwr(int uio, vnode_t *vp, void *addr, ssize_t len, offset_t offset,
     int x1, int x2, rlim64_t x3, void *x4, ssize_t *residp)
 {
 	ssize_t rc, done = 0, split;
+	int is_seekable = 1;
+
+	struct stat stats;
+	if (fstat(vp->v_fd, &stats) == 0 &&
+	    S_ISFIFO(stats.st_mode)) {
+		is_seekable = 0;
+	}
 
 	if (uio == UIO_READ) {
-		rc = pread64(vp->v_fd, addr, len, offset);
+		if (!is_seekable)
+			rc = read(vp->v_fd, addr, len);
+		else
+			rc = pread64(vp->v_fd, addr, len, offset);
 		if (vp->v_dump_fd != -1 && rc != -1) {
 			int status;
 			status = pwrite64(vp->v_dump_fd, addr, rc, offset);
@@ -757,11 +767,18 @@ vn_rdwr(int uio, vnode_t *vp, void *addr, ssize_t len, offset_t offset,
 		int sectors = len >> SPA_MINBLOCKSHIFT;
 		split = (sectors > 0 ? rand() % sectors : 0) <<
 		    SPA_MINBLOCKSHIFT;
-		rc = pwrite64(vp->v_fd, addr, split, offset);
+		if (!is_seekable)
+			rc = write(vp->v_fd, addr, split);
+		else
+			rc = pwrite64(vp->v_fd, addr, split, offset);
 		if (rc != -1) {
 			done = rc;
-			rc = pwrite64(vp->v_fd, (char *)addr + split,
-			    len - split, offset + split);
+			if (!is_seekable)
+				rc = write(vp->v_fd, (char *)addr + split,
+				    len - split);
+			else
+				rc = pwrite64(vp->v_fd, (char *)addr + split,
+				    len - split, offset + split);
 		}
 	}
 
