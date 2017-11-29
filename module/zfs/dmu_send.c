@@ -124,7 +124,8 @@ dump_bytes_cb(void *arg)
 
 	dsp->dsa_err = vn_rdwr(UIO_WRITE, dsp->dsa_vp,
 	    (caddr_t)dbi->dbi_buf, dbi->dbi_len,
-	    0, UIO_SYSSPACE, FAPPEND, RLIM64_INFINITY, CRED(), &resid);
+	    *dsp->dsa_off, UIO_SYSSPACE, FAPPEND, RLIM64_INFINITY,
+	    CRED(), &resid);
 
 	mutex_enter(&ds->ds_sendstream_lock);
 	*dsp->dsa_off += dbi->dbi_len;
