@@ -7999,7 +7999,8 @@ main(int argc, char **argv)
 	}
 #ifdef _UZFS
 	if (0 > libuzfs_client_init(g_zfs)) {
-		(void) fprintf(stderr, "%s", "failed to initialize libuzfs client\n");
+		(void) fprintf(stderr, "%s",
+		    "failed to initialize libuzfs client\n");
 		return (1);
 	}
 #endif

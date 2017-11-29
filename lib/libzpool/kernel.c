@@ -42,6 +42,7 @@
 #include <sys/systeminfo.h>
 #include <zfs_fletcher.h>
 #include <sys/crypto/icp.h>
+#include <libuzfs.h>
 
 /*
  * Emulation of kernel services in userland.
@@ -745,7 +746,7 @@ vn_rdwr(int uio, vnode_t *vp, void *addr, ssize_t len, offset_t offset,
 
 	struct stat stats;
 	if (fstat(vp->v_fd, &stats) == 0 &&
-	    S_ISFIFO(stats.st_mode)) {
+	    !S_ISSEEK(stats.st_mode)) {
 		is_seekable = 0;
 	}
 

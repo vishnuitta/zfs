@@ -13,10 +13,6 @@ TEST(uZFSServer, InitServer) {
 	EXPECT_EQ(true, gtest_libuzfs_ioctl_init());
 }
 
-TEST(uZFSServer, ReInitServer) {
-	EXPECT_EQ(false, gtest_libuzfs_ioctl_init());
-}
-
 TEST(uZFSServer, ClientConnectServer) {
 	EXPECT_EQ(true, gtest_libuzfs_client_init());
 }
