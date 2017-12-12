@@ -26,6 +26,7 @@
 /* Portions Copyright 2010 Robert Milkowski */
 
 #include <sys/types.h>
+#if defined(_KERNEL)
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/sysmacros.h>
@@ -38,7 +39,6 @@
 #include <sys/mount.h>
 #include <sys/cmn_err.h>
 #include "fs/fs_subr.h"
-#include <sys/zfs_znode.h>
 #include <sys/zfs_vnops.h>
 #include <sys/zfs_dir.h>
 #include <sys/zil.h>
@@ -48,7 +48,6 @@
 #include <sys/dsl_dataset.h>
 #include <sys/dsl_deleg.h>
 #include <sys/spa.h>
-#include <sys/zap.h>
 #include <sys/sa.h>
 #include <sys/sa_impl.h>
 #include <sys/varargs.h>
@@ -57,7 +56,6 @@
 #include <sys/mkdev.h>
 #include <sys/modctl.h>
 #include <sys/refstr.h>
-#include <sys/zfs_ioctl.h>
 #include <sys/zfs_ctldir.h>
 #include <sys/zfs_fuid.h>
 #include <sys/bootconf.h>
@@ -67,7 +65,15 @@
 #include <sys/spa_boot.h>
 #include <sys/zpl.h>
 #include "zfs_comutil.h"
+#endif
 
+#include <sys/zap.h>
+#include <sys/zfs_ioctl.h>
+#include <sys/zfs_znode.h>
+#include <sys/dmu_objset.h>
+#include "zfs_prop.h"
+
+#if defined(_KERNEL)
 enum {
 	TOKEN_RO,
 	TOKEN_RW,
@@ -2047,6 +2053,7 @@ zfs_set_version(zfsvfs_t *zfsvfs, uint64_t newvers)
 
 	return (0);
 }
+#endif
 
 /*
  * Read a property stored within the master node.
@@ -2095,6 +2102,7 @@ zfs_get_zplprop(objset_t *os, zfs_prop_t prop, uint64_t *value)
 	return (error);
 }
 
+#if defined(_KERNEL)
 /*
  * Return true if the coresponding vfs's unmounted flag is set.
  * Otherwise return false.
@@ -2138,6 +2146,7 @@ zfs_fini(void)
 	zfs_znode_fini();
 	zfsctl_fini();
 }
+#endif
 
 #if defined(_KERNEL) && defined(HAVE_SPL)
 EXPORT_SYMBOL(zfs_suspend_fs);

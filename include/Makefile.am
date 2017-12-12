@@ -21,7 +21,9 @@ USER_H = \
 	$(top_srcdir)/include/libuzfs.h \
 	$(top_srcdir)/include/gtest_helper.h \
 	$(top_srcdir)/include/libzfs_core.h \
-	$(top_srcdir)/include/libzfs_impl.h
+	$(top_srcdir)/include/libzfs_impl.h \
+	$(top_srcdir)/include/uzfs_io.h \
+	$(top_srcdir)/include/uzfs_mgmt.h
 
 EXTRA_DIST = $(COMMON_H) $(KERNEL_H) $(USER_H)
 

@@ -16,7 +16,9 @@ lib_LTLIBRARIES = libzpool.la
 USER_C = \
 	kernel.c \
 	taskq.c \
-	util.c
+	util.c \
+	uzfs_io.c \
+	uzfs_mgmt.c
 
 KERNEL_C = \
 	zfs_comutil.c \
@@ -129,7 +131,8 @@ KERNEL_C = \
 	zio_compress.c \
 	zio_inject.c \
 	zle.c \
-	zrlock.c
+	zrlock.c \
+	zvol.c
 
 nodist_libzpool_la_SOURCES = \
 	$(USER_C) \

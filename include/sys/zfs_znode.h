@@ -156,6 +156,7 @@ extern "C" {
 #define	ZFS_DIRENT_TYPE(de) BF64_GET(de, 60, 4)
 #define	ZFS_DIRENT_OBJ(de) BF64_GET(de, 0, 48)
 
+extern int	zfs_get_zplprop(objset_t *os, zfs_prop_t prop, uint64_t *value);
 /*
  * Directory entry locks control access to directory entries.
  * They are used to protect creates, deletes, and renames.
@@ -310,7 +311,6 @@ extern void	zfs_remove_op_tables(void);
 extern int	zfs_create_op_tables(void);
 extern int	zfs_sync(struct super_block *, int, cred_t *);
 extern dev_t	zfs_cmpldev(uint64_t);
-extern int	zfs_get_zplprop(objset_t *os, zfs_prop_t prop, uint64_t *value);
 extern int	zfs_get_stats(objset_t *os, nvlist_t *nv);
 extern boolean_t zfs_get_vfs_flag_unmounted(objset_t *os);
 extern void	zfs_znode_dmu_fini(znode_t *);
