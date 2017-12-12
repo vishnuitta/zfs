@@ -87,8 +87,14 @@
 #include <sys/zfs_rlock.h>
 #include <sys/zfs_znode.h>
 #include <sys/spa_impl.h>
-#include <sys/zvol.h>
+
+#if defined(_KERNEL)
 #include <linux/blkdev_compat.h>
+#include <sys/zvol.h>
+#else
+#include <libuzfs.h>
+#include <sys/uzfs_zvol.h>
+#endif
 
 unsigned int zvol_inhibit_dev = 0;
 unsigned int zvol_major = ZVOL_MAJOR;
@@ -98,6 +104,7 @@ unsigned int zvol_prefetch_bytes = (128 * 1024);
 unsigned long zvol_max_discard_blocks = 16384;
 unsigned int zvol_volmode = ZFS_VOLMODE_GEOM;
 
+#if defined(_KERNEL)
 static taskq_t *zvol_taskq;
 static kmutex_t zvol_state_lock;
 static list_t zvol_state_list;
@@ -132,6 +139,7 @@ struct zvol_state {
 	atomic_t		zv_suspend_ref;	/* refcount for suspend */
 	krwlock_t		zv_suspend_lock;	/* suspend lock */
 };
+#endif
 
 typedef enum {
 	ZVOL_ASYNC_CREATE_MINORS,
@@ -153,6 +161,7 @@ typedef struct {
 
 #define	ZVOL_RDONLY	0x1
 
+#if defined(_KERNEL)
 static uint64_t
 zvol_name_hash(const char *name)
 {
@@ -272,6 +281,7 @@ zvol_is_zvol(const char *device)
 
 	return (B_FALSE);
 }
+#endif
 
 /*
  * ZFS_IOC_CREATE callback handles dmu zvol and zap object creation.
@@ -339,6 +349,7 @@ zvol_get_stats(objset_t *os, nvlist_t *nv)
 	return (SET_ERROR(error));
 }
 
+#if defined(_KERNEL)
 static void
 zvol_size_changed(zvol_state_t *zv, uint64_t volsize)
 {
@@ -356,6 +367,7 @@ zvol_size_changed(zvol_state_t *zv, uint64_t volsize)
 
 	bdput(bdev);
 }
+#endif
 
 /*
  * Sanity check volume size.
@@ -376,6 +388,7 @@ zvol_check_volsize(uint64_t volsize, uint64_t blocksize)
 	return (0);
 }
 
+#if defined(_KERNEL)
 /*
  * Ensure the zap is flushed then inform the VFS of the capacity change.
  */
@@ -490,6 +503,7 @@ out:
 
 	return (SET_ERROR(error));
 }
+#endif
 
 /*
  * Sanity check volume block size.
@@ -528,6 +542,7 @@ zvol_check_volblocksize(const char *name, uint64_t volblocksize)
 	return (0);
 }
 
+#if defined(_KERNEL)
 /*
  * Set ZFS_PROP_VOLBLOCKSIZE set entry point.
  */
@@ -657,6 +672,7 @@ zil_replay_func_t zvol_replay_vector[TX_MAX_TYPE] = {
 	(zil_replay_func_t)zvol_replay_err,	/* TX_SETATTR */
 	(zil_replay_func_t)zvol_replay_err,	/* TX_ACL */
 };
+#endif
 
 /*
  * zvol_log_write() handles synchronous writes using TX_WRITE ZIL transactions.
@@ -666,7 +682,7 @@ zil_replay_func_t zvol_replay_vector[TX_MAX_TYPE] = {
  */
 ssize_t zvol_immediate_write_sz = 32768;
 
-static void
+void
 zvol_log_write(zvol_state_t *zv, dmu_tx_t *tx, uint64_t offset,
     uint64_t size, int sync)
 {
@@ -726,6 +742,7 @@ zvol_log_write(zvol_state_t *zv, dmu_tx_t *tx, uint64_t offset,
 	}
 }
 
+#if defined(_KERNEL)
 typedef struct zv_request {
 	zvol_state_t	*zv;
 	struct bio	*bio;
@@ -1032,6 +1049,7 @@ out:
 	return (BLK_QC_T_NONE);
 #endif
 }
+#endif
 
 static void
 zvol_get_done(zgd_t *zgd, int error)
@@ -1050,7 +1068,7 @@ zvol_get_done(zgd_t *zgd, int error)
 /*
  * Get data to generate a TX_WRITE intent log record.
  */
-static int
+int
 zvol_get_data(void *arg, lr_write_t *lr, char *buf, zio_t *zio)
 {
 	zvol_state_t *zv = arg;
@@ -1114,6 +1132,7 @@ zvol_get_data(void *arg, lr_write_t *lr, char *buf, zio_t *zio)
 	return (SET_ERROR(error));
 }
 
+#if defined(_KERNEL)
 /*
  * The zvol_state_t's are inserted into zvol_state_list and zvol_htable.
  */
@@ -2716,3 +2735,4 @@ MODULE_PARM_DESC(zvol_prefetch_bytes, "Prefetch N bytes at zvol start+end");
 module_param(zvol_volmode, uint, 0644);
 MODULE_PARM_DESC(zvol_volmode, "Default volmode property value");
 /* END CSTYLED */
+#endif

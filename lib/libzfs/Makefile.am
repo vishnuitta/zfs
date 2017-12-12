@@ -1,5 +1,9 @@
 include $(top_srcdir)/config/Rules.am
 
+VPATH = \
+	$(top_srcdir)/module/zfs \
+	$(top_srcdir)/lib/libzfs
+
 libzfs_pcdir = $(datarootdir)/pkgconfig
 libzfs_pc_DATA = libzfs.pc libzfs_core.pc
 
@@ -22,12 +26,14 @@ USER_C = \
 	libzfs_sendrecv.c \
 	libzfs_status.c \
 	libzfs_util.c \
-	libuzfs_ioctl.c \
 	libuzfs_handle.c \
 	libuzfs_server.c \
 	libuzfs_gtest.c
 
-KERNEL_C =
+KERNEL_C = \
+	zfs_ioctl.c \
+	zfs_vfsops.c \
+	zvol.c
 
 nodist_libzfs_la_SOURCES = \
 	$(USER_C) \

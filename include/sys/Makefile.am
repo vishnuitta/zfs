@@ -120,7 +120,8 @@ KERNEL_H = \
 	${top_srcdir}/include/sys/zpl.h \
 	$(top_srcdir)/include/sys/zvol.h
 
-USER_H =
+USER_H = \
+	$(top_srcdir)/include/sys/uzfs_zvol.h
 
 EXTRA_DIST = $(COMMON_H) $(KERNEL_H) $(USER_H)
 
