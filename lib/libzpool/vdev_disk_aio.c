@@ -25,6 +25,7 @@
 #include <sys/vdev_impl.h>
 #include <sys/zio.h>
 #include <sys/abd.h>
+#include <sys/kstat.h>
 
 #include <libaio.h>
 #include <linux/fs.h>
@@ -48,6 +49,25 @@ typedef struct aio_task {
 	void *buf;
 	struct iocb iocb;
 } aio_task_t;
+
+/*
+ * AIO kstats help analysing performance of aio vdev backend.
+ */
+typedef struct vda_stats {
+	kstat_named_t vda_stat_userspace_polls;
+	kstat_named_t vda_stat_kernel_polls;
+	kstat_named_t vda_stat_poll_utilization_pct;
+} vda_stats_t;
+
+static vda_stats_t vda_stats = {
+	{ "userspace_polls",	KSTAT_DATA_UINT64 },
+	{ "kernel_polls",	KSTAT_DATA_UINT64 },
+	{ "poll_utilization",	KSTAT_DATA_UINT64 },
+};
+
+#define	VDA_STAT_BUMP(stat)	atomic_inc_64(&vda_stats.stat.value.ui64)
+
+kstat_t *vda_ksp = NULL;
 
 /*
  * AIO context used for submitting AIOs and polling.
@@ -188,6 +208,7 @@ vdev_disk_aio_done(aio_task_t *task, unsigned long res)
 			zio->io_error = (SET_ERROR(ENOSPC));
 
 	}
+
 	/*
 	 * Perf optimisation: For reads there is checksum verify pipeline
 	 * stage which is CPU intensive and could delay next poll considerably
@@ -206,6 +227,51 @@ vdev_disk_aio_done(aio_task_t *task, unsigned long res)
 }
 
 /*
+ * A copy of aio ring structure to be able to access aio events from userland.
+ */
+struct aio_ring {
+	unsigned id;	/* kernel internal index number */
+	unsigned nr;	/* number of io_events */
+	unsigned head;
+	unsigned tail;
+
+	unsigned magic;
+	unsigned compat_features;
+	unsigned incompat_features;
+	unsigned header_length;  /* size of aio_ring */
+
+	struct io_event events[0];
+};
+
+#define	AIO_RING_MAGIC	0xa10a10a1
+
+static int
+user_io_getevents(struct io_event *events)
+{
+	long i = 0;
+	unsigned head;
+	struct aio_ring *ring = (struct aio_ring *)io_ctx;
+
+	while (i < AIO_QUEUE_DEPTH) {
+		head = ring->head;
+
+		if (head == ring->tail) {
+			/* There are no more completions */
+			break;
+		} else {
+			/* There is another completion to reap */
+			events[i] = ring->events[head];
+			/* read barrier */
+			asm volatile("": : :"memory");
+			ring->head = (head + 1) % ring->nr;
+			i++;
+		}
+	}
+
+	return (i);
+}
+
+/*
  * Poll for asynchronous IO done events from one vdev.
  */
 static void
@@ -213,6 +279,9 @@ vdev_disk_aio_poll(void *arg)
 {
 	struct io_event *events;
 	struct timespec timeout;
+	hrtime_t poll_start = 0, poll_end = 0, run_time, now;
+	uint64_t *avgp, n;
+	int pct;
 	int nr;
 
 	/* allocated on heap not to exceed recommended frame size */
@@ -221,15 +290,39 @@ vdev_disk_aio_poll(void *arg)
 
 	while (!stop_polling) {
 		timeout.tv_sec = 0;
-		timeout.tv_nsec = 100000000;  // 100ms
+		timeout.tv_nsec = 100000000;	// 100ms
+		nr = 0;
 
-		/*
-		 * TODO: implement userspace polling to further boost
-		 * performance of AIO as done in this patch:
-		 * https://www.spinics.net/lists/fio/msg00869.html
-		 */
-		nr = io_getevents(io_ctx, 1, AIO_QUEUE_DEPTH, events,
-		    &timeout);
+		/* First we try non-blocking userspace poll which is fast */
+		if (((struct aio_ring *)(io_ctx))->magic == AIO_RING_MAGIC) {
+			nr = user_io_getevents(events);
+		}
+		if (nr <= 0) {
+			/* Update event loop utilization stat */
+			now = gethrtime();
+			if (poll_end > 0) {
+				VDA_STAT_BUMP(vda_stat_kernel_polls);
+				avgp = &vda_stats.vda_stat_poll_utilization_pct
+				    .value.ui64;
+				/*
+				 * old avg value has max weight limit to make
+				 * it more dynamic (forget very old values).
+				 */
+				n = MIN(vda_stats.vda_stat_kernel_polls
+				    .value.ui64, 100);
+				run_time = now - poll_end;
+				pct = 100 * run_time /
+				    (run_time + (poll_end - poll_start));
+				*avgp = ((n - 1) * (*avgp) + pct) / n;
+			}
+			/* Do blocking kernel poll */
+			poll_start = now;
+			nr = io_getevents(io_ctx, 1, AIO_QUEUE_DEPTH, events,
+			    &timeout);
+			poll_end = gethrtime();
+		} else {
+			VDA_STAT_BUMP(vda_stat_userspace_polls);
+		}
 
 		if (nr < 0) {
 			int error = -nr;
@@ -326,6 +419,7 @@ vdev_disk_aio_start(zio_t *zio)
 		ASSERT(0);
 	}
 
+	/* prep functions above reset data pointer - set it again */
 	iocb->data = task;
 
 	/*
@@ -365,9 +459,18 @@ vdev_disk_aio_init(void)
 {
 	int err;
 
+	vda_ksp = kstat_create("zfs", 0, "vdev_aio_stats", "misc",
+	    KSTAT_TYPE_NAMED, sizeof (vda_stats_t) / sizeof (kstat_named_t),
+	    KSTAT_FLAG_VIRTUAL);
+	if (vda_ksp != NULL) {
+		vda_ksp->ks_data = &vda_stats;
+		kstat_install(vda_ksp);
+	}
+
 	/*
 	 * TODO: code in fio aio plugin suggests that for new kernels we can
 	 * pass INTMAX as limit here and use max limit allowed by the kernel.
+	 * However for userspace polling we need some kind of limit.
 	 */
 	err = io_setup(AIO_QUEUE_DEPTH, &io_ctx);
 	if (err != 0) {
@@ -401,6 +504,11 @@ vdev_disk_aio_fini(void)
 	}
 	(void) io_destroy(io_ctx);
 	io_ctx = NULL;
+
+	if (vda_ksp != NULL) {
+		kstat_delete(vda_ksp);
+		vda_ksp = NULL;
+	}
 }
 
 vdev_ops_t vdev_disk_ops = {
