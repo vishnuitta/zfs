@@ -54,8 +54,14 @@ script:
         truncate -s 2G /tmp/ztest.2a;
         truncate -s 256M /tmp/ztest.log;
         travis_wait 60 ./tests/cbtest/gtest/test_uzfs && ./tests/cbtest/script/uzfs_cli.sh && ./cmd/uzfs_test/uzfs_test;
+        travis_wait 10 ./cmd/ztest/ztest;
       else
-        travis_wait 100 /usr/share/zfs/zfs-tests.sh -v;
+        if [ $TRAVIS_BRANCH = "zfs-0.7-release" ]; then
+          travis_wait 100 /usr/share/zfs/zfs-tests.sh -r linux_cstor.run -v;
+        else
+          sudo /sbin/modprobe zfs;
+          travis_wait 10 /sbin/ztest;
+        fi
       fi
 after_failure:
     - find /var/tmp/test_results/current/log -type f -name '*' -printf "%f\n" -exec cut -c -$ZFS_TEST_TRAVIS_LOG_MAX_LENGTH {} \;
