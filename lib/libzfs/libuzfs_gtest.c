@@ -1,4 +1,5 @@
-/* ****************************************************************************
+/*
+ * ****************************************************************************
  *  (C) Copyright 2017 CloudByte, Inc.
  *  All Rights Reserved.
  *
@@ -13,7 +14,8 @@
  *  lending are violations of federal copyright laws and state trade
  *  secret laws, punishable by civil and criminal penalties.
  *
- ****************************************************************************/
+ * ***************************************************************************
+ */
 
 /*
  * ALL the function here should have follwing prototype

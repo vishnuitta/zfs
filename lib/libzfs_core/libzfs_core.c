@@ -140,6 +140,24 @@ lzc_ioctl(zfs_ioc_t ioc, const char *name,
 	if (name != NULL)
 		(void) strlcpy(zc.zc_name, name, sizeof (zc.zc_name));
 
+#ifdef _UZFS
+	if (ioc == ZFS_IOC_RECV_NEW) {
+		int input_fd;
+		error = nvlist_lookup_int32(source, "input_fd", &input_fd);
+		if (error != 0)
+			goto out;
+
+		zc.zc_cookie = input_fd;
+	} else if (ioc == ZFS_IOC_SEND_NEW) {
+		int input_fd;
+		error = nvlist_lookup_int32(source, "fd", &input_fd);
+		if (error != 0)
+			goto out;
+
+		zc.zc_cookie = input_fd;
+	}
+#endif
+
 	if (source != NULL) {
 		packed = fnvlist_pack(source, &size);
 		zc.zc_nvlist_src = (uint64_t)(uintptr_t)packed;
@@ -367,7 +385,7 @@ lzc_exists(const char *dataset)
 	VERIFY3S(g_fd, !=, -1);
 
 	(void) strlcpy(zc.zc_name, dataset, sizeof (zc.zc_name));
-	return (ioctl(g_fd, ZFS_IOC_OBJSET_STATS, &zc) == 0);
+	return (uzfs_ioctl(g_fd, ZFS_IOC_OBJSET_STATS, &zc) == 0);
 }
 
 /*
@@ -753,7 +771,7 @@ recv_impl(const char *snapname, nvlist_t *recvdprops, nvlist_t *localprops,
 		zc.zc_nvlist_dst = (uint64_t)(uintptr_t)
 		    malloc(zc.zc_nvlist_dst_size);
 
-		error = ioctl(g_fd, ZFS_IOC_RECV, &zc);
+		error = uzfs_ioctl(g_fd, ZFS_IOC_RECV, &zc);
 		if (error != 0) {
 			error = errno;
 		} else {

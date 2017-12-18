@@ -53,6 +53,7 @@
 #include <time.h>
 
 #include <libzfs.h>
+#include <libuzfs.h>
 #include <libzfs_core.h>
 
 #include "zfs_namecheck.h"
@@ -1360,7 +1361,8 @@ dump_filesystem(zfs_handle_t *zhp, void *arg)
 
 	(void) snprintf(zc.zc_name, sizeof (zc.zc_name), "%s@%s",
 	    zhp->zfs_name, sdd->tosnap);
-	if (ioctl(zhp->zfs_hdl->libzfs_fd, ZFS_IOC_OBJSET_STATS, &zc) != 0) {
+	if (uzfs_ioctl(zhp->zfs_hdl->libzfs_fd, ZFS_IOC_OBJSET_STATS, &zc)
+	    != 0) {
 		(void) fprintf(stderr, dgettext(TEXT_DOMAIN,
 		    "WARNING: could not send %s@%s: does not exist\n"),
 		    zhp->zfs_name, sdd->tosnap);
@@ -4056,13 +4058,19 @@ zfs_receive(libzfs_handle_t *hdl, const char *tosnap, nvlist_t *props,
 			return (err);
 	}
 
+#ifdef _UZFS
+	cleanup_fd = -1;
+#else
 	cleanup_fd = open(ZFS_DEV, O_RDWR);
 	VERIFY(cleanup_fd >= 0);
+#endif
 
 	err = zfs_receive_impl(hdl, tosnap, originsnap, flags, infd, NULL, NULL,
 	    stream_avl, &top_zfs, cleanup_fd, &action_handle, NULL, props);
 
+#ifndef _UZFS
 	VERIFY(0 == close(cleanup_fd));
+#endif
 
 	if (err == 0 && !flags->nomount && top_zfs) {
 		zfs_handle_t *zhp = NULL;
