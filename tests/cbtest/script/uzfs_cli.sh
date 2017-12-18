@@ -71,6 +71,15 @@ init_test()
 	log_must truncate -s 2G "$TMPDIR/test_disk6.img"
 	log_must truncate -s 2G "$TMPDIR/test_disk7.img"
 	log_must truncate -s 2G "$TMPDIR/test_disk8.img"
+	log_must truncate -s 2G "$TMPDIR/test_spare1.img"
+	log_must truncate -s 2G "$TMPDIR/test_spare2.img"
+	log_must truncate -s 2G "$TMPDIR/test_spare3.img"
+	log_must truncate -s 2G "$TMPDIR/test_spare4.img"
+	log_must truncate -s 2G "$TMPDIR/test_spare5.img"
+	log_must truncate -s 2G "$TMPDIR/test_spare6.img"
+	log_must truncate -s 2G "$TMPDIR/test_spare7.img"
+	log_must truncate -s 2G "$TMPDIR/test_spare8.img"
+	log_must truncate -s 2G "$TMPDIR/test_log.img"
 
 	$TGT -v $SRCPOOL/$SRCVOL &
 	TGT_PID=$!
@@ -88,6 +97,15 @@ close_test()
 	log_must rm "$TMPDIR/test_disk6.img"
 	log_must rm "$TMPDIR/test_disk7.img"
 	log_must rm "$TMPDIR/test_disk8.img"
+	log_must rm "$TMPDIR/test_spare1.img"
+	log_must rm "$TMPDIR/test_spare2.img"
+	log_must rm "$TMPDIR/test_spare3.img"
+	log_must rm "$TMPDIR/test_spare4.img"
+	log_must rm "$TMPDIR/test_spare5.img"
+	log_must rm "$TMPDIR/test_spare6.img"
+	log_must rm "$TMPDIR/test_spare7.img"
+	log_must rm "$TMPDIR/test_spare8.img"
+	log_must rm "$TMPDIR/test_log.img"
 }
 
 dump_data()
@@ -177,6 +195,12 @@ run_pool_tests()
 
 	log_must cp $TMPDIR/zpool_$SRCPOOL.cache $TMPDIR/$SRCPOOL.cache
 	log_must cp $TMPDIR/zpool_$DSTPOOL.cache $TMPDIR/$DSTPOOL.cache
+
+	# test log addition/removal
+	log_must $ZPOOL add -f $SRCPOOL log "$TMPDIR/test_log.img"
+	log_must $ZPOOL remove $SRCPOOL "$TMPDIR/test_log.img"
+	log_must $ZPOOL add -f $DSTPOOL log "$TMPDIR/test_log.img"
+	log_must $ZPOOL remove $DSTPOOL "$TMPDIR/test_log.img"
 
 	# test pool export
 	log_must export_pool $SRCPOOL
@@ -397,6 +421,14 @@ test_stripe_pool()
 	log_must $ZPOOL create -f $DSTPOOL -o cachefile="$TMPDIR/zpool_$DSTPOOL.cache" \
 	    "$TMPDIR/test_disk2.img"
 
+	# test pool expansion
+	log_must $ZPOOL add -f $SRCPOOL "$TMPDIR/test_spare1.img"
+	log_must $ZPOOL add -f $DSTPOOL "$TMPDIR/test_spare2.img"
+
+	# test vdev remove
+	log_must_not $ZPOOL remove $SRCPOOL "$TMPDIR/test_spare1.img"
+	log_must_not $ZPOOL remove $DSTPOOL "$TMPDIR/test_spare2.img"
+
 	# read cachefile
 	log_must $ZDB -C -U "$TMPDIR/zpool_$SRCPOOL.cache" $SRCPOOL > /dev/null
 	log_must $ZDB -C -U "$TMPDIR/zpool_$DSTPOOL.cache" $DSTPOOL > /dev/null
@@ -426,6 +458,16 @@ test_mirror_pool()
 	log_must $ZPOOL create -f $DSTPOOL mirror \
 	    -o cachefile="$TMPDIR/zpool_$DSTPOOL.cache" \
 	    "$TMPDIR/test_disk3.img" "$TMPDIR/test_disk4.img"
+
+	# test pool expansion
+	log_must $ZPOOL add -f $SRCPOOL "$TMPDIR/test_spare1.img" \
+	    "$TMPDIR/test_spare2.img"
+	log_must $ZPOOL add -f $DSTPOOL "$TMPDIR/test_spare3.img" \
+	    "$TMPDIR/test_spare4.img"
+
+	# test vdev remove
+	log_must_not $ZPOOL remove $SRCPOOL "$TMPDIR/test_spare1.img"
+	log_must_not $ZPOOL remove $DSTPOOL "$TMPDIR/test_spare3.img"
 
 	# read cachefile
 	log_must $ZDB -C -U "$TMPDIR/zpool_$SRCPOOL.cache" $SRCPOOL > /dev/null
@@ -460,6 +502,18 @@ test_raidz_pool()
 	    -o cachefile="$TMPDIR/zpool_$DSTPOOL.cache" \
 	    "$TMPDIR/test_disk5.img" "$TMPDIR/test_disk6.img" \
 	    "$TMPDIR/test_disk7.img" "$TMPDIR/test_disk8.img"
+
+	# test pool expansion
+	log_must $ZPOOL add -f $SRCPOOL \
+	    "$TMPDIR/test_spare1.img" "$TMPDIR/test_spare2.img" \
+	    "$TMPDIR/test_spare3.img" "$TMPDIR/test_spare4.img"
+	log_must $ZPOOL add -f $DSTPOOL \
+	    "$TMPDIR/test_spare5.img" "$TMPDIR/test_spare6.img"
+	    "$TMPDIR/test_spare7.img" "$TMPDIR/test_spare8.img"
+
+	# test vdev remove
+	log_must_not $ZPOOL remove $SRCPOOL "$TMPDIR/test_spare1.img"
+	log_must_not $ZPOOL remove $DSTPOOL "$TMPDIR/test_spare5.img"
 
 	# read cachefile
 	log_must $ZDB -C -U "$TMPDIR/zpool_$SRCPOOL.cache" $SRCPOOL > /dev/null

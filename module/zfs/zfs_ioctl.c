@@ -1977,6 +1977,7 @@ zfs_ioc_obj_to_stats(zfs_cmd_t *zc)
 
 	return (error);
 }
+#endif /* _KERNEL */
 
 static int
 zfs_ioc_vdev_add(zfs_cmd_t *zc)
@@ -2018,6 +2019,8 @@ zfs_ioc_vdev_remove(zfs_cmd_t *zc)
 	spa_close(spa, FTAG);
 	return (error);
 }
+
+#if defined(_KERNEL)
 
 static int
 zfs_ioc_vdev_set_state(zfs_cmd_t *zc)
@@ -7274,6 +7277,10 @@ uzfs_handle_ioctl(const char *pool, zfs_cmd_t *zc, uzfs_info_t *ucmd_info)
 	}
 	case ZFS_IOC_SEND_PROGRESS:
 		return (zfs_ioc_send_progress(zc));
+	case ZFS_IOC_VDEV_ADD:
+		return (zfs_ioc_vdev_add(zc));
+	case ZFS_IOC_VDEV_REMOVE:
+		return (zfs_ioc_vdev_remove(zc));
 	}
 	return (err);
 }

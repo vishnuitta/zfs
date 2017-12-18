@@ -168,10 +168,9 @@ uzfs_recv_response(int fd, zfs_cmd_t *zc)
 		return (EPIPE);
 
 	/*
-	 * Ideal way to do this is reorganise zfs_cmd_t
-	 * structure and copy from the memory offset.
-	 * Doing it the dirty way so that the binary is
-	 * backward compatibale.
+	 * Ideal way to do this is reorganise zfs_cmd_t structure and
+	 * copy from the memory offset. Doing it the dirty way so that
+	 * the binary is backward compatible.
 	 */
 	/* backup the  pointers */
 	uint64_t src = zc->zc_nvlist_src;
