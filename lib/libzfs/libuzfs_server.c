@@ -368,6 +368,7 @@ libuzfs_ioctl_init(void)
 		    (void *)(int64_t)server_s))
 			break;
 
+		VERIFY0(pthread_attr_destroy(&attr));
 		return (0);
 	} while (0);
 

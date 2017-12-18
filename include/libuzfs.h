@@ -64,7 +64,9 @@ typedef struct uzfs_monitor {
     _UZFS_IOC(ZFS_IOC_SEND_NEW, 0, 0, "resumable send")                        \
     _UZFS_IOC(ZFS_IOC_RECV, 1, 1, "receive a snapshot")                        \
     _UZFS_IOC(ZFS_IOC_RECV_NEW, 1, 1, "resumable receive")                     \
-    _UZFS_IOC(ZFS_IOC_SEND_PROGRESS, 0, 0, "print zfs send stats")
+    _UZFS_IOC(ZFS_IOC_SEND_PROGRESS, 0, 0, "print zfs send stats")             \
+    _UZFS_IOC(ZFS_IOC_VDEV_ADD, 1, 0, "add vdev to the pool")                  \
+    _UZFS_IOC(ZFS_IOC_VDEV_REMOVE, 1, 0, "remove vdev from the pool")
 
 #define	MAX_NVLIST_SRC_SIZE (128 * 1024 * 1024)
 
