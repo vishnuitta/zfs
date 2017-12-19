@@ -34,11 +34,16 @@
 
 #include <sys/types.h>
 #include <sys/time.h>
-
+#ifndef _KERNEL
+#include <sys/nvpair.h>
+#endif
 #ifdef	__cplusplus
 extern "C" {
 #endif
 
+nvlist_t *kstat_nvl; /*  kstat nvl that contains all kstats */
+struct kstat;
+typedef struct kstat kstat_t;
 typedef int	kid_t;		/* unique kstat id */
 
 /*
@@ -60,6 +65,14 @@ typedef int	kid_t;		/* unique kstat id */
  */
 
 #define	KSTAT_STRLEN	31	/* 30 chars + NULL; must be 16 * n - 1 */
+#define	KSTAT_BUF_LEN		2 * KSTAT_STRLEN + 16 + 3
+#define	KSTAT_RAW_MAX		(1024*1024)
+
+typedef struct kstat_raw_ops {
+	int (*headers)(char *buf, size_t size);
+	int (*data)(char *buf, size_t size, void *data);
+	void *(*addr)(kstat_t *ksp, loff_t index);
+} kstat_raw_ops_t;
 
 /*
  * The generic kstat header
@@ -83,6 +96,11 @@ typedef struct kstat {
 	uint_t		ks_ndata;	/* # of type-specific data records */
 	size_t		ks_data_size;	/* total size of kstat data section */
 	hrtime_t	ks_snaptime;	/* time of last data shapshot */
+#ifndef _KERNEL
+	kstat_raw_ops_t	ks_raw_ops;
+	char	*ks_raw_buf;
+	size_t	ks_raw_bufsize;
+#endif
 	/*
 	 * Fields relevant to kernel only
 	 */

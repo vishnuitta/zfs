@@ -69,6 +69,7 @@ struct proc p0;
 
 pthread_cond_t kthread_cond = PTHREAD_COND_INITIALIZER;
 pthread_mutex_t kthread_lock = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t kstat_module_lock = PTHREAD_MUTEX_INITIALIZER;
 pthread_key_t kthread_key;
 int kthread_nr = 0;
 
@@ -229,23 +230,94 @@ zk_thread_join(kt_did_t tid)
  * =========================================================================
  */
 /*ARGSUSED*/
+int kstat_id = 0;
+
 kstat_t *
-kstat_create(const char *module, int instance, const char *name,
-    const char *class, uchar_t type, ulong_t ndata, uchar_t ks_flag)
+kstat_create(const char *ks_module, int ks_instance, const char *ks_name,
+    const char *ks_class, uchar_t ks_type, ulong_t ks_ndata, uchar_t ks_flags)
 {
-	return (NULL);
+	if (ks_type ==  KSTAT_TYPE_IO || ks_type == KSTAT_TYPE_TIMER ||
+	    ks_type == KSTAT_TYPE_INTR || ks_type == KSTAT_TYPE_RAW)
+		return (NULL);
+	kstat_t *ksp;
+	ksp = kmem_zalloc(sizeof (*ksp), KM_SLEEP);
+	if (ksp == NULL)
+		return (ksp);
+
+	pthread_mutex_lock(&kstat_module_lock);
+	kstat_id++;
+	pthread_mutex_unlock(&kstat_module_lock);
+	ksp->ks_crtime = gethrtime();
+	ksp->ks_snaptime = ksp->ks_crtime;
+	strncpy(ksp->ks_module, ks_module, KSTAT_STRLEN);
+	ksp->ks_instance = ks_instance;
+	strncpy(ksp->ks_name, ks_name, KSTAT_STRLEN);
+	strncpy(ksp->ks_class, ks_class, KSTAT_STRLEN);
+	ksp->ks_type = ks_type;
+	ksp->ks_flags = ks_flags;
+	ksp->ks_update = NULL;
+	ksp->ks_private = NULL;
+
+	switch (ksp->ks_type) {
+		case KSTAT_TYPE_NAMED:
+			ksp->ks_ndata = ks_ndata;
+			ksp->ks_data_size = ks_ndata * sizeof (kstat_named_t);
+			break;
+		default:
+			panic("unknown kstat type");
+	}
+
+	if (ksp->ks_flags & KSTAT_FLAG_VIRTUAL) {
+		ksp->ks_data = NULL;
+	} else {
+		ksp->ks_data = kmem_zalloc(ksp->ks_data_size, KM_SLEEP);
+		if (ksp->ks_data == NULL) {
+			kmem_free(ksp, sizeof (*ksp));
+			ksp = NULL;
+		}
+	}
+
+	return (ksp);
+}
+
+/*
+ * we store the ksp in a nvlist_t, we only have limited kstats
+ * so this should be fine. The key is the a tuple of the
+ * module, instance and name. Instance should always be 0
+ * however
+ */
+/*ARGSUSED*/
+void
+kstat_install(kstat_t *ksp)
+{
+	ASSERT(ksp != NULL);
+	char buf[KSTAT_BUF_LEN];
+
+	snprintf(buf, KSTAT_BUF_LEN, "%s:%x:%s",
+	    ksp->ks_module, ksp->ks_instance, ksp->ks_name);
+
+	pthread_mutex_lock(&kstat_module_lock);
+	nvlist_add_uint64(kstat_nvl, buf, (uint64_t)ksp);
+	pthread_mutex_unlock(&kstat_module_lock);
 }
 
 /*ARGSUSED*/
 void
-kstat_install(kstat_t *ksp)
-{}
-
-/*ARGSUSED*/
-void
 kstat_delete(kstat_t *ksp)
-{}
+{
 
+	char buf[KSTAT_BUF_LEN];
+	snprintf(buf, KSTAT_BUF_LEN, "%s:%x:%s",
+	    ksp->ks_module, ksp->ks_instance, ksp->ks_name);
+
+	if (!(ksp->ks_flags & KSTAT_FLAG_VIRTUAL))
+		kmem_free(ksp->ks_data, ksp->ks_data_size);
+	kmem_free(ksp, (sizeof (*ksp)));
+
+	pthread_mutex_lock(&kstat_module_lock);
+	nvlist_remove_all(kstat_nvl, buf);
+	pthread_mutex_unlock(&kstat_module_lock);
+}
 /*ARGSUSED*/
 void
 kstat_waitq_enter(kstat_io_t *kiop)
@@ -255,12 +327,10 @@ kstat_waitq_enter(kstat_io_t *kiop)
 void
 kstat_waitq_exit(kstat_io_t *kiop)
 {}
-
 /*ARGSUSED*/
 void
 kstat_runq_enter(kstat_io_t *kiop)
 {}
-
 /*ARGSUSED*/
 void
 kstat_runq_exit(kstat_io_t *kiop)
@@ -282,6 +352,92 @@ kstat_set_raw_ops(kstat_t *ksp,
     int (*data)(char *buf, size_t size, void *data),
     void *(*addr)(kstat_t *ksp, loff_t index))
 {}
+
+int
+kstat_resize_raw(kstat_t *ksp)
+{
+	return (0);
+}
+
+kstat_t *
+kstat_lookup_ksp(char *name)
+{
+
+	uint64_t tmp = 0;
+	if (nvlist_lookup_uint64(kstat_nvl, name, &tmp) != 0)
+		return (NULL);
+	return ((kstat_t *)tmp);
+}
+
+int
+kstat_show_named(kstat_t *ksp)
+{
+
+	VERIFY(ksp != NULL);
+
+	kstat_named_t *value = KSTAT_NAMED_PTR(ksp);
+
+	if (value == NULL)
+		return (1);
+
+	for (int i = 0; i < ksp->ks_ndata; i++, value++) {
+		switch (value->data_type) {
+			case KSTAT_DATA_INT64:
+				printf("%s: %ld\n", value->name,
+				    value->value.i64);
+				break;
+			case KSTAT_DATA_UINT64:
+				printf("%s: %lu\n", value->name,
+				    value->value.ui64);
+				break;
+			case KSTAT_DATA_UINT32:
+				printf("%s: %u\n", value->name,
+				    value->value.ui32);
+				break;
+			default:
+				printf("NOT IMPLEMENTED %d\n",
+				    value->data_type);
+		}
+	}
+
+	return (0);
+}
+
+int
+kstat_read(kstat_t *ksp)
+{
+	int rc = 0;
+	switch (ksp->ks_type) {
+	case KSTAT_TYPE_NAMED:
+		rc = kstat_show_named(ksp);
+		break;
+	case KSTAT_TYPE_RAW:
+	case KSTAT_TYPE_INTR:
+	case KSTAT_TYPE_IO:
+	case KSTAT_TYPE_TIMER:
+		break;
+	default:
+		rc = 1;
+		printf("not IMPLEMENTED %d\n", ksp->ks_type);
+		break;
+	}
+
+	return (rc);
+}
+
+void
+kstat_dump_all(void)
+{
+	nvpair_t *pair;
+	for (pair = nvlist_next_nvpair(kstat_nvl, NULL); pair !=  NULL;
+	    pair = nvlist_next_nvpair(kstat_nvl, pair)) {
+		printf("|----------|\n");
+		printf("%s\n", nvpair_name(pair));
+		printf("|----------|\n");
+		kstat_t *ksp = (kstat_t *)kstat_lookup_ksp(nvpair_name(pair));
+		kstat_read(ksp);
+	}
+}
 
 /*
  * =========================================================================
@@ -659,7 +815,6 @@ vn_open(char *path, int x1, int flags, int mode, vnode_t **vpp, int x2, int x3)
 		flags |= O_DIRECT;
 #endif
 		/* We shouldn't be writing to block devices in userspace */
-		VERIFY(!(flags & FWRITE));
 	}
 
 	if (flags & FCREAT)
@@ -741,9 +896,8 @@ int
 vn_rdwr(int uio, vnode_t *vp, void *addr, ssize_t len, offset_t offset,
     int x1, int x2, rlim64_t x3, void *x4, ssize_t *residp)
 {
-	ssize_t rc, done = 0, split;
+	ssize_t rc, done = 0;
 	int is_seekable = 1;
-
 	struct stat stats;
 	if (fstat(vp->v_fd, &stats) == 0 &&
 	    !S_ISSEEK(stats.st_mode)) {
@@ -761,26 +915,10 @@ vn_rdwr(int uio, vnode_t *vp, void *addr, ssize_t len, offset_t offset,
 			ASSERT(status != -1);
 		}
 	} else {
-		/*
-		 * To simulate partial disk writes, we split writes into two
-		 * system calls so that the process can be killed in between.
-		 */
-		int sectors = len >> SPA_MINBLOCKSHIFT;
-		split = (sectors > 0 ? rand() % sectors : 0) <<
-		    SPA_MINBLOCKSHIFT;
 		if (!is_seekable)
-			rc = write(vp->v_fd, addr, split);
+			rc = write(vp->v_fd, addr, len);
 		else
-			rc = pwrite64(vp->v_fd, addr, split, offset);
-		if (rc != -1) {
-			done = rc;
-			if (!is_seekable)
-				rc = write(vp->v_fd, (char *)addr + split,
-				    len - split);
-			else
-				rc = pwrite64(vp->v_fd, (char *)addr + split,
-				    len - split, offset + split);
-		}
+			rc = pwrite64(vp->v_fd, addr, len, offset);
 	}
 
 #ifdef __linux__
@@ -1380,7 +1518,7 @@ kernel_init(int mode)
 	    (mode & FWRITE) ? get_system_hostid() : 0);
 
 	random_init();
-
+	kstat_nvl = fnvlist_alloc();
 	VERIFY0(uname(&hw_utsname));
 
 	thread_init();
@@ -1399,12 +1537,11 @@ kernel_fini(void)
 {
 	fletcher_4_fini();
 	spa_fini();
-
 	icp_fini();
 	system_taskq_fini();
 	thread_fini();
-
 	random_fini();
+	fnvlist_free(kstat_nvl);
 }
 
 uid_t
