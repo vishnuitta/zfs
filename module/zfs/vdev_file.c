@@ -271,24 +271,3 @@ vdev_file_fini(void)
 {
 	taskq_destroy(vdev_file_taskq);
 }
-
-/*
- * From userland we access disks just like files.
- */
-#ifndef _KERNEL
-
-vdev_ops_t vdev_disk_ops = {
-	vdev_file_open,
-	vdev_file_close,
-	vdev_default_asize,
-	vdev_file_io_start,
-	vdev_file_io_done,
-	NULL,
-	NULL,
-	vdev_file_hold,
-	vdev_file_rele,
-	VDEV_TYPE_DISK,		/* name of this vdev type */
-	B_TRUE			/* leaf vdev */
-};
-
-#endif
