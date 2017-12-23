@@ -18,7 +18,8 @@ USER_C = \
 	taskq.c \
 	util.c \
 	uzfs_io.c \
-	uzfs_mgmt.c
+	uzfs_mgmt.c \
+	vdev_disk_aio.c
 
 KERNEL_C = \
 	zfs_comutil.c \
@@ -144,7 +145,7 @@ libzpool_la_LIBADD = \
 	$(top_builddir)/lib/libnvpair/libnvpair.la \
 	$(top_builddir)/lib/libicp/libicp.la
 
-libzpool_la_LIBADD += $(ZLIB) -ldl -lm
+libzpool_la_LIBADD += $(ZLIB) -ldl -lm -laio
 libzpool_la_LDFLAGS = -version-info 2:0:0
 
 EXTRA_DIST = $(USER_C)

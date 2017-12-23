@@ -57,6 +57,9 @@
 #include "zfs_prop.h"
 #include <sys/zfeature.h>
 #include "qat_compress.h"
+#ifndef _KERNEL
+#include <sys/vdev_disk_aio.h>
+#endif
 
 /*
  * SPA locking
@@ -1889,6 +1892,9 @@ spa_init(int mode)
 	vdev_cache_stat_init();
 	vdev_raidz_math_init();
 	vdev_file_init();
+#ifndef _KERNEL
+	vdev_disk_aio_init();
+#endif
 	zfs_prop_init();
 	zpool_prop_init();
 	zpool_feature_init();
@@ -1904,6 +1910,9 @@ spa_fini(void)
 
 	spa_evict_all();
 
+#ifndef _KERNEL
+	vdev_disk_aio_fini();
+#endif
 	vdev_file_fini();
 	vdev_cache_stat_fini();
 	vdev_raidz_math_fini();
