@@ -27,7 +27,7 @@ install:
     - cd ..
     - git clone https://github.com/zfsonlinux/spl
     - cd spl
-    - git checkout spl-0.7-release
+    - git checkout spl-0.7.4
     - sh autogen.sh
     - ./configure
     - if [ $ZFS_BUILD_TAGS = 0 ]; then
