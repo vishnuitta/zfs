@@ -829,6 +829,7 @@ extern kstat_t *kstat_hold_bykid(kid_t kid, zoneid_t);
 extern kstat_t *kstat_hold_byname(const char *, int, const char *, zoneid_t);
 extern void kstat_rele(kstat_t *);
 
+#define	kstat_dump_all()
 #endif	/* defined(_KERNEL) */
 
 #ifdef	__cplusplus
