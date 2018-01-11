@@ -395,6 +395,7 @@ extern void kstat_set_raw_ops(kstat_t *ksp,
     int (*headers)(char *buf, size_t size),
     int (*data)(char *buf, size_t size, void *data),
     void *(*addr)(kstat_t *ksp, loff_t index));
+extern void kstat_dump_all(void);
 
 /*
  * Kernel memory
