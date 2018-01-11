@@ -36,6 +36,16 @@
  */
 #define	AIO_QUEUE_DEPTH	128
 
+/* XXX Must be kept in sync with zfs_vdev_max_active in vdev_queue.c */
+#define	MAX_ZIOS	1000
+
+/*
+ * The smaller the more CPU we use, the higher the bigger latency of IOs
+ * eventually leading to timeout errors. Empirically was found out that
+ * 10ms seems to perform well.
+ */
+#define	POLL_SLEEP	10000000
+
 /*
  * Virtual device vector for disks accessed from userland using linux aio(7) API
  */
@@ -80,6 +90,13 @@ kstat_t *vda_ksp = NULL;
 io_context_t io_ctx;
 volatile boolean_t stop_polling;
 volatile uintptr_t poller_tid = 0;
+
+/*
+ * Support for submitting multiple IOs in one syscall.
+ */
+kmutex_t zio_queue_lock;
+int zio_queue_length = 0;
+zio_t *zio_queue[MAX_ZIOS];
 
 /*
  * We probably can't do anything better from userland than opening the device
@@ -272,7 +289,85 @@ user_io_getevents(struct io_event *events)
 }
 
 /*
- * Poll for asynchronous IO done events from one vdev.
+ * Submit all queued ZIOs to kernel and reset length of ZIO queue.
+ */
+static void
+vdev_disk_aio_submit(void)
+{
+	static struct iocb *iocbs[MAX_ZIOS];
+	static zio_t *zios_priv[MAX_ZIOS];
+	int n, nr;
+
+	/* make copy of ZIO queue and release mtx asap */
+	mutex_enter(&zio_queue_lock);
+	n = zio_queue_length;
+	memcpy(zios_priv, zio_queue, n * sizeof (zio_t *));
+	zio_queue_length = 0;
+	mutex_exit(&zio_queue_lock);
+
+	/* create aio tasks for the ZIOs */
+	for (int i = 0; i < n; i++) {
+		aio_task_t *task;
+		zio_t *zio = zios_priv[i];
+		vdev_t *vd = zio->io_vd;
+		vdev_disk_aio_t *vda = vd->vdev_tsd;
+
+		/*
+		 * Prepare AIO command control block.
+		 */
+		task = kmem_alloc(sizeof (aio_task_t), KM_SLEEP);
+		task->zio = zio;
+		task->buf = NULL;
+		iocbs[i] = &task->iocb;
+
+		switch (zio->io_type) {
+		case ZIO_TYPE_IOCTL:
+			io_prep_fsync(iocbs[i], vda->vda_fd);
+			break;
+		case ZIO_TYPE_WRITE:
+			task->buf = abd_borrow_buf_copy(zio->io_abd,
+			    zio->io_size);
+			io_prep_pwrite(iocbs[i], vda->vda_fd, task->buf,
+			    zio->io_size, zio->io_offset);
+			break;
+		case ZIO_TYPE_READ:
+			task->buf = abd_borrow_buf(zio->io_abd, zio->io_size);
+			io_prep_pread(iocbs[i], vda->vda_fd, task->buf,
+			    zio->io_size, zio->io_offset);
+			break;
+		default:
+			ASSERT(0);
+		}
+
+		/* prep functions above reset data pointer - set it again */
+		iocbs[i]->data = task;
+	}
+
+	/*
+	 * Submit async IO.
+	 * XXX What happens if AIO_QUEUE_DEPTH is exceeded?
+	 */
+	nr = io_submit(io_ctx, n, iocbs);
+	if (nr < n) {
+		int neg_error;
+
+		if (nr < 0) {
+			neg_error = nr;
+			nr = 0;
+		} else {
+			/* No error but the control block was not submitted */
+			neg_error = -EAGAIN;
+		}
+
+		for (int i = nr; i < n; i++) {
+			aio_task_t *task = (aio_task_t *)iocbs[i]->data;
+			vdev_disk_aio_done(task, neg_error);
+		}
+	}
+}
+
+/*
+ * Poll for asynchronous IO done events and submit incoming IOs from a queue.
  */
 static void
 vdev_disk_aio_poll(void *arg)
@@ -290,7 +385,7 @@ vdev_disk_aio_poll(void *arg)
 
 	while (!stop_polling) {
 		timeout.tv_sec = 0;
-		timeout.tv_nsec = 100000000;	// 100ms
+		timeout.tv_nsec = POLL_SLEEP;
 		nr = 0;
 
 		/* First we try non-blocking userspace poll which is fast */
@@ -309,11 +404,12 @@ vdev_disk_aio_poll(void *arg)
 				 * it more dynamic (forget very old values).
 				 */
 				n = MIN(vda_stats.vda_stat_kernel_polls
-				    .value.ui64, 100);
+				    .value.ui64, 10);
 				run_time = now - poll_end;
 				pct = 100 * run_time /
 				    (run_time + (poll_end - poll_start));
-				*avgp = ((n - 1) * (*avgp) + pct) / n;
+				if (pct > 0)
+					*avgp = ((n - 1) * (*avgp) + pct) / n;
 			}
 			/* Do blocking kernel poll */
 			poll_start = now;
@@ -342,6 +438,13 @@ vdev_disk_aio_poll(void *arg)
 		for (int i = 0; i < nr; i++) {
 			vdev_disk_aio_done(events[i].data, events[i].res);
 		}
+
+		/*
+		 * Submit IOs which arrived while waiting and processing done
+		 * events.
+		 */
+		if (!stop_polling)
+			vdev_disk_aio_submit();
 	}
 
 	kmem_free(events, sizeof (struct io_event) * AIO_QUEUE_DEPTH);
@@ -350,16 +453,12 @@ vdev_disk_aio_poll(void *arg)
 }
 
 /*
- * Check and submit asynchronous IO.
+ * Check and put valid IOs to submit queue.
  */
 static void
 vdev_disk_aio_start(zio_t *zio)
 {
 	vdev_t *vd = zio->io_vd;
-	vdev_disk_aio_t *vda = vd->vdev_tsd;
-	aio_task_t *task;
-	struct iocb *iocb;
-	int error;
 
 	/*
 	 * Check operation type.
@@ -393,48 +492,11 @@ vdev_disk_aio_start(zio_t *zio)
 		break;
 	}
 
-	/*
-	 * Prepare AIO command control block.
-	 */
-	task = kmem_alloc(sizeof (aio_task_t), KM_SLEEP);
-	task->zio = zio;
-	task->buf = NULL;
-	iocb = &task->iocb;
-
-	switch (zio->io_type) {
-	case ZIO_TYPE_IOCTL:
-		io_prep_fsync(iocb, vda->vda_fd);
-		break;
-	case ZIO_TYPE_WRITE:
-		task->buf = abd_borrow_buf_copy(zio->io_abd, zio->io_size);
-		io_prep_pwrite(iocb, vda->vda_fd, task->buf, zio->io_size,
-		    zio->io_offset);
-		break;
-	case ZIO_TYPE_READ:
-		task->buf = abd_borrow_buf(zio->io_abd, zio->io_size);
-		io_prep_pread(iocb, vda->vda_fd, task->buf, zio->io_size,
-		    zio->io_offset);
-		break;
-	default:
-		ASSERT(0);
-	}
-
-	/* prep functions above reset data pointer - set it again */
-	iocb->data = task;
-
-	/*
-	 * Submit async IO.
-	 * XXX What happens if AIO_QUEUE_DEPTH is exceeded?
-	 */
-	error = io_submit(io_ctx, 1, &iocb);
-	if (error == 0) {
-		/* no error but the control block was not submitted */
-		zio->io_error = (SET_ERROR(EAGAIN));
-		zio_interrupt(zio);
-	} else if (error < 0) {
-		zio->io_error = (SET_ERROR(-error));
-		zio_interrupt(zio);
-	}
+	/* Enqueue zio and poller thread will take care of it */
+	mutex_enter(&zio_queue_lock);
+	ASSERT3P(zio_queue_length, <, MAX_ZIOS);
+	zio_queue[zio_queue_length++] = zio;
+	mutex_exit(&zio_queue_lock);
 }
 
 /* ARGSUSED */
@@ -459,6 +521,7 @@ vdev_disk_aio_init(void)
 {
 	int err;
 
+	mutex_init(&zio_queue_lock, NULL, MUTEX_DEFAULT, NULL);
 	vda_ksp = kstat_create("zfs", 0, "vdev_aio_stats", "misc",
 	    KSTAT_TYPE_NAMED, sizeof (vda_stats_t) / sizeof (kstat_named_t),
 	    KSTAT_FLAG_VIRTUAL);
@@ -509,6 +572,7 @@ vdev_disk_aio_fini(void)
 		kstat_delete(vda_ksp);
 		vda_ksp = NULL;
 	}
+	mutex_destroy(&zio_queue_lock);
 }
 
 vdev_ops_t vdev_disk_ops = {
