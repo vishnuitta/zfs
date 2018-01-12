@@ -13,7 +13,7 @@ before_install:
    # - sudo apt-get -qq update
     - sudo apt-get install --yes -qq build-essential autoconf libtool gawk alien fakeroot linux-headers-$(uname -r) libaio-dev
     - sudo apt-get install --yes -qq zlib1g-dev uuid-dev libattr1-dev libblkid-dev libselinux-dev libudev-dev libssl-dev
-    - sudo apt-get install lcov
+    - sudo apt-get install --yes -qq lcov libjemalloc-dev
     # packages for tests
     - sudo apt-get install --yes -qq parted lsscsi ksh attr acl nfs-kernel-server fio
     - sudo apt-get install --yes -qq libgtest-dev cmake
@@ -41,7 +41,7 @@ install:
     - ./configure --enable-code-coverage=yes
     - make cstyle
     - if [ $ZFS_BUILD_TAGS = 0 ]; then
-        ./configure --enable-code-coverage=yes --enable-debug --enable-uzfs=yes;
+        ./configure --enable-code-coverage=yes --enable-debug --enable-uzfs=yes --with-jemalloc;
         make;
       else
         ./configure --enable-code-coverage=yes --enable-debug;

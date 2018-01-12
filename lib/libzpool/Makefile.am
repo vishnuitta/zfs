@@ -145,7 +145,7 @@ libzpool_la_LIBADD = \
 	$(top_builddir)/lib/libnvpair/libnvpair.la \
 	$(top_builddir)/lib/libicp/libicp.la
 
-libzpool_la_LIBADD += $(ZLIB) -ldl -lm -laio
+libzpool_la_LIBADD += $(ZLIB) -ldl -lm -laio $(JEMALLOCLIB)
 libzpool_la_LDFLAGS = -version-info 2:0:0
 
 EXTRA_DIST = $(USER_C)
