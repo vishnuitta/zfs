@@ -52,6 +52,17 @@
 
 typedef struct vdev_disk_aio {
 	int vda_fd;
+	/* AIO context used for submitting AIOs and polling */
+	io_context_t vda_io_ctx;
+	boolean_t vda_stop_polling;
+	uintptr_t vda_poller_tid;
+	/* Support for submitting multiple IOs in one syscall */
+	zio_t *vda_zio_queue[MAX_ZIOS];
+	uint32_t vda_zio_next;	/* next zio to be submitted to kernel */
+				/* read & written only from poller thread */
+	uint32_t vda_zio_top;	/* latest incoming zio from uzfs */
+	/* Preallocated array of iocbs for use in poller to run faster */
+	struct iocb *vda_iocbs[MAX_ZIOS];
 } vdev_disk_aio_t;
 
 typedef struct aio_task {
@@ -66,13 +77,11 @@ typedef struct aio_task {
 typedef struct vda_stats {
 	kstat_named_t vda_stat_userspace_polls;
 	kstat_named_t vda_stat_kernel_polls;
-	kstat_named_t vda_stat_poll_utilization_pct;
 } vda_stats_t;
 
 static vda_stats_t vda_stats = {
 	{ "userspace_polls",	KSTAT_DATA_UINT64 },
 	{ "kernel_polls",	KSTAT_DATA_UINT64 },
-	{ "poll_utilization",	KSTAT_DATA_UINT64 },
 };
 
 #define	VDA_STAT_BUMP(stat)	atomic_inc_64(&vda_stats.stat.value.ui64)
@@ -80,129 +89,10 @@ static vda_stats_t vda_stats = {
 kstat_t *vda_ksp = NULL;
 
 /*
- * AIO context used for submitting AIOs and polling.
- *
- * This is currently global (per whole vdev disk aio backend) and could be
- * made per vdev if poller thread becomes a bottleneck. Disadvantage of doing
- * so is that we would need to create n poller threads (a poller for each
- * vdev) and couldn't use userspace polling (not implemented yet).
- */
-io_context_t io_ctx;
-volatile boolean_t stop_polling;
-volatile uintptr_t poller_tid = 0;
-
-/*
- * Support for submitting multiple IOs in one syscall.
- */
-kmutex_t zio_queue_lock;
-int zio_queue_length = 0;
-zio_t *zio_queue[MAX_ZIOS];
-
-/*
- * We probably can't do anything better from userland than opening the device
- * to prevent it from going away. So hold and rele are noops.
- */
-static void
-vdev_disk_aio_hold(vdev_t *vd)
-{
-	ASSERT(vd->vdev_path != NULL);
-}
-
-static void
-vdev_disk_aio_rele(vdev_t *vd)
-{
-	ASSERT(vd->vdev_path != NULL);
-}
-
-static int
-vdev_disk_aio_open(vdev_t *vd, uint64_t *psize, uint64_t *max_psize,
-    uint64_t *ashift)
-{
-	vdev_disk_aio_t *vda;
-	unsigned short isrot = 0;
-
-	/*
-	 * We must have a pathname, and it must be absolute.
-	 */
-	if (vd->vdev_path == NULL || vd->vdev_path[0] != '/') {
-		vd->vdev_stat.vs_aux = VDEV_AUX_BAD_LABEL;
-		return (SET_ERROR(EINVAL));
-	}
-
-	/*
-	 * Reopen the device if it's not currently open.  Otherwise,
-	 * just update the physical size of the device.
-	 */
-	if (vd->vdev_tsd != NULL) {
-		ASSERT(vd->vdev_reopening);
-		vda = vd->vdev_tsd;
-		goto skip_open;
-	}
-
-	vda = kmem_zalloc(sizeof (vdev_disk_aio_t), KM_SLEEP);
-
-	/*
-	 * We always open the files from the root of the global zone, even if
-	 * we're in a local zone.  If the user has gotten to this point, the
-	 * administrator has already decided that the pool should be available
-	 * to local zone users, so the underlying devices should be as well.
-	 */
-	ASSERT(vd->vdev_path != NULL && vd->vdev_path[0] == '/');
-	vda->vda_fd = open(vd->vdev_path,
-	    ((spa_mode(vd->vdev_spa) & FWRITE) != 0) ? O_RDWR|O_DIRECT :
-	    O_RDONLY|O_DIRECT);
-
-	if (vda->vda_fd < 0) {
-		kmem_free(vda, sizeof (vdev_disk_aio_t));
-		vd->vdev_stat.vs_aux = VDEV_AUX_OPEN_FAILED;
-		return (SET_ERROR(errno));
-	}
-	vd->vdev_tsd = vda;
-
-skip_open:
-	if (ioctl(vda->vda_fd, BLKSSZGET, ashift) != 0) {
-		(void) close(vda->vda_fd);
-		vd->vdev_stat.vs_aux = VDEV_AUX_OPEN_FAILED;
-		return (SET_ERROR(errno));
-	}
-	if (ioctl(vda->vda_fd, BLKGETSIZE64, psize) != 0) {
-		(void) close(vda->vda_fd);
-		vd->vdev_stat.vs_aux = VDEV_AUX_OPEN_FAILED;
-		return (SET_ERROR(errno));
-	}
-	if (ioctl(vda->vda_fd, BLKROTATIONAL, &isrot) != 0) {
-		(void) close(vda->vda_fd);
-		vd->vdev_stat.vs_aux = VDEV_AUX_OPEN_FAILED;
-		return (SET_ERROR(errno));
-	}
-
-	*ashift = highbit64(MAX(*ashift, SPA_MINBLOCKSIZE)) - 1;
-	*max_psize = *psize;
-	vd->vdev_nonrot = !isrot;
-
-	return (0);
-}
-
-static void
-vdev_disk_aio_close(vdev_t *vd)
-{
-	vdev_disk_aio_t *vda = vd->vdev_tsd;
-
-	if (vd->vdev_reopening || vda == NULL)
-		return;
-
-	(void) close(vda->vda_fd);
-
-	vd->vdev_delayed_close = B_FALSE;
-	kmem_free(vda, sizeof (vdev_disk_aio_t));
-	vd->vdev_tsd = NULL;
-}
-
-/*
  * Process a single result from asynchronous IO.
  */
 static void
-vdev_disk_aio_done(aio_task_t *task, unsigned long res)
+vdev_disk_aio_done(aio_task_t *task, int64_t res)
 {
 	zio_t *zio = task->zio;
 
@@ -219,10 +109,11 @@ vdev_disk_aio_done(aio_task_t *task, unsigned long res)
 		else
 			ASSERT(0);
 
-		if (res < 0)
+		if (res < 0) {
 			zio->io_error = (SET_ERROR(-res));
-		else if (res != zio->io_size)
+		} else if (res != zio->io_size) {
 			zio->io_error = (SET_ERROR(ENOSPC));
+		}
 
 	}
 
@@ -232,8 +123,6 @@ vdev_disk_aio_done(aio_task_t *task, unsigned long res)
 	 * hence it is executed asynchronously, however for other operations
 	 * (write and ioctl) it is faster to finish zio directly (synchronously)
 	 * than to dispatch the work to a separate thread.
-	 *
-	 * TODO: Verify the assumption above by real measurement.
 	 */
 	if (zio->io_type == ZIO_TYPE_READ)
 		zio_interrupt(zio);
@@ -263,7 +152,7 @@ struct aio_ring {
 #define	AIO_RING_MAGIC	0xa10a10a1
 
 static int
-user_io_getevents(struct io_event *events)
+user_io_getevents(io_context_t io_ctx, struct io_event *events)
 {
 	long i = 0;
 	unsigned head;
@@ -292,25 +181,28 @@ user_io_getevents(struct io_event *events)
  * Submit all queued ZIOs to kernel and reset length of ZIO queue.
  */
 static void
-vdev_disk_aio_submit(void)
+vdev_disk_aio_submit(vdev_disk_aio_t *vda)
 {
-	static struct iocb *iocbs[MAX_ZIOS];
-	static zio_t *zios_priv[MAX_ZIOS];
-	int n, nr;
+	struct iocb **iocbs = vda->vda_iocbs;
+	int n = 0;
+	int nr;
 
-	/* make copy of ZIO queue and release mtx asap */
-	mutex_enter(&zio_queue_lock);
-	n = zio_queue_length;
-	memcpy(zios_priv, zio_queue, n * sizeof (zio_t *));
-	zio_queue_length = 0;
-	mutex_exit(&zio_queue_lock);
-
-	/* create aio tasks for the ZIOs */
-	for (int i = 0; i < n; i++) {
+	/*
+	 * create aio tasks for the available ZIOs
+	 *
+	 * We don't want locks in IO path in aio backend, hence this ad-hoc
+	 * lockfree algorithm for obtaining zio entries. We check for NULL
+	 * because that signifies incomplete update of vda_zio_top pointer.
+	 */
+	while (vda->vda_zio_queue[vda->vda_zio_next] != NULL &&
+	    vda->vda_zio_next != vda->vda_zio_top) {
 		aio_task_t *task;
-		zio_t *zio = zios_priv[i];
-		vdev_t *vd = zio->io_vd;
-		vdev_disk_aio_t *vda = vd->vdev_tsd;
+		zio_t *zio = vda->vda_zio_queue[vda->vda_zio_next];
+		ASSERT3P(zio->io_vd->vdev_tsd, ==, vda);
+		ASSERT3P(n, <, MAX_ZIOS);
+
+		vda->vda_zio_queue[vda->vda_zio_next] = NULL;
+		vda->vda_zio_next = (vda->vda_zio_next + 1) % MAX_ZIOS;
 
 		/*
 		 * Prepare AIO command control block.
@@ -318,21 +210,18 @@ vdev_disk_aio_submit(void)
 		task = kmem_alloc(sizeof (aio_task_t), KM_SLEEP);
 		task->zio = zio;
 		task->buf = NULL;
-		iocbs[i] = &task->iocb;
+		iocbs[n] = &task->iocb;
 
 		switch (zio->io_type) {
-		case ZIO_TYPE_IOCTL:
-			io_prep_fsync(iocbs[i], vda->vda_fd);
-			break;
 		case ZIO_TYPE_WRITE:
 			task->buf = abd_borrow_buf_copy(zio->io_abd,
 			    zio->io_size);
-			io_prep_pwrite(iocbs[i], vda->vda_fd, task->buf,
+			io_prep_pwrite(iocbs[n], vda->vda_fd, task->buf,
 			    zio->io_size, zio->io_offset);
 			break;
 		case ZIO_TYPE_READ:
 			task->buf = abd_borrow_buf(zio->io_abd, zio->io_size);
-			io_prep_pread(iocbs[i], vda->vda_fd, task->buf,
+			io_prep_pread(iocbs[n], vda->vda_fd, task->buf,
 			    zio->io_size, zio->io_offset);
 			break;
 		default:
@@ -340,14 +229,15 @@ vdev_disk_aio_submit(void)
 		}
 
 		/* prep functions above reset data pointer - set it again */
-		iocbs[i]->data = task;
+		iocbs[n]->data = task;
+		n++;
 	}
 
 	/*
 	 * Submit async IO.
 	 * XXX What happens if AIO_QUEUE_DEPTH is exceeded?
 	 */
-	nr = io_submit(io_ctx, n, iocbs);
+	nr = io_submit(vda->vda_io_ctx, n, iocbs);
 	if (nr < n) {
 		int neg_error;
 
@@ -372,50 +262,29 @@ vdev_disk_aio_submit(void)
 static void
 vdev_disk_aio_poll(void *arg)
 {
+	vdev_disk_aio_t *vda = arg;
 	struct io_event *events;
 	struct timespec timeout;
-	hrtime_t poll_start = 0, poll_end = 0, run_time, now;
-	uint64_t *avgp, n;
-	int pct;
 	int nr;
 
 	/* allocated on heap not to exceed recommended frame size */
 	events = kmem_alloc(sizeof (struct io_event) * AIO_QUEUE_DEPTH,
 	    KM_SLEEP);
 
-	while (!stop_polling) {
+	while (!vda->vda_stop_polling) {
 		timeout.tv_sec = 0;
 		timeout.tv_nsec = POLL_SLEEP;
 		nr = 0;
 
 		/* First we try non-blocking userspace poll which is fast */
-		if (((struct aio_ring *)(io_ctx))->magic == AIO_RING_MAGIC) {
-			nr = user_io_getevents(events);
+		if (((struct aio_ring *)(vda->vda_io_ctx))->magic ==
+		    AIO_RING_MAGIC) {
+			nr = user_io_getevents(vda->vda_io_ctx, events);
 		}
 		if (nr <= 0) {
-			/* Update event loop utilization stat */
-			now = gethrtime();
-			if (poll_end > 0) {
-				VDA_STAT_BUMP(vda_stat_kernel_polls);
-				avgp = &vda_stats.vda_stat_poll_utilization_pct
-				    .value.ui64;
-				/*
-				 * old avg value has max weight limit to make
-				 * it more dynamic (forget very old values).
-				 */
-				n = MIN(vda_stats.vda_stat_kernel_polls
-				    .value.ui64, 10);
-				run_time = now - poll_end;
-				pct = 100 * run_time /
-				    (run_time + (poll_end - poll_start));
-				if (pct > 0)
-					*avgp = ((n - 1) * (*avgp) + pct) / n;
-			}
 			/* Do blocking kernel poll */
-			poll_start = now;
-			nr = io_getevents(io_ctx, 1, AIO_QUEUE_DEPTH, events,
-			    &timeout);
-			poll_end = gethrtime();
+			nr = io_getevents(vda->vda_io_ctx, 1, AIO_QUEUE_DEPTH,
+			    events, &timeout);
 		} else {
 			VDA_STAT_BUMP(vda_stat_userspace_polls);
 		}
@@ -440,16 +309,151 @@ vdev_disk_aio_poll(void *arg)
 		}
 
 		/*
-		 * Submit IOs which arrived while waiting and processing done
-		 * events.
+		 * Submit IOs which arrived while waiting for and processing
+		 * done events.
 		 */
-		if (!stop_polling)
-			vdev_disk_aio_submit();
+		if (!vda->vda_stop_polling)
+			vdev_disk_aio_submit(vda);
 	}
 
 	kmem_free(events, sizeof (struct io_event) * AIO_QUEUE_DEPTH);
-	poller_tid = 0;
+	vda->vda_poller_tid = 0;
 	thread_exit();
+}
+
+/*
+ * We probably can't do anything better from userland than opening the device
+ * to prevent it from going away. So hold and rele are noops.
+ */
+static void
+vdev_disk_aio_hold(vdev_t *vd)
+{
+	ASSERT(vd->vdev_path != NULL);
+}
+
+static void
+vdev_disk_aio_rele(vdev_t *vd)
+{
+	ASSERT(vd->vdev_path != NULL);
+}
+
+/*
+ * Opens dev file, creates AIO context and poller thread.
+ */
+static int
+vdev_disk_aio_open(vdev_t *vd, uint64_t *psize, uint64_t *max_psize,
+    uint64_t *ashift)
+{
+	vdev_disk_aio_t *vda;
+	unsigned short isrot = 0;
+	int err;
+
+	/*
+	 * We must have a pathname, and it must be absolute.
+	 */
+	if (vd->vdev_path == NULL || vd->vdev_path[0] != '/') {
+		vd->vdev_stat.vs_aux = VDEV_AUX_BAD_LABEL;
+		return (SET_ERROR(EINVAL));
+	}
+
+	/*
+	 * Reopen the device if it's not currently open.  Otherwise,
+	 * just update the physical size of the device.
+	 */
+	if (vd->vdev_tsd != NULL) {
+		ASSERT(vd->vdev_reopening);
+		vda = vd->vdev_tsd;
+		goto skip_open;
+	}
+
+	vda = kmem_zalloc(sizeof (vdev_disk_aio_t), KM_SLEEP);
+
+	ASSERT(vd->vdev_path != NULL && vd->vdev_path[0] == '/');
+	vda->vda_fd = open(vd->vdev_path,
+	    ((spa_mode(vd->vdev_spa) & FWRITE) != 0) ? O_RDWR|O_DIRECT :
+	    O_RDONLY|O_DIRECT);
+
+	if (vda->vda_fd < 0) {
+		kmem_free(vda, sizeof (vdev_disk_aio_t));
+		vd->vdev_stat.vs_aux = VDEV_AUX_OPEN_FAILED;
+		return (SET_ERROR(errno));
+	}
+
+	/*
+	 * TODO: code in fio aio plugin suggests that for new kernels we can
+	 * pass INTMAX as limit here and use max limit allowed by the kernel.
+	 * However for userspace polling we need some kind of limit.
+	 */
+	err = io_setup(AIO_QUEUE_DEPTH, &vda->vda_io_ctx);
+	if (err != 0) {
+		fprintf(stderr, "Failed to initialize AIO context: %d\n", -err);
+		close(vda->vda_fd);
+		kmem_free(vda, sizeof (vdev_disk_aio_t));
+		vd->vdev_stat.vs_aux = VDEV_AUX_OPEN_FAILED;
+		return (SET_ERROR(-err));
+	}
+
+	vda->vda_stop_polling = B_FALSE;
+	vda->vda_poller_tid = (uintptr_t)thread_create(NULL, 0,
+	    vdev_disk_aio_poll, vda, 0, &p0, TS_RUN, 0);
+
+	vd->vdev_tsd = vda;
+
+skip_open:
+	if (ioctl(vda->vda_fd, BLKSSZGET, ashift) != 0) {
+		(void) close(vda->vda_fd);
+		vd->vdev_stat.vs_aux = VDEV_AUX_OPEN_FAILED;
+		return (SET_ERROR(errno));
+	}
+	if (ioctl(vda->vda_fd, BLKGETSIZE64, psize) != 0) {
+		(void) close(vda->vda_fd);
+		vd->vdev_stat.vs_aux = VDEV_AUX_OPEN_FAILED;
+		return (SET_ERROR(errno));
+	}
+	if (ioctl(vda->vda_fd, BLKROTATIONAL, &isrot) != 0) {
+		(void) close(vda->vda_fd);
+		vd->vdev_stat.vs_aux = VDEV_AUX_OPEN_FAILED;
+		return (SET_ERROR(errno));
+	}
+
+	*ashift = highbit64(MAX(*ashift, SPA_MINBLOCKSIZE)) - 1;
+	*max_psize = *psize;
+	vd->vdev_nonrot = !isrot;
+
+	return (0);
+}
+
+/*
+ * Waits for poller thread to exit and destroys AIO context.
+ *
+ * TODO: The current algorithm for poller thread exit is rough and full of
+ * sleeps.
+ */
+static void
+vdev_disk_aio_close(vdev_t *vd)
+{
+	vdev_disk_aio_t *vda = vd->vdev_tsd;
+	struct timespec ts;
+
+	if (vd->vdev_reopening || vda == NULL)
+		return;
+
+	ASSERT3P(vda->vda_zio_next, ==, vda->vda_zio_top);
+	ts.tv_sec = 0;
+	ts.tv_nsec = 100000000;  // 100ms
+
+	vda->vda_stop_polling = B_TRUE;
+	while (vda->vda_poller_tid != 0) {
+		nanosleep(&ts, NULL);
+	}
+	(void) io_destroy(vda->vda_io_ctx);
+	vda->vda_io_ctx = NULL;
+
+	(void) close(vda->vda_fd);
+
+	vd->vdev_delayed_close = B_FALSE;
+	kmem_free(vda, sizeof (vdev_disk_aio_t));
+	vd->vdev_tsd = NULL;
 }
 
 /*
@@ -459,6 +463,10 @@ static void
 vdev_disk_aio_start(zio_t *zio)
 {
 	vdev_t *vd = zio->io_vd;
+	vdev_disk_aio_t *vda = vd->vdev_tsd;
+	uint32_t idx;
+	uint32_t new_idx;
+	int success = 0;
 
 	/*
 	 * Check operation type.
@@ -475,12 +483,12 @@ vdev_disk_aio_start(zio_t *zio)
 			zio_execute(zio);
 			return;
 		}
-		// XXX is it used?
-		if (zfs_nocacheflush) {
-			zio_execute(zio);
-			return;
-		}
-		break;
+		/*
+		 * fsync for device files should not be needed.
+		 * XXX Disk cache flush is needed but how to do that?
+		 */
+		zio_execute(zio);
+		return;
 
 	case ZIO_TYPE_WRITE:
 		break;
@@ -492,11 +500,19 @@ vdev_disk_aio_start(zio_t *zio)
 		break;
 	}
 
-	/* Enqueue zio and poller thread will take care of it */
-	mutex_enter(&zio_queue_lock);
-	ASSERT3P(zio_queue_length, <, MAX_ZIOS);
-	zio_queue[zio_queue_length++] = zio;
-	mutex_exit(&zio_queue_lock);
+	/*
+	 * Enqueue zio and poller thread will take care of it.
+	 *
+	 * We don't want locks in IO path in aio backend, hence this ad-hoc
+	 * lockfree algorithm for enqueuing new entries.
+	 */
+	while (!success) {
+		idx = vda->vda_zio_top;
+		new_idx = (idx + 1) % MAX_ZIOS;
+		success = __sync_bool_compare_and_swap(&vda->vda_zio_top,
+		    idx, new_idx);
+	}
+	vda->vda_zio_queue[idx] = zio;
 }
 
 /* ARGSUSED */
@@ -510,69 +526,26 @@ vdev_disk_zio_done(zio_t *zio)
 	 */
 }
 
-/*
- * Create AIO context and poller thread.
- *
- * Any failure triggers assert as recovering from error in context which this
- * function is called from, would be too difficult.
- */
 void
 vdev_disk_aio_init(void)
 {
-	int err;
-
-	mutex_init(&zio_queue_lock, NULL, MUTEX_DEFAULT, NULL);
 	vda_ksp = kstat_create("zfs", 0, "vdev_aio_stats", "misc",
 	    KSTAT_TYPE_NAMED, sizeof (vda_stats_t) / sizeof (kstat_named_t),
 	    KSTAT_FLAG_VIRTUAL);
+
 	if (vda_ksp != NULL) {
 		vda_ksp->ks_data = &vda_stats;
 		kstat_install(vda_ksp);
 	}
-
-	/*
-	 * TODO: code in fio aio plugin suggests that for new kernels we can
-	 * pass INTMAX as limit here and use max limit allowed by the kernel.
-	 * However for userspace polling we need some kind of limit.
-	 */
-	err = io_setup(AIO_QUEUE_DEPTH, &io_ctx);
-	if (err != 0) {
-		fprintf(stderr, "Failed to initialize AIO context: %d\n", -err);
-		ASSERT3P(0, ==, -err);
-		return;
-	}
-
-	stop_polling = B_FALSE;
-	poller_tid = (uintptr_t)thread_create(NULL, 0, vdev_disk_aio_poll,
-	    NULL, 0, &p0, TS_RUN, 0);
 }
 
-/*
- * Waits for poller thread to exit and destroys AIO context.
- *
- * TODO: The current algorithm for poller thread exit is rough and full of
- * sleeps.
- */
 void
 vdev_disk_aio_fini(void)
 {
-	struct timespec ts;
-
-	ts.tv_sec = 0;
-	ts.tv_nsec = 100000000;  // 100ms
-
-	stop_polling = B_TRUE;
-	while (poller_tid != 0) {
-		nanosleep(&ts, NULL);
-	}
-	(void) io_destroy(io_ctx);
-	io_ctx = NULL;
-
 	if (vda_ksp != NULL) {
 		kstat_delete(vda_ksp);
 		vda_ksp = NULL;
 	}
-	mutex_destroy(&zio_queue_lock);
 }
 
 vdev_ops_t vdev_disk_ops = {
