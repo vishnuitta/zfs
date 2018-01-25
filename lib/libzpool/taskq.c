@@ -35,6 +35,7 @@ taskq_t *system_taskq;
 taskq_t *system_delay_taskq;
 
 #define	TASKQ_ACTIVE	0x00010000
+#define	TASKQ_WAITING	0x00020000
 
 static taskq_ent_t *
 task_alloc(taskq_t *tq, int tqflags)
@@ -126,7 +127,8 @@ taskq_dispatch(taskq_t *tq, task_func_t func, void *arg, uint_t tqflags)
 	t->tqent_func = func;
 	t->tqent_arg = arg;
 	t->tqent_flags = 0;
-	cv_signal(&tq->tq_dispatch_cv);
+	if (tq->tq_active < tq->tq_nthreads)
+		cv_signal(&tq->tq_dispatch_cv);
 	mutex_exit(&tq->tq_lock);
 	return (1);
 }
@@ -181,7 +183,8 @@ taskq_dispatch_ent(taskq_t *tq, task_func_t func, void *arg, uint_t flags,
 	t->tqent_prev->tqent_next = t;
 	t->tqent_func = func;
 	t->tqent_arg = arg;
-	cv_signal(&tq->tq_dispatch_cv);
+	if (tq->tq_active < tq->tq_nthreads)
+		cv_signal(&tq->tq_dispatch_cv);
 	mutex_exit(&tq->tq_lock);
 }
 
@@ -189,8 +192,11 @@ void
 taskq_wait(taskq_t *tq)
 {
 	mutex_enter(&tq->tq_lock);
-	while (tq->tq_task.tqent_next != &tq->tq_task || tq->tq_active != 0)
+	while (tq->tq_task.tqent_next != &tq->tq_task || tq->tq_active != 0) {
+		tq->tq_flags |= TASKQ_WAITING;
 		cv_wait(&tq->tq_wait_cv, &tq->tq_lock);
+		tq->tq_flags &= ~TASKQ_WAITING;
+	}
 	mutex_exit(&tq->tq_lock);
 }
 
@@ -217,7 +223,8 @@ taskq_thread(void *arg)
 	while (tq->tq_flags & TASKQ_ACTIVE) {
 		if ((t = tq->tq_task.tqent_next) == &tq->tq_task) {
 			if (--tq->tq_active == 0)
-				cv_broadcast(&tq->tq_wait_cv);
+				if (tq->tq_flags & TASKQ_WAITING)
+					cv_broadcast(&tq->tq_wait_cv);
 			cv_wait(&tq->tq_dispatch_cv, &tq->tq_lock);
 			tq->tq_active++;
 			continue;
