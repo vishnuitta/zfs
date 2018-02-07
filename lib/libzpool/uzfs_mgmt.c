@@ -22,6 +22,7 @@
 #include <sys/dmu_objset.h>
 #include <sys/zap.h>
 #include <sys/uzfs_zvol.h>
+#include <sys/stat.h>
 
 static int uzfs_fd_rand = -1;
 
@@ -29,11 +30,22 @@ static nvlist_t *
 make_root(char *path, int ashift, int log)
 {
 	nvlist_t *root = NULL, *child;
+	struct stat64 statbuf;
+	const char *vdev_type;
+
+	if (stat64(path, &statbuf) != 0)
+		goto ret;
+
+	if (S_ISBLK(statbuf.st_mode)) {
+		vdev_type = VDEV_TYPE_DISK;
+	} else {
+		vdev_type = VDEV_TYPE_FILE;
+	}
 
 	if (nvlist_alloc(&child, NV_UNIQUE_NAME, 0) != 0)
 		goto ret;
 	if (nvlist_add_string(child, ZPOOL_CONFIG_TYPE,
-	    VDEV_TYPE_DISK) != 0)
+	    vdev_type) != 0)
 		goto free_ret;
 	if (nvlist_add_string(child, ZPOOL_CONFIG_PATH, path) != 0)
 		goto free_ret;
@@ -95,7 +107,7 @@ int
 uzfs_open_pool(char *name, spa_t **s)
 {
 	spa_t *spa = NULL;
-	int err = spa_open(name, &spa, FTAG);
+	int err = spa_open(name, &spa, "SPA");
 	if (err != 0) {
 		spa = NULL;
 		goto ret;
@@ -220,7 +232,6 @@ uzfs_open_dataset(spa_t *spa, const char *ds_name, int sync, zvol_state_t **z)
 	error = zap_lookup(os, ZVOL_ZAP_OBJ, "size", 8, 1, &vol_size);
 	if (error)
 		goto disown_free;
-
 	error = dnode_hold(os, ZVOL_OBJ, zv, &zv->zv_dn);
 	if (error) {
 disown_free:
@@ -235,6 +246,14 @@ free_ret:
 	zv->zv_sync = sync;
 	zv->zv_volblocksize = block_size;
 	zv->zv_volsize = vol_size;
+
+	if (spa_writeable(dmu_objset_spa(os))) {
+//		if (zil_replay_disable)
+//			zil_destroy(dmu_objset_zil(os), B_FALSE);
+//		else
+			zil_replay(os, zv, zvol_replay_vector);
+	}
+
 ret:
 	*z = zv;
 	return (error);
@@ -276,15 +295,26 @@ ret:
 	return (error);
 }
 
+uint64_t
+uzfs_syncing_txg(spa_t *spa)
+{
+	return (spa_syncing_txg(spa));
+}
+
 /* disowns, closes dataset and pool */
 void
-uzfs_close_pool(spa_t *spa, zvol_state_t *zv)
+uzfs_close_dataset(zvol_state_t *zv)
 {
-	dmu_objset_disown(zv->zv_objset, zv);
 	zil_close(zv->zv_zilog);
 	dnode_rele(zv->zv_dn, zv);
+	dmu_objset_disown(zv->zv_objset, zv);
 	kmem_free(zv, sizeof (zvol_state_t));
-	spa_close(spa, FTAG);
+}
+
+void
+uzfs_close_pool(spa_t *spa)
+{
+	spa_close(spa, "SPA");
 }
 
 void

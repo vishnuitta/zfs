@@ -56,5 +56,11 @@ extern int zvol_get_data(void *arg, lr_write_t *lr, char *buf, zio_t *zio);
 extern void zvol_log_write(zvol_state_t *zv, dmu_tx_t *tx, uint64_t offset,
     uint64_t size, int sync);
 
+/*
+ * Callback vectors for replaying records.
+ * Only TX_WRITE and TX_TRUNCATE are needed for zvol.
+ */
+extern zil_replay_func_t zvol_replay_vector[TX_MAX_TYPE];
+
 #endif
 #endif

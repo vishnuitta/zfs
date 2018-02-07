@@ -38,8 +38,6 @@ install:
       fi
     - cd ../ZoL
     - sh autogen.sh
-    - ./configure --enable-code-coverage=yes
-    - make cstyle
     - if [ $ZFS_BUILD_TAGS = 0 ]; then
         ./configure --enable-code-coverage=yes --enable-debug --enable-uzfs=yes --with-jemalloc;
         make;
@@ -53,9 +51,7 @@ before_script:
 script:
     # run ztest and test supported zio backends
     - if [ $ZFS_BUILD_TAGS = 0 ]; then
-        truncate -s 2G /tmp/ztest.1a;
-        truncate -s 2G /tmp/ztest.2a;
-        truncate -s 256M /tmp/ztest.log;
+        sudo mkdir /etc/zfs
         travis_wait 60 ./tests/cbtest/gtest/test_uzfs && ./tests/cbtest/script/uzfs_cli.sh && ./cmd/uzfs_test/uzfs_test;
         travis_wait 10 ./cmd/ztest/ztest;
         truncate -s 100MB /tmp/disk;
@@ -67,6 +63,7 @@ script:
         sudo losetup -d /dev/fake-dev;
         sudo rm /dev/fake-dev;
         rm /tmp/disk;
+        travis_wait 10 bash cmd/uzfs_test/uzfs_test_sync.sh cmd/uzfs_test/;
       else
         if [ $TRAVIS_BRANCH = "zfs-0.7-release" ]; then
           travis_wait 100 /usr/share/zfs/zfs-tests.sh -r linux_cstor.run -v;
