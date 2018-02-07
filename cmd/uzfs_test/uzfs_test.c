@@ -300,7 +300,8 @@ unit_test_create_pool_ds(void)
 		exit(1);
 	}
 
-	uzfs_close_pool(spa, zv);
+	uzfs_close_dataset(zv);
+	uzfs_close_pool(spa);
 }
 
 static void usage(int num)
@@ -487,6 +488,7 @@ main(int argc, char **argv)
 	cv_destroy(&cv);
 	mutex_destroy(&mtx);
 
-	uzfs_close_pool(spa, zv);
+	uzfs_close_dataset(zv);
+	uzfs_close_pool(spa);
 	uzfs_fini();
 }

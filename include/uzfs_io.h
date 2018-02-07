@@ -24,5 +24,6 @@
 
 extern int uzfs_write_data(void *zv, char *buf, uint64_t offset, uint64_t len);
 extern int uzfs_read_data(void *zv, char *buf, uint64_t offset, uint64_t len);
+extern void uzfs_flush_data(void *zv);
 
 #endif

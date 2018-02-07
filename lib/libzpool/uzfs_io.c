@@ -115,3 +115,9 @@ end:
 	zfs_range_unlock(rl);
 	return (0);
 }
+
+void
+uzfs_flush_data(zvol_state_t *zv)
+{
+	zil_commit(zv->zv_zilog, ZVOL_OBJ);
+}

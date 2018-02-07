@@ -587,6 +587,7 @@ zvol_set_volblocksize(const char *name, uint64_t volblocksize)
 
 	return (SET_ERROR(error));
 }
+#endif
 
 /*
  * Replay a TX_TRUNCATE ZIL transaction if asked.  TX_TRUNCATE is how we
@@ -672,7 +673,6 @@ zil_replay_func_t zvol_replay_vector[TX_MAX_TYPE] = {
 	(zil_replay_func_t)zvol_replay_err,	/* TX_SETATTR */
 	(zil_replay_func_t)zvol_replay_err,	/* TX_ACL */
 };
-#endif
 
 /*
  * zvol_log_write() handles synchronous writes using TX_WRITE ZIL transactions.
