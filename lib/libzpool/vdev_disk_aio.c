@@ -26,26 +26,38 @@
 #include <sys/zio.h>
 #include <sys/abd.h>
 #include <sys/kstat.h>
+#include <sys/vdev_disk_aio.h>
 
+#include <sys/poll.h>
+#include <sys/eventfd.h>
+#include <sys/prctl.h>
 #include <libaio.h>
 #include <linux/fs.h>
 #include <rte_ring.h>
 
 /*
- * The value is taken from SPDK. It does not scale (and perhaps should) with
- * number of vdevs in the system, we have one queue for all vdevs.
+ * This is a max number of inflight IOs for a single vdev device and it governs
+ * the size of input ring buffer, AIO context and other structures used in this
+ * vdev backend.
  */
-#define	AIO_QUEUE_DEPTH	128
-
-/* XXX Must be kept in sync with zfs_vdev_max_active in vdev_queue.c */
-#define	MAX_ZIOS	1000
+extern const uint32_t zfs_vdev_max_active;
 
 /*
- * The smaller the more CPU we use, the higher the bigger latency of IOs
- * eventually leading to timeout errors. Empirically was found out that
- * 10ms seems to perform well.
+ * When having this many queued IOs on input we submit them to kernel.
+ * By default it is set to one which means we don't try to group IOs,
+ * which gives better result for synchronous workloads and faster CPUs.
  */
-#define	POLL_SLEEP	10000000
+#define	AIO_QUEUE_HIGH_WM	1
+
+/*
+ * poll sleep interval makes difference only if high wm above is greater
+ * than 1. In opposite case it does not have much impact as everything
+ * is driven purely by events.
+ *
+ * NOTE: Empirically was found that 100us works well in absence of events
+ * (a kind of semi-busy-poll).
+ */
+#define	POLL_SLEEP	100000000
 
 /*
  * Virtual device vector for disks accessed from userland using linux aio(7) API
@@ -58,13 +70,11 @@ typedef struct vdev_disk_aio {
 	boolean_t vda_stop_polling;
 	uintptr_t vda_poller_tid;
 	/* Support for submitting multiple IOs in one syscall */
-	/* list of zios to enqueue/dequeue from ring buffer */
-	zio_t *vda_zio_queue[MAX_ZIOS];
+	uintptr_t vda_submitter_tid;
+	int vda_submit_fd;	/* eventfd for waking up IO submitter */
 	uint32_t vda_zio_next;	/* next zio to be submitted to kernel */
 				/* read & written only from poller thread */
 	uint32_t vda_zio_top;	/* latest incoming zio from uzfs */
-	/* Preallocated array of iocbs for use in poller to run faster */
-	struct iocb *vda_iocbs[MAX_ZIOS];
 	struct rte_ring *vda_ring;	/* ring buffer to enqueue/dequeue zio */
 } vdev_disk_aio_t;
 
@@ -161,7 +171,7 @@ user_io_getevents(io_context_t io_ctx, struct io_event *events)
 	unsigned head;
 	struct aio_ring *ring = (struct aio_ring *)io_ctx;
 
-	while (i < AIO_QUEUE_DEPTH) {
+	while (i < zfs_vdev_max_active) {
 		head = ring->head;
 
 		if (head == ring->tail) {
@@ -181,68 +191,118 @@ user_io_getevents(io_context_t io_ctx, struct io_event *events)
 }
 
 /*
- * Submit all queued ZIOs to kernel and reset length of ZIO queue.
+ * Poll for asynchronous IO done events and dispatch completed IOs to zio
+ * pipeline.
  */
 static void
-vdev_disk_aio_submit(vdev_disk_aio_t *vda)
+vdev_disk_aio_poller(void *arg)
 {
-	struct iocb **iocbs = vda->vda_iocbs;
-	int n = 0;
-	int nr = 0;
+	vdev_disk_aio_t *vda = arg;
+	struct io_event *events;
+	struct timespec timeout;
+	int nr;
 
-	/*
-	 * Dequeue ZIOs from ring buffer as many as possible.
-	 * We have used single consumer dequeue operation since polling
-	 * thread is only dequeuing from aio_submit ring buffer.
-	 */
-	nr = rte_ring_sc_dequeue_burst(vda->vda_ring,
-	    (void **) &vda->vda_zio_queue, MAX_ZIOS, NULL);
+	prctl(PR_SET_NAME, "aio_poller", 0, 0, 0);
 
-	if (nr > 0) {
-		for (n = 0; n < nr; n++) {
-			aio_task_t *task;
-			zio_t *zio = vda->vda_zio_queue[n];
-			ASSERT3P(zio->io_vd->vdev_tsd, ==, vda);
-			ASSERT3P(n, <, MAX_ZIOS);
+	/* allocated on heap not to exceed recommended frame size */
+	events = kmem_alloc(zfs_vdev_max_active * sizeof (struct io_event),
+	    KM_SLEEP);
 
-			/*
-			 * Prepare AIO command control block.
-			 */
-			task = kmem_alloc(sizeof (aio_task_t), KM_SLEEP);
-			task->zio = zio;
-			task->buf = NULL;
-			iocbs[n] = &task->iocb;
+	while (!vda->vda_stop_polling) {
+		timeout.tv_sec = 0;
+		timeout.tv_nsec = POLL_SLEEP;
+		nr = 0;
 
-			switch (zio->io_type) {
-			case ZIO_TYPE_WRITE:
-				task->buf = abd_borrow_buf_copy(zio->io_abd,
-				    zio->io_size);
-				io_prep_pwrite(iocbs[n], vda->vda_fd, task->buf,
-				    zio->io_size, zio->io_offset);
-				break;
-			case ZIO_TYPE_READ:
-				task->buf = abd_borrow_buf(zio->io_abd,
-				    zio->io_size);
-				io_prep_pread(iocbs[n], vda->vda_fd, task->buf,
-				    zio->io_size, zio->io_offset);
-				break;
-			default:
-				ASSERT(0);
-			}
-
-			/*
-			 * prep functions above reset data pointer
-			 * set it again
-			 */
-			iocbs[n]->data = task;
+		/* First we try non-blocking userspace poll which is fast */
+		if (((struct aio_ring *)(vda->vda_io_ctx))->magic ==
+		    AIO_RING_MAGIC) {
+			nr = user_io_getevents(vda->vda_io_ctx, events);
 		}
-	} else {
-		return;
+		if (nr <= 0) {
+			/* Do blocking kernel poll */
+			nr = io_getevents(vda->vda_io_ctx, 1,
+			    zfs_vdev_max_active, events, &timeout);
+			VDA_STAT_BUMP(vda_stat_kernel_polls);
+		} else {
+			VDA_STAT_BUMP(vda_stat_userspace_polls);
+		}
+
+		if (nr < 0) {
+			int error = -nr;
+
+			/* all errors except EINTR are unrecoverable */
+			if (error == EINTR) {
+				continue;
+			} else {
+				fprintf(stderr,
+				    "Failed when polling for AIO events: %d\n",
+				    error);
+				break;
+			}
+		}
+		ASSERT3P(nr, <=, zfs_vdev_max_active);
+
+		for (int i = 0; i < nr; i++) {
+			vdev_disk_aio_done(events[i].data, events[i].res);
+		}
+	}
+
+	kmem_free(events, zfs_vdev_max_active * sizeof (struct io_event));
+	vda->vda_poller_tid = 0;
+	thread_exit();
+}
+
+/*
+ * Submit all queued ZIOs to kernel and reset length of ZIO queue.
+ *
+ * Passed zio buffer is just an optimization to avoid (de)allocation of
+ * large zio array on each invocation of the function.
+ */
+static void
+vdev_disk_aio_submit(vdev_disk_aio_t *vda, zio_t **zios, int nr,
+    struct iocb **iocbs)
+{
+	int n = 0;
+
+	for (n = 0; n < nr; n++) {
+		aio_task_t *task;
+		zio_t *zio = zios[n];
+		ASSERT3P(zio->io_vd->vdev_tsd, ==, vda);
+
+		/*
+		 * Prepare AIO command control block.
+		 */
+		task = kmem_alloc(sizeof (aio_task_t), KM_SLEEP);
+		task->zio = zio;
+		task->buf = NULL;
+		iocbs[n] = &task->iocb;
+
+		switch (zio->io_type) {
+		case ZIO_TYPE_WRITE:
+			task->buf = abd_borrow_buf_copy(zio->io_abd,
+			    zio->io_size);
+			io_prep_pwrite(iocbs[n], vda->vda_fd, task->buf,
+			    zio->io_size, zio->io_offset);
+			break;
+		case ZIO_TYPE_READ:
+			task->buf = abd_borrow_buf(zio->io_abd,
+			    zio->io_size);
+			io_prep_pread(iocbs[n], vda->vda_fd, task->buf,
+			    zio->io_size, zio->io_offset);
+			break;
+		default:
+			ASSERT(0);
+		}
+
+		/*
+		 * prep functions above reset data pointer
+		 * set it again
+		 */
+		iocbs[n]->data = task;
 	}
 
 	/*
 	 * Submit async IO.
-	 * XXX What happens if AIO_QUEUE_DEPTH is exceeded?
 	 */
 	nr = io_submit(vda->vda_io_ctx, n, iocbs);
 	if (nr < n) {
@@ -264,68 +324,84 @@ vdev_disk_aio_submit(vdev_disk_aio_t *vda)
 }
 
 /*
- * Poll for asynchronous IO done events and submit incoming IOs from a queue.
+ * Asynchronous dispatch of IO to kernel. This is done to submit IOs in groups
+ * thus minimize overhead of io_submit call.
  */
 static void
-vdev_disk_aio_poll(void *arg)
+vdev_disk_aio_submitter(void *arg)
 {
 	vdev_disk_aio_t *vda = arg;
-	struct io_event *events;
-	struct timespec timeout;
-	int nr;
+	zio_t **zios_buf;
+	struct pollfd fds;
+	uint64_t poll_data;
+	struct timespec ts;
+	struct iocb **iocbs;
+	int event_came;
+	int rc;
+
+	prctl(PR_SET_NAME, "aio_submitter", 0, 0, 0);
 
 	/* allocated on heap not to exceed recommended frame size */
-	events = kmem_alloc(sizeof (struct io_event) * AIO_QUEUE_DEPTH,
+	zios_buf = kmem_alloc(zfs_vdev_max_active * sizeof (zio_t *), KM_SLEEP);
+	/* Preallocated array of iocbs for use in submit to run faster */
+	iocbs = kmem_alloc(zfs_vdev_max_active * sizeof (struct iocb *),
 	    KM_SLEEP);
 
+	if (AIO_QUEUE_HIGH_WM > 1) {
+		ts.tv_sec = 0;
+		ts.tv_nsec = POLL_SLEEP;
+	} else {
+		ts.tv_sec = 1;
+		ts.tv_nsec =  0;
+	}
+
 	while (!vda->vda_stop_polling) {
-		timeout.tv_sec = 0;
-		timeout.tv_nsec = POLL_SLEEP;
-		nr = 0;
+		fds.fd = vda->vda_submit_fd;
+		fds.events = POLLIN;
+		fds.revents = 0;
+		event_came = B_FALSE;
 
-		/* First we try non-blocking userspace poll which is fast */
-		if (((struct aio_ring *)(vda->vda_io_ctx))->magic ==
-		    AIO_RING_MAGIC) {
-			nr = user_io_getevents(vda->vda_io_ctx, events);
-		}
-		if (nr <= 0) {
-			/* Do blocking kernel poll */
-			nr = io_getevents(vda->vda_io_ctx, 1, AIO_QUEUE_DEPTH,
-			    events, &timeout);
-		} else {
-			VDA_STAT_BUMP(vda_stat_userspace_polls);
-		}
-
-		if (nr < 0) {
-			int error = -nr;
-
-			/* all errors except EINTR are unrecoverable */
-			if (error == EINTR) {
-				continue;
-			} else {
-				fprintf(stderr,
-				    "Failed when polling for AIO events: %d\n",
-				    error);
-				break;
-			}
-		}
-		ASSERT3P(nr, <=, AIO_QUEUE_DEPTH);
-
-		for (int i = 0; i < nr; i++) {
-			vdev_disk_aio_done(events[i].data, events[i].res);
+		rc = ppoll(&fds, 1, &ts, NULL);
+		if (rc < 0) {
+			perror("ppoll in submitter");
+		} else if (rc > 0 && fds.revents == POLLIN) {
+			rc = read(vda->vda_submit_fd, &poll_data,
+			    sizeof (poll_data));
+			ASSERT3P(rc, ==, sizeof (poll_data));
+			event_came = B_TRUE;
 		}
 
 		/*
-		 * Submit IOs which arrived while waiting for and processing
-		 * done events.
+		 * Dequeue all ZIOs from ring buffer even if there was no event
+		 * (and if high-wm > 1), because we want to guarantee that every
+		 * IO request is dispatched within reasonable time frame.
 		 */
-		if (!vda->vda_stop_polling)
-			vdev_disk_aio_submit(vda);
+		if (event_came || AIO_QUEUE_HIGH_WM > 1) {
+			/*
+			 * Using single consumer since there is only one
+			 * submitter thread dequeuing from the ring buffer.
+			 */
+			rc = rte_ring_sc_dequeue_burst(vda->vda_ring,
+			    (void **) zios_buf, zfs_vdev_max_active, NULL);
+			if (rc > 0)
+				vdev_disk_aio_submit(vda, zios_buf, rc, iocbs);
+		}
 	}
 
-	kmem_free(events, sizeof (struct io_event) * AIO_QUEUE_DEPTH);
-	vda->vda_poller_tid = 0;
+	kmem_free(zios_buf, zfs_vdev_max_active * sizeof (zio_t *));
+	kmem_free(iocbs, zfs_vdev_max_active * sizeof (struct iocb *));
+	vda->vda_submitter_tid = 0;
 	thread_exit();
+}
+
+static void
+kick_submitter(vdev_disk_aio_t *vda)
+{
+	uint64_t data = 1;
+	int rc;
+
+	rc = write(vda->vda_submit_fd, &data, sizeof (data));
+	assert(rc == sizeof (data));
 }
 
 /*
@@ -387,11 +463,11 @@ vdev_disk_aio_open(vdev_t *vd, uint64_t *psize, uint64_t *max_psize,
 	}
 
 	/*
-	 * TODO: code in fio aio plugin suggests that for new kernels we can
+	 * Note: code in fio aio plugin suggests that for new kernels we can
 	 * pass INTMAX as limit here and use max limit allowed by the kernel.
 	 * However for userspace polling we need some kind of limit.
 	 */
-	err = io_setup(AIO_QUEUE_DEPTH, &vda->vda_io_ctx);
+	err = io_setup(zfs_vdev_max_active, &vda->vda_io_ctx);
 	if (err != 0) {
 		fprintf(stderr, "Failed to initialize AIO context: %d\n", -err);
 		close(vda->vda_fd);
@@ -400,19 +476,33 @@ vdev_disk_aio_open(vdev_t *vd, uint64_t *psize, uint64_t *max_psize,
 		return (SET_ERROR(-err));
 	}
 
-	/* Create RTE RING to enqueue/dequeue ZIOs */
-	vda->vda_ring = rte_ring_create("aio_submit_ring", MAX_ZIOS,
+	/* Create lockless ring for input ZIOs */
+	vda->vda_ring = rte_ring_create("aio_submit_ring", zfs_vdev_max_active,
 	    -1, RING_F_EXACT_SZ);
 	if (!vda->vda_ring) {
 		fprintf(stderr, "Failed to create aio_submit ring\n");
 		(void) io_destroy(vda->vda_io_ctx);
-		vda->vda_io_ctx = NULL;
+		close(vda->vda_fd);
+		kmem_free(vda, sizeof (vdev_disk_aio_t));
+		vd->vdev_stat.vs_aux = VDEV_AUX_OPEN_FAILED;
+		return (SET_ERROR(ENOMEM));
+	}
+	vda->vda_submit_fd = eventfd(0, EFD_NONBLOCK);
+	if (vda->vda_submit_fd < 0) {
+		fprintf(stderr, "Failed to create eventfd descriptor\n");
+		rte_ring_free(vda->vda_ring);
+		(void) io_destroy(vda->vda_io_ctx);
+		close(vda->vda_fd);
+		kmem_free(vda, sizeof (vdev_disk_aio_t));
+		vd->vdev_stat.vs_aux = VDEV_AUX_OPEN_FAILED;
 		return (SET_ERROR(ENOMEM));
 	}
 
 	vda->vda_stop_polling = B_FALSE;
 	vda->vda_poller_tid = (uintptr_t)thread_create(NULL, 0,
-	    vdev_disk_aio_poll, vda, 0, &p0, TS_RUN, 0);
+	    vdev_disk_aio_poller, vda, 0, &p0, TS_RUN, 0);
+	vda->vda_submitter_tid = (uintptr_t)thread_create(NULL, 0,
+	    vdev_disk_aio_submitter, vda, 0, &p0, TS_RUN, 0);
 
 	vd->vdev_tsd = vda;
 
@@ -441,10 +531,7 @@ skip_open:
 }
 
 /*
- * Waits for poller thread to exit and destroys AIO context.
- *
- * TODO: The current algorithm for poller thread exit is rough and full of
- * sleeps.
+ * Waits for poller & submitter thread to exit and destroys AIO context.
  */
 static void
 vdev_disk_aio_close(vdev_t *vd)
@@ -460,23 +547,18 @@ vdev_disk_aio_close(vdev_t *vd)
 	ts.tv_nsec = 100000000;  // 100ms
 
 	vda->vda_stop_polling = B_TRUE;
-	while (vda->vda_poller_tid != 0) {
+	kick_submitter(vda);
+	while (vda->vda_poller_tid != 0 || vda->vda_submitter_tid != 0) {
 		nanosleep(&ts, NULL);
 	}
 
-	if (vda->vda_io_ctx) {
-		(void) io_destroy(vda->vda_io_ctx);
-		vda->vda_io_ctx = NULL;
-	}
-
+	(void) close(vda->vda_submit_fd);
+	(void) io_destroy(vda->vda_io_ctx);
 	(void) close(vda->vda_fd);
 
 	vd->vdev_delayed_close = B_FALSE;
 
-	if (vda->vda_ring) {
-		rte_ring_free(vda->vda_ring);
-		vda->vda_ring = NULL;
-	}
+	rte_ring_free(vda->vda_ring);
 	kmem_free(vda, sizeof (vdev_disk_aio_t));
 	vd->vdev_tsd = NULL;
 }
@@ -506,9 +588,18 @@ vdev_disk_aio_start(zio_t *zio)
 			return;
 		}
 		/*
-		 * fsync for device files should not be needed.
-		 * XXX Disk cache flush is needed but how to do that?
+		 * XXX fsync for device files should not be needed because with
+		 * O_DIRECT open flag VM caches are bypassed. But flushing disk
+		 * write cache is still needed but how to do that?
 		 */
+
+		/*
+		 * Flush suggests that higher level code has finished writing
+		 * and is waiting for data to be written to disk to continue.
+		 * So submit IOs which have been queued in input ring buffer.
+		 */
+		if (AIO_QUEUE_HIGH_WM > 1)
+			kick_submitter(vda);
 		zio_execute(zio);
 		return;
 
@@ -530,6 +621,9 @@ vdev_disk_aio_start(zio_t *zio)
 		fprintf(stderr, "Failed to enqueue zio in ring\n");
 		zio->io_error = (SET_ERROR(EBUSY));
 		zio_interrupt(zio);
+	}
+	if (rte_ring_count(vda->vda_ring) >= AIO_QUEUE_HIGH_WM) {
+		kick_submitter(vda);
 	}
 }
 
