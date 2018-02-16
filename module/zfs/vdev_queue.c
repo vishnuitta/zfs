@@ -124,7 +124,16 @@
  * the sum of each queue's max_active.  It must be at least the sum of each
  * queue's min_active.
  */
+#if defined(_KERNEL)
 uint32_t zfs_vdev_max_active = 1000;
+#else
+/*
+ * We need to have the value fixed for userspace zfs because in vdev_disk_aio
+ * it is used to allocate structures etc. Should never be less than sum of max
+ * values defined below.
+ */
+const uint32_t zfs_vdev_max_active = 128;
+#endif
 
 /*
  * Per-queue limits on the number of i/os active to each device.  If the
@@ -143,15 +152,15 @@ uint32_t zfs_vdev_max_active = 1000;
  * throughput.
  */
 uint32_t zfs_vdev_sync_read_min_active = 10;
-uint32_t zfs_vdev_sync_read_max_active = 10;
+uint32_t zfs_vdev_sync_read_max_active = 20;
 uint32_t zfs_vdev_sync_write_min_active = 10;
-uint32_t zfs_vdev_sync_write_max_active = 10;
+uint32_t zfs_vdev_sync_write_max_active = 20;
 uint32_t zfs_vdev_async_read_min_active = 1;
-uint32_t zfs_vdev_async_read_max_active = 3;
+uint32_t zfs_vdev_async_read_max_active = 6;
 uint32_t zfs_vdev_async_write_min_active = 2;
-uint32_t zfs_vdev_async_write_max_active = 10;
+uint32_t zfs_vdev_async_write_max_active = 20;
 uint32_t zfs_vdev_scrub_min_active = 1;
-uint32_t zfs_vdev_scrub_max_active = 2;
+uint32_t zfs_vdev_scrub_max_active = 4;
 
 /*
  * When the pool has less than zfs_vdev_async_write_active_min_dirty_percent
