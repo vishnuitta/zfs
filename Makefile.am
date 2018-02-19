@@ -51,7 +51,7 @@ commitcheck:
 
 cstyle:
 	@find ${top_srcdir} -name '*.[hc]' ! -name 'zfs_config.*' \
-		! -name '*.mod.c' -type f -exec scripts/cstyle.pl -cpP {} \+
+		! -name '*.mod.c' ! -name 'rte_*.[hc]' -type f -exec scripts/cstyle.pl -cpP {} \+
 
 shellcheck:
 	@if type shellcheck > /dev/null 2>&1; then \
