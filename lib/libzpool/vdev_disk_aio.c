@@ -29,6 +29,7 @@
 
 #include <libaio.h>
 #include <linux/fs.h>
+#include <rte_ring.h>
 
 /*
  * The value is taken from SPDK. It does not scale (and perhaps should) with
@@ -57,12 +58,14 @@ typedef struct vdev_disk_aio {
 	boolean_t vda_stop_polling;
 	uintptr_t vda_poller_tid;
 	/* Support for submitting multiple IOs in one syscall */
+	/* list of zios to enqueue/dequeue from ring buffer */
 	zio_t *vda_zio_queue[MAX_ZIOS];
 	uint32_t vda_zio_next;	/* next zio to be submitted to kernel */
 				/* read & written only from poller thread */
 	uint32_t vda_zio_top;	/* latest incoming zio from uzfs */
 	/* Preallocated array of iocbs for use in poller to run faster */
 	struct iocb *vda_iocbs[MAX_ZIOS];
+	struct rte_ring *vda_ring;	/* ring buffer to enqueue/dequeue zio */
 } vdev_disk_aio_t;
 
 typedef struct aio_task {
@@ -185,52 +188,56 @@ vdev_disk_aio_submit(vdev_disk_aio_t *vda)
 {
 	struct iocb **iocbs = vda->vda_iocbs;
 	int n = 0;
-	int nr;
+	int nr = 0;
 
 	/*
-	 * create aio tasks for the available ZIOs
-	 *
-	 * We don't want locks in IO path in aio backend, hence this ad-hoc
-	 * lockfree algorithm for obtaining zio entries. We check for NULL
-	 * because that signifies incomplete update of vda_zio_top pointer.
+	 * Dequeue ZIOs from ring buffer as many as possible.
+	 * We have used single consumer dequeue operation since polling
+	 * thread is only dequeuing from aio_submit ring buffer.
 	 */
-	while (vda->vda_zio_queue[vda->vda_zio_next] != NULL &&
-	    vda->vda_zio_next != vda->vda_zio_top) {
-		aio_task_t *task;
-		zio_t *zio = vda->vda_zio_queue[vda->vda_zio_next];
-		ASSERT3P(zio->io_vd->vdev_tsd, ==, vda);
-		ASSERT3P(n, <, MAX_ZIOS);
+	nr = rte_ring_sc_dequeue_burst(vda->vda_ring,
+	    (void **) &vda->vda_zio_queue, MAX_ZIOS, NULL);
 
-		vda->vda_zio_queue[vda->vda_zio_next] = NULL;
-		vda->vda_zio_next = (vda->vda_zio_next + 1) % MAX_ZIOS;
+	if (nr > 0) {
+		for (n = 0; n < nr; n++) {
+			aio_task_t *task;
+			zio_t *zio = vda->vda_zio_queue[n];
+			ASSERT3P(zio->io_vd->vdev_tsd, ==, vda);
+			ASSERT3P(n, <, MAX_ZIOS);
 
-		/*
-		 * Prepare AIO command control block.
-		 */
-		task = kmem_alloc(sizeof (aio_task_t), KM_SLEEP);
-		task->zio = zio;
-		task->buf = NULL;
-		iocbs[n] = &task->iocb;
+			/*
+			 * Prepare AIO command control block.
+			 */
+			task = kmem_alloc(sizeof (aio_task_t), KM_SLEEP);
+			task->zio = zio;
+			task->buf = NULL;
+			iocbs[n] = &task->iocb;
 
-		switch (zio->io_type) {
-		case ZIO_TYPE_WRITE:
-			task->buf = abd_borrow_buf_copy(zio->io_abd,
-			    zio->io_size);
-			io_prep_pwrite(iocbs[n], vda->vda_fd, task->buf,
-			    zio->io_size, zio->io_offset);
-			break;
-		case ZIO_TYPE_READ:
-			task->buf = abd_borrow_buf(zio->io_abd, zio->io_size);
-			io_prep_pread(iocbs[n], vda->vda_fd, task->buf,
-			    zio->io_size, zio->io_offset);
-			break;
-		default:
-			ASSERT(0);
+			switch (zio->io_type) {
+			case ZIO_TYPE_WRITE:
+				task->buf = abd_borrow_buf_copy(zio->io_abd,
+				    zio->io_size);
+				io_prep_pwrite(iocbs[n], vda->vda_fd, task->buf,
+				    zio->io_size, zio->io_offset);
+				break;
+			case ZIO_TYPE_READ:
+				task->buf = abd_borrow_buf(zio->io_abd,
+				    zio->io_size);
+				io_prep_pread(iocbs[n], vda->vda_fd, task->buf,
+				    zio->io_size, zio->io_offset);
+				break;
+			default:
+				ASSERT(0);
+			}
+
+			/*
+			 * prep functions above reset data pointer
+			 * set it again
+			 */
+			iocbs[n]->data = task;
 		}
-
-		/* prep functions above reset data pointer - set it again */
-		iocbs[n]->data = task;
-		n++;
+	} else {
+		return;
 	}
 
 	/*
@@ -393,6 +400,16 @@ vdev_disk_aio_open(vdev_t *vd, uint64_t *psize, uint64_t *max_psize,
 		return (SET_ERROR(-err));
 	}
 
+	/* Create RTE RING to enqueue/dequeue ZIOs */
+	vda->vda_ring = rte_ring_create("aio_submit_ring", MAX_ZIOS,
+	    -1, RING_F_EXACT_SZ);
+	if (!vda->vda_ring) {
+		fprintf(stderr, "Failed to create aio_submit ring\n");
+		(void) io_destroy(vda->vda_io_ctx);
+		vda->vda_io_ctx = NULL;
+		return (SET_ERROR(ENOMEM));
+	}
+
 	vda->vda_stop_polling = B_FALSE;
 	vda->vda_poller_tid = (uintptr_t)thread_create(NULL, 0,
 	    vdev_disk_aio_poll, vda, 0, &p0, TS_RUN, 0);
@@ -446,12 +463,20 @@ vdev_disk_aio_close(vdev_t *vd)
 	while (vda->vda_poller_tid != 0) {
 		nanosleep(&ts, NULL);
 	}
-	(void) io_destroy(vda->vda_io_ctx);
-	vda->vda_io_ctx = NULL;
+
+	if (vda->vda_io_ctx) {
+		(void) io_destroy(vda->vda_io_ctx);
+		vda->vda_io_ctx = NULL;
+	}
 
 	(void) close(vda->vda_fd);
 
 	vd->vdev_delayed_close = B_FALSE;
+
+	if (vda->vda_ring) {
+		rte_ring_free(vda->vda_ring);
+		vda->vda_ring = NULL;
+	}
 	kmem_free(vda, sizeof (vdev_disk_aio_t));
 	vd->vdev_tsd = NULL;
 }
@@ -464,9 +489,6 @@ vdev_disk_aio_start(zio_t *zio)
 {
 	vdev_t *vd = zio->io_vd;
 	vdev_disk_aio_t *vda = vd->vdev_tsd;
-	uint32_t idx;
-	uint32_t new_idx;
-	int success = 0;
 
 	/*
 	 * Check operation type.
@@ -502,17 +524,13 @@ vdev_disk_aio_start(zio_t *zio)
 
 	/*
 	 * Enqueue zio and poller thread will take care of it.
-	 *
-	 * We don't want locks in IO path in aio backend, hence this ad-hoc
-	 * lockfree algorithm for enqueuing new entries.
 	 */
-	while (!success) {
-		idx = vda->vda_zio_top;
-		new_idx = (idx + 1) % MAX_ZIOS;
-		success = __sync_bool_compare_and_swap(&vda->vda_zio_top,
-		    idx, new_idx);
+
+	if (rte_ring_mp_enqueue(vda->vda_ring, (void **) &zio)) {
+		fprintf(stderr, "Failed to enqueue zio in ring\n");
+		zio->io_error = (SET_ERROR(EBUSY));
+		zio_interrupt(zio);
 	}
-	vda->vda_zio_queue[idx] = zio;
 }
 
 /* ARGSUSED */

@@ -15,6 +15,7 @@ lib_LTLIBRARIES = libzpool.la
 
 USER_C = \
 	kernel.c \
+	rte_ring.c \
 	taskq.c \
 	util.c \
 	uzfs_io.c \

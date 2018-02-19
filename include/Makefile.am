@@ -23,7 +23,14 @@ USER_H = \
 	$(top_srcdir)/include/libzfs_core.h \
 	$(top_srcdir)/include/libzfs_impl.h \
 	$(top_srcdir)/include/uzfs_io.h \
-	$(top_srcdir)/include/uzfs_mgmt.h
+	$(top_srcdir)/include/uzfs_mgmt.h \
+	$(top_srcdir)/include/rte_ring.h \
+	$(top_srcdir)/include/rte_atomic_64.h \
+	$(top_srcdir)/include/rte_atomic_generic.h \
+	$(top_srcdir)/include/rte_atomic.h \
+	$(top_srcdir)/include/rte_common.h \
+	$(top_srcdir)/include/rte_memory.h \
+	$(top_srcdir)/include/rte_pause.h
 
 EXTRA_DIST = $(COMMON_H) $(KERNEL_H) $(USER_H)
 
