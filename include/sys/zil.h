@@ -302,6 +302,16 @@ typedef struct {
 	/* 2 strings: names of source and destination follow this */
 } lr_rename_t;
 
+/* For lr without metadata */
+#define	VERSION_0	0
+
+/* For lr with metadata */
+#define	VERSION_1	1
+
+typedef struct blk_metadata {
+	uint64_t	io_num;
+} blk_metadata_t;
+
 typedef struct {
 	lr_t		lr_common;	/* common portion of log record */
 	uint64_t	lr_foid;	/* file object to write */
@@ -309,6 +319,8 @@ typedef struct {
 	uint64_t	lr_length;	/* user data length to write */
 	uint64_t	lr_blkoff;	/* no longer used */
 	blkptr_t	lr_blkptr;	/* spa block pointer for replay */
+	uint64_t	lr_version;
+	blk_metadata_t	lr_metadata;
 	/* write data will follow for small writes */
 } lr_write_t;
 

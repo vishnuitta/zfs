@@ -24,6 +24,11 @@ ZPOOL="$SRC_PATH/cmd/zpool/zpool"
 ZFS="$SRC_PATH/cmd/zfs/zfs"
 ZDB="$SRC_PATH/cmd/zdb/zdb"
 TGT="$SRC_PATH/cmd/tgt/tgt"
+GTEST="$SRC_PATH/tests/cbtest/gtest/test_uzfs"
+ZTEST="$SRC_PATH/cmd/ztest/ztest"
+UZFS_TEST="$SRC_PATH/cmd/uzfs_test/uzfs_test"
+UZFS_TEST_SYNC_SH="$SRC_PATH/cmd/uzfs_test/uzfs_test_sync.sh"
+DMU_IO_TEST="cmd/dmu_io_test/dmu_io_test"
 TMPDIR="/tmp"
 VOLSIZE="1G"
 SRCPOOL="src_pool"
@@ -540,11 +545,49 @@ test_raidz_pool()
 	return 0
 }
 
+run_uzfs_test()
+{
+	log_must $UZFS_TEST
+	log_must $UZFS_TEST -s
+	log_must $UZFS_TEST -l
+	log_must $UZFS_TEST -s -l
+	log_must $UZFS_TEST -i 8192 -b 65536
+	log_must $UZFS_TEST -s -i 8192 -b 65536
+	log_must $UZFS_TEST -l -i 8192 -b 65536
+	log_must $UZFS_TEST -s -l -i 8192 -b 65536
+
+	log_must . $UZFS_TEST_SYNC_SH
+
+	return 0
+}
+
+run_dmu_test()
+{
+	log_must truncate -s 100MB /tmp/disk;
+	log_must $DMU_IO_TEST tpool/vol /tmp/disk;
+	log_must sudo mknod /dev/fake-dev b 7 200;
+	log_must sudo chmod 666 /dev/fake-dev;
+	log_must sudo losetup /dev/fake-dev /tmp/disk;
+	log_must $DMU_IO_TEST tpool/vol /dev/fake-dev;
+	log_must sudo losetup -d /dev/fake-dev;
+	log_must sudo rm /dev/fake-dev;
+	log_must rm /tmp/disk;
+
+	return 0
+}
+
 init_test
 
 log_must test_stripe_pool
 log_must test_mirror_pool
 log_must test_raidz_pool
+
+log_must run_uzfs_test
+
+log_must run_dmu_test
+
+log_must $GTEST
+log_must $ZTEST
 
 close_test
 

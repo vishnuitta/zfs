@@ -19,20 +19,35 @@
  * CDDL HEADER END
  */
 
-#ifndef	_UZFS_IO_H
-#define	_UZFS_IO_H
+#ifndef	_UZFS_TEST_H
+#define	_UZFS_TEST_H
 
-/* writes metadata 'md' to zil records */
-extern int uzfs_write_data(void *zv, char *buf, uint64_t offset, uint64_t len,
-    void *md);
 
-/*
- * calculates length required to store metadata for the data that it reads, and
- * reads metadata and assigns to 'md' and its length to 'mdlen'
- */
-extern int uzfs_read_data(void *zv, char *buf, uint64_t offset, uint64_t len,
-    void *md, uint64_t *mdlen);
+extern int silent;
+extern uint64_t io_block_size;
+extern uint64_t metaverify;
+extern int sync_data;
+extern int zfs_txg_timeout;
+extern int total_time_in_sec;
+extern int write_op;
+extern int verify_err;
+extern int verify;
 
-extern void uzfs_flush_data(void *zv);
+extern unsigned long zfs_arc_max;
+extern unsigned long zfs_arc_min;
+
+extern int replay_fn(void);
+extern void setup_unit_test(void);
+extern void unit_test_create_pool_ds(void);
+extern void open_pool_ds(void **, void **);
+
+typedef struct worker_args {
+	void *zv;
+	kmutex_t *mtx;
+	kcondvar_t *cv;
+	int *threads_done;
+	uint64_t io_block_size;
+	uint64_t active_size;
+} worker_args_t;
 
 #endif

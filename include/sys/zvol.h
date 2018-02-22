@@ -31,6 +31,7 @@
 
 #define	ZVOL_OBJ		1ULL
 #define	ZVOL_ZAP_OBJ		2ULL
+#define	ZVOL_META_OBJ		3ULL
 
 #define	SPEC_MAXOFFSET_T	((1LL << ((NBBY * sizeof (daddr32_t)) + \
 				DEV_BSHIFT - 1)) - 1)

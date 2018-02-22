@@ -21,27 +21,24 @@
 #include <sys/zfs_context.h>
 #include <uzfs_mgmt.h>
 #include <uzfs_io.h>
+#include <uzfs_test.h>
 #include <math.h>
 
 int total_time_in_sec = 60;
+int log_device = 0;
+int sync_data = 0;
 uint64_t io_block_size = 1024;
 uint64_t block_size = 4096;
 uint64_t active_size = 0;
 uint64_t vol_size = 0;
-
-typedef struct worker_args {
-	void *zv;
-	kmutex_t *mtx;
-	kcondvar_t *cv;
-	int *threads_done;
-	uint64_t io_block_size;
-	uint64_t active_size;
-} worker_args_t;
+uint64_t metaverify = 0;
+int verify = 0;
+int write_op = 0;
+int replay = 0;
+int silent = 0;
+int verify_err = 0;
 
 void reader_thread(void *zv);
-
-extern unsigned long zfs_arc_max;
-extern unsigned long zfs_arc_min;
 
 void
 verify_data(char *buf, uint64_t offset, int idx, uint64_t block_size)
@@ -92,6 +89,8 @@ reader_thread(void *arg)
 	int *threads_done = warg->threads_done;
 	uint64_t vol_size = warg->active_size;
 	uint64_t block_size = warg->io_block_size;
+	uint64_t len = 0;
+	void *io_num;
 
 	for (j = 0; j < 15; j++)
 		buf[j] = (char *)umem_alloc(sizeof (char)*(j+1)* block_size,
@@ -102,15 +101,17 @@ reader_thread(void *arg)
 
 	vol_blocks = (vol_size) / block_size;
 
-	printf("Starting read..\n");
+	if (silent == 0)
+		printf("Starting read..\n");
 
 	while (1) {
 		blk_offset = uzfs_random(vol_blocks - 16);
 		offset = blk_offset * block_size;
 
 		idx = uzfs_random(15);
+		len = 0;
 		err = uzfs_read_data(zv, buf[idx], offset,
-		    (idx + 1) * block_size);
+		    (idx + 1) * block_size, &io_num, &len);
 
 		if (err != 0)
 			printf("IO error at offset: %lu len: %lu\n", offset,
@@ -119,7 +120,8 @@ reader_thread(void *arg)
 
 		if (buf[idx][0] != 0)
 			data_iops += (idx + 1);
-
+		if (len != 0)
+			kmem_free(io_num, len);
 		iops += (idx + 1);
 
 		now = gethrtime();
@@ -128,8 +130,9 @@ reader_thread(void *arg)
 	}
 	for (j = 0; j < 15; j++)
 		umem_free(buf[j], sizeof (char) * (j + 1) * block_size);
-	printf("Stopping read.. ios done: %lu data iops: %lu\n", iops,
-	    data_iops);
+	if (silent == 0)
+		printf("Stopping read.. ios done: %lu data iops: %lu\n", iops,
+		    data_iops);
 
 	mutex_enter(mtx);
 	*threads_done = *threads_done + 1;
@@ -168,6 +171,7 @@ writer_thread(void *arg)
 	int *threads_done = warg->threads_done;
 	uint64_t vol_size = warg->active_size;
 	uint64_t block_size = warg->io_block_size;
+	static uint64_t io_num = 0;
 
 	for (j = 0; j < 15; j++)
 		buf[j] = (char *)umem_alloc(sizeof (char)*(j+1)*block_size,
@@ -178,9 +182,11 @@ writer_thread(void *arg)
 
 	vol_blocks = (vol_size) / block_size;
 
-	printf("Starting write..\n");
+	if (silent == 0)
+		printf("Starting write..\n");
 
 	while (1) {
+		io_num++;
 		blk_offset = uzfs_random(vol_blocks - 16);
 		offset = blk_offset * block_size;
 
@@ -188,8 +194,9 @@ writer_thread(void *arg)
 
 		populate_data(buf[idx], offset, idx, block_size);
 
+		/* randomness in io_num is to test VERSION_0 zil records */
 		err = uzfs_write_data(zv, buf[idx], offset,
-		    (idx + 1) * block_size);
+		    (idx + 1) * block_size, (uzfs_random(2) ? NULL : &io_num));
 		if (err != 0)
 			printf("IO error at offset: %lu len: %lu\n", offset,
 			    (idx + 1) * block_size);
@@ -201,7 +208,8 @@ writer_thread(void *arg)
 	}
 	for (j = 0; j < 15; j++)
 		umem_free(buf[j], sizeof (char) * (j + 1) * block_size);
-	printf("Stopping write.. ios done: %lu\n", iops);
+	if (silent == 0)
+		printf("Stopping write.. ios done: %lu\n", iops);
 
 	mutex_enter(mtx);
 	*threads_done = *threads_done + 1;
@@ -267,6 +275,7 @@ unit_test_create_pool_ds(void)
 		printf("opening pool errored %d..\n", err3);
 		exit(1);
 	}
+	uzfs_close_pool(spa3);
 
 	err = uzfs_create_dataset(spa, "ds0", vol_size, block_size, 0, &zv);
 	if (zv == NULL || err != 0) {
@@ -289,7 +298,10 @@ unit_test_create_pool_ds(void)
 	err1 = uzfs_vdev_add(spa, "/tmp/uztest.xyz", 12, 0);
 	err2 = uzfs_vdev_add(spa, "/tmp/uztest.1a", 12, 0);
 	err3 = uzfs_vdev_add(spa, "/tmp/uztest.2a", 12, 0);
-	err4 = uzfs_vdev_add(spa, "/tmp/uztest.log", 12, 1);
+	if (log_device == 1)
+		err4 = uzfs_vdev_add(spa, "/tmp/uztest.log", 12, 1);
+	else
+		err4 = 0;
 	if (err1 == 0 || err2 == 0) {
 		printf("shouldn't add vdev, but succeeded..\n");
 		exit(1);
@@ -307,7 +319,10 @@ unit_test_create_pool_ds(void)
 static void usage(int num)
 {
 	printf("uzfs_test -t <total_time_in_sec> -a <active data size>"
-	    " -b <block_size> -i <io size> -v <vol size>\n");
+	    " -b <block_size> -i <io size> -v <vol size> -l(for log device)"
+	    " -m <metadata to verify during replay> -r(for testing replay)"
+	    " -s(for sync on) -S(for silent) -V <data to verify during replay>"
+	    " -w(for write during replay)\n");
 	if (num == 0)
 		exit(1);
 }
@@ -371,7 +386,7 @@ static void process_options(int argc, char **argv)
 {
 	int opt;
 	uint64_t val = 0;
-	while ((opt = getopt(argc, argv, "a:b:i:v:t:")) != EOF) {
+	while ((opt = getopt(argc, argv, "a:b:i:lm:rsSt:v:V:w")) != EOF) {
 		if (optarg != NULL)
 			val = nicenumtoull(optarg);
 		switch (opt) {
@@ -389,6 +404,26 @@ static void process_options(int argc, char **argv)
 			case 'i':
 				io_block_size = val;
 				break;
+			case 'l':
+				log_device = 1;
+				break;
+			case 'm':
+				if (optarg != NULL)
+					val = nicenumtoull(optarg);
+				metaverify = val;
+				break;
+			case 'r':
+				replay = 1;
+				break;
+			case 's':
+				sync_data = 1;
+				break;
+			case 'S':
+				silent = 1;
+				break;
+			case 't':
+				total_time_in_sec = val;
+				break;
 			case 'v':
 				vol_size = val;
 				if (active_size == 0)
@@ -397,8 +432,13 @@ static void process_options(int argc, char **argv)
 					active_size = (active_size < vol_size)
 					    ? (active_size) : (vol_size);
 				break;
-			case 't':
-				total_time_in_sec = val;
+			case 'V':
+				if (optarg != NULL)
+					val = nicenumtoull(optarg);
+				verify = val;
+				break;
+			case 'w':
+				write_op = 1;
 				break;
 			default:
 				usage(0);
@@ -407,18 +447,41 @@ static void process_options(int argc, char **argv)
 	if (active_size == 0 || vol_size == 0)
 		active_size = vol_size = 1024*1024*1024ULL;
 
-	printf("vol size: %lu active size: %lu\n", vol_size, active_size);
-	printf("block size: %lu io blksize: %lu\n", block_size, io_block_size);
-	printf("total run time in seconds: %d\n", total_time_in_sec);
+	if (silent == 0) {
+		printf("vol size: %lu active size: %lu\n", vol_size,
+		    active_size);
+		printf("block size: %lu io blksize: %lu\n", block_size,
+		    io_block_size);
+		printf("log: %d sync: %d silent: %d\n", log_device, sync_data,
+		    silent);
+		printf("write: %d verify: %d metaverify: %lu\n", write_op,
+		    verify, metaverify);
+		printf("total run time in seconds: %d\n", total_time_in_sec);
+	}
+}
+void
+open_pool_ds(void **spa, void **zv)
+{
+	int err;
+	err = uzfs_open_pool("testp", spa);
+	if (err != 0) {
+		printf("pool open errored.. %d\n", err);
+		exit(1);
+	}
+	err = uzfs_open_dataset(*spa, "ds0", sync_data, zv);
+	if (err != 0) {
+		printf("ds open errored.. %d\n", err);
+		exit(1);
+	}
 }
 
-int
-main(int argc, char **argv)
+void
+unit_test_fn(void)
 {
 	void *spa, *zv;
 	kthread_t *reader1;
 	kthread_t *writer[3];
-	int i, err;
+	int i;
 	kmutex_t mtx;
 	kcondvar_t cv;
 	int threads_done = 0;
@@ -428,32 +491,11 @@ main(int argc, char **argv)
 	mutex_init(&mtx, NULL, MUTEX_DEFAULT, NULL);
 	cv_init(&cv, NULL, CV_DEFAULT, NULL);
 
-	process_options(argc, argv);
-
-	zfs_arc_max = (512 << 20);
-	zfs_arc_min = (256 << 20);
-
-	err = uzfs_init();
-	if (err != 0) {
-		printf("initialization errored.. %d\n", err);
-		exit(1);
-	}
-	printf("zarcmax: %lu zarcmin:%lu\n", zfs_arc_max, zfs_arc_min);
-
 	setup_unit_test();
 
 	unit_test_create_pool_ds();
 
-	err = uzfs_open_pool("testp", &spa);
-	if (err != 0) {
-		printf("pool open errored.. %d\n", err);
-		exit(1);
-	}
-	err = uzfs_open_dataset(spa, "ds0", 0, &zv);
-	if (err != 0) {
-		printf("ds open errored.. %d\n", err);
-		exit(1);
-	}
+	open_pool_ds(&spa, &zv);
 
 	reader1_args.zv = zv;
 	reader1_args.threads_done = &threads_done;
@@ -490,5 +532,29 @@ main(int argc, char **argv)
 
 	uzfs_close_dataset(zv);
 	uzfs_close_pool(spa);
+}
+
+int
+main(int argc, char **argv)
+{
+	int err;
+	process_options(argc, argv);
+
+	zfs_arc_max = (512 << 20);
+	zfs_arc_min = (256 << 20);
+
+	err = uzfs_init();
+	if (err != 0) {
+		printf("initialization errored.. %d\n", err);
+		exit(1);
+	}
+	if (silent == 0)
+		printf("zarcmax: %lu zarcmin:%lu\n", zfs_arc_max, zfs_arc_min);
+
+	if (replay == 1)
+		err = replay_fn();
+	else
+		unit_test_fn();
 	uzfs_fini();
+	return (err);
 }
