@@ -39,38 +39,35 @@ install:
     - cd ../ZoL
     - sh autogen.sh
     - if [ $ZFS_BUILD_TAGS = 0 ]; then
-        ./configure --enable-code-coverage=yes --enable-debug --enable-uzfs=yes --with-jemalloc;
+        if [ $TRAVIS_BRANCH = "zfs-0.7-release" ]; then
+          ./configure --enable-code-coverage=yes --enable-uzfs=yes --with-jemalloc || travis_terminate 1;
+        else
+          ./configure --enable-code-coverage=yes --enable-debug --enable-uzfs=yes --with-jemalloc || travis_terminate 1;
+        fi;
         make;
       else
-        ./configure --enable-code-coverage=yes --enable-debug;
-        make --no-print-directory -s pkg-utils pkg-kmod;
-        sudo dpkg -i *.deb;
+        if [ $TRAVIS_BRANCH = "zfs-0.7-release" ]; then
+          ./configure --enable-code-coverage=yes || travis_terminate 1;
+        else
+          ./configure --enable-code-coverage=yes --enable-debug || travis_terminate 1;
+        fi;
+        make --no-print-directory -s pkg-utils pkg-kmod || travis_terminate 1;
+        sudo dpkg -i *.deb || travis_terminate 1;
       fi
 before_script:
     - make cstyle;
 script:
     # run ztest and test supported zio backends
     - if [ $ZFS_BUILD_TAGS = 0 ]; then
-        sudo mkdir /etc/zfs
-        travis_wait 60 ./tests/cbtest/gtest/test_uzfs && ./tests/cbtest/script/uzfs_cli.sh && ./cmd/uzfs_test/uzfs_test;
-        travis_wait 10 ./cmd/ztest/ztest;
-        truncate -s 100MB /tmp/disk;
-        travis_wait 20 cmd/dmu_io_test/dmu_io_test tpool/vol /tmp/disk;
-        sudo mknod /dev/fake-dev b 7 200;
-        sudo chmod 666 /dev/fake-dev;
-        sudo losetup /dev/fake-dev /tmp/disk;
-        travis_wait 20 cmd/dmu_io_test/dmu_io_test tpool/vol /dev/fake-dev;
-        sudo losetup -d /dev/fake-dev;
-        sudo rm /dev/fake-dev;
-        rm /tmp/disk;
-        travis_wait 10 bash cmd/uzfs_test/uzfs_test_sync.sh cmd/uzfs_test/;
+        sudo mkdir /etc/zfs;
+        travis_wait 60 ./tests/cbtest/script/test_uzfs.sh || travis_terminate 1;
       else
         if [ $TRAVIS_BRANCH = "zfs-0.7-release" ]; then
-          travis_wait 100 /usr/share/zfs/zfs-tests.sh -r linux_cstor.run -v;
+          travis_wait 100 /usr/share/zfs/zfs-tests.sh -r linux_cstor.run -v || travis_terminate 1;
         else
           sudo /sbin/modprobe zfs;
-          travis_wait 10 /sbin/ztest;
-        fi
+          travis_wait 10 /sbin/ztest || travis_terminate 1;
+        fi;
       fi
 after_failure:
     - find /var/tmp/test_results/current/log -type f -name '*' -printf "%f\n" -exec cut -c -$ZFS_TEST_TRAVIS_LOG_MAX_LENGTH {} \;

@@ -12,7 +12,7 @@ DEFAULT_INCLUDES += \
 sbin_PROGRAMS = uzfs_test
 
 uzfs_test_SOURCES = \
-	uzfs_test.c
+	uzfs_test_sync.c uzfs_test.c
 
 uzfs_test_LDADD = \
 	$(top_builddir)/lib/libnvpair/libnvpair.la \
@@ -22,18 +22,4 @@ uzfs_test_LDADD = \
 	$(top_builddir)/lib/libzfs_core/libzfs_core.la
 
 uzfs_test_LDADD += -lm
-
-sbin_PROGRAMS += uzfs_test_sync
-
-uzfs_test_sync_SOURCES = \
-	uzfs_test_sync.c
-
-uzfs_test_sync_LDADD = \
-	$(top_builddir)/lib/libnvpair/libnvpair.la \
-	$(top_builddir)/lib/libuutil/libuutil.la \
-	$(top_builddir)/lib/libzpool/libzpool.la \
-	$(top_builddir)/lib/libzfs/libzfs.la \
-	$(top_builddir)/lib/libzfs_core/libzfs_core.la
-
-uzfs_test_sync_LDADD += -lm
 

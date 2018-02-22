@@ -147,9 +147,9 @@ zil_prt_rec_write(zilog_t *zilog, int txtype, lr_write_t *lr)
 	int verbose = MAX(dump_opt['d'], dump_opt['i']);
 	int error;
 
-	(void) printf("%sfoid %llu, offset %llx, length %llx\n", prefix,
-	    (u_longlong_t)lr->lr_foid, (u_longlong_t)lr->lr_offset,
-	    (u_longlong_t)lr->lr_length);
+	(void) printf("%sfoid %llu, version: %llx offset %llx, length %llx\n",
+	    prefix, (u_longlong_t)lr->lr_foid, (u_longlong_t)lr->lr_version,
+	    (u_longlong_t)lr->lr_offset, (u_longlong_t)lr->lr_length);
 
 	if (txtype == TX_WRITE2 || verbose < 5)
 		return;

@@ -607,6 +607,43 @@ zvol_replay_truncate(zvol_state_t *zv, lr_truncate_t *lr, boolean_t byteswap)
 	return (dmu_free_long_range(zv->zv_objset, ZVOL_OBJ, offset, length));
 }
 
+#if !defined(_KERNEL)
+/*
+ * This function assumes length of data as one (meta vol) block size
+ */
+void
+get_metaobj_block_details(metaobj_blk_offset_t *m, zvol_state_t *zv,
+    uint64_t offset)
+{
+	uint64_t blocksize = zv->zv_metavolblocksize;
+	uint64_t metablocksize = zv->zv_volmetablocksize;
+	uint64_t metadatasize = zv->zv_volmetadatasize;
+	uint64_t entries, n_th_entry, metablock;
+
+	entries = (metablocksize / metadatasize);
+	n_th_entry = (offset / blocksize);
+	metablock = (n_th_entry / entries);
+
+	m->r_offset = metablock;
+	m->r_len = metablocksize;
+	m->m_offset = n_th_entry * metadatasize;
+}
+
+uint64_t
+get_metadata_len(zvol_state_t *zv, uint64_t offset, uint64_t len)
+{
+	uint64_t blocksize = zv->zv_metavolblocksize;
+	uint64_t metadatasize = zv->zv_volmetadatasize;
+	uint64_t m_th_entry, n_th_entry;
+
+	m_th_entry = (offset / blocksize);
+	n_th_entry = ((offset + len - 1) / blocksize);
+
+	return ((n_th_entry - m_th_entry + 1) * metadatasize);
+}
+
+#endif
+
 /*
  * Replay a TX_WRITE ZIL transaction that didn't get committed
  * after a system failure
@@ -619,13 +656,20 @@ zvol_replay_write(zvol_state_t *zv, lr_write_t *lr, boolean_t byteswap)
 	uint64_t offset, length;
 	dmu_tx_t *tx;
 	int error;
-
+#if !defined(_KERNEL)
+	blk_metadata_t *metadata = NULL;
+	metaobj_blk_offset_t metablk;
+	uint64_t version;
+#endif
 	if (byteswap)
 		byteswap_uint64_array(lr, sizeof (*lr));
 
 	offset = lr->lr_offset;
 	length = lr->lr_length;
-
+#if !defined(_KERNEL)
+	version = lr->lr_version;
+	metadata = &(lr->lr_metadata);
+#endif
 	/* If it's a dmu_sync() block, write the whole block */
 	if (lr->lr_common.lrc_reclen == sizeof (lr_write_t)) {
 		uint64_t blocksize = BP_GET_LSIZE(&lr->lr_blkptr);
@@ -637,11 +681,27 @@ zvol_replay_write(zvol_state_t *zv, lr_write_t *lr, boolean_t byteswap)
 
 	tx = dmu_tx_create(os);
 	dmu_tx_hold_write(tx, ZVOL_OBJ, offset, length);
+
+#if !defined(_KERNEL)
+	if (lr->lr_version == VERSION_1) {
+		get_metaobj_block_details(&metablk, zv, offset);
+		dmu_tx_hold_write(tx, ZVOL_META_OBJ, metablk.m_offset,
+		    sizeof (blk_metadata_t));
+	}
+#endif
+
 	error = dmu_tx_assign(tx, TXG_WAIT);
 	if (error) {
 		dmu_tx_abort(tx);
 	} else {
 		dmu_write(os, ZVOL_OBJ, offset, length, data, tx);
+#if !defined(_KERNEL)
+		if (lr->lr_version == VERSION_1) {
+			get_metaobj_block_details(&metablk, zv, offset);
+			dmu_write(os, ZVOL_META_OBJ, metablk.m_offset,
+			    sizeof (blk_metadata_t), metadata, tx);
+		}
+#endif
 		dmu_tx_commit(tx);
 	}
 
@@ -682,14 +742,23 @@ zil_replay_func_t zvol_replay_vector[TX_MAX_TYPE] = {
  */
 ssize_t zvol_immediate_write_sz = 32768;
 
+#if defined(_KERNEL)
 void
 zvol_log_write(zvol_state_t *zv, dmu_tx_t *tx, uint64_t offset,
     uint64_t size, int sync)
+#else
+void
+zvol_log_write(zvol_state_t *zv, dmu_tx_t *tx, uint64_t offset,
+    uint64_t size, int sync, blk_metadata_t *metadata)
+#endif
 {
 	uint32_t blocksize = zv->zv_volblocksize;
 	zilog_t *zilog = zv->zv_zilog;
 	itx_wr_state_t write_state;
 
+#if !defined(_KERNEL)
+	blk_metadata_t *md;
+#endif
 	if (zil_replaying(zilog, tx))
 		return;
 
@@ -729,6 +798,15 @@ zvol_log_write(zvol_state_t *zv, dmu_tx_t *tx, uint64_t offset,
 		lr->lr_foid = ZVOL_OBJ;
 		lr->lr_offset = offset;
 		lr->lr_length = len;
+#if !defined(_KERNEL)
+		if (metadata != NULL) {
+			lr->lr_version = VERSION_1;
+			md = &(lr->lr_metadata);
+			memcpy(md, metadata, sizeof (blk_metadata_t));
+		}
+		else
+			lr->lr_version = VERSION_0;
+#endif
 		lr->lr_blkoff = 0;
 		BP_ZERO(&lr->lr_blkptr);
 

@@ -179,7 +179,7 @@ uzfs_objset_create_cb(objset_t *new_os, void *arg, cred_t *cr, dmu_tx_t *tx)
 	/*
 	 * Create the objects common to all uzfs datasets.
 	 */
-	uint64_t error;
+	uint64_t error, metablocksize, metadatasize, metavolblocksize;
 
 	zvol_properties_t *properties = (zvol_properties_t *)arg;
 
@@ -191,8 +191,26 @@ uzfs_objset_create_cb(objset_t *new_os, void *arg, cred_t *cr, dmu_tx_t *tx)
 	    DMU_OT_NONE, 0, tx);
 	VERIFY(error == 0);
 
+	metablocksize = (properties->meta_block_size < properties->block_size) ?
+	    (properties->meta_block_size) : (properties->block_size);
+	error = dmu_object_claim(new_os, ZVOL_META_OBJ, DMU_OT_ZVOL,
+	    metablocksize, DMU_OT_NONE, 0, tx);
+	VERIFY(error == 0);
+
 	error = zap_update(new_os, ZVOL_ZAP_OBJ, "size", 8, 1,
 	    &properties->vol_size, tx);
+	VERIFY(error == 0);
+
+	metadatasize = sizeof (blk_metadata_t);
+	error = zap_update(new_os, ZVOL_ZAP_OBJ, "metadatasize", 8, 1,
+	    &metadatasize, tx);
+	VERIFY(error == 0);
+
+	metavolblocksize = (properties->meta_vol_block_size <
+	    properties->block_size) ? (properties->meta_vol_block_size) :
+	    (properties->block_size);
+	error = zap_update(new_os, ZVOL_ZAP_OBJ, "metavolblocksize", 8, 1,
+	    &metavolblocksize, tx);
 	VERIFY(error == 0);
 }
 
@@ -206,6 +224,8 @@ uzfs_open_dataset(spa_t *spa, const char *ds_name, int sync, zvol_state_t **z)
 	objset_t *os;
 	dmu_object_info_t doi;
 	uint64_t block_size, vol_size;
+	uint64_t meta_vol_block_size;
+	uint64_t meta_data_size;
 
 	if (spa == NULL)
 		goto ret;
@@ -215,7 +235,9 @@ uzfs_open_dataset(spa_t *spa, const char *ds_name, int sync, zvol_state_t **z)
 	if (zv == NULL)
 		goto ret;
 	zv->zv_spa = spa;
+
 	zfs_rlock_init(&zv->zv_range_lock);
+	zfs_rlock_init(&zv->zv_mrange_lock);
 
 	strlcpy(zv->zv_name, name, MAXNAMELEN);
 
@@ -232,11 +254,32 @@ uzfs_open_dataset(spa_t *spa, const char *ds_name, int sync, zvol_state_t **z)
 	error = zap_lookup(os, ZVOL_ZAP_OBJ, "size", 8, 1, &vol_size);
 	if (error)
 		goto disown_free;
+
+	error = dmu_object_info(os, ZVOL_META_OBJ, &doi);
+
+	error |= zap_lookup(os, ZVOL_ZAP_OBJ, "metavolblocksize", 8, 1,
+	    &meta_vol_block_size);
+
+	error |= zap_lookup(os, ZVOL_ZAP_OBJ, "metadatasize", 8, 1,
+	    &meta_data_size);
+
+	if (error) {
+		zv->zv_volmetablocksize = 0;
+		zv->zv_volmetadatasize = 0;
+		zv->zv_metavolblocksize = 0;
+	} else {
+		zv->zv_volmetablocksize = doi.doi_data_block_size;
+		zv->zv_volmetadatasize = meta_data_size;
+		zv->zv_metavolblocksize = meta_vol_block_size;
+	}
+
 	error = dnode_hold(os, ZVOL_OBJ, zv, &zv->zv_dn);
 	if (error) {
 disown_free:
 		dmu_objset_disown(zv->zv_objset, zv);
 free_ret:
+		zfs_rlock_destroy(&zv->zv_range_lock);
+		zfs_rlock_destroy(&zv->zv_mrange_lock);
 		kmem_free(zv, sizeof (zvol_state_t));
 		zv = NULL;
 		goto ret;
@@ -278,6 +321,8 @@ uzfs_create_dataset(spa_t *spa, char *ds_name, uint64_t vol_size,
 
 	properties.vol_size = vol_size;
 	properties.block_size = block_size;
+	properties.meta_block_size = block_size;
+	properties.meta_vol_block_size = block_size;
 
 	error = dmu_objset_create(name, DMU_OST_ZVOL, 0,
 	    uzfs_objset_create_cb, &properties);
@@ -296,9 +341,9 @@ ret:
 }
 
 uint64_t
-uzfs_syncing_txg(spa_t *spa)
+uzfs_synced_txg(zvol_state_t *zv)
 {
-	return (spa_syncing_txg(spa));
+	return (spa_last_synced_txg(zv->zv_spa));
 }
 
 /* disowns, closes dataset and pool */
@@ -308,6 +353,8 @@ uzfs_close_dataset(zvol_state_t *zv)
 	zil_close(zv->zv_zilog);
 	dnode_rele(zv->zv_dn, zv);
 	dmu_objset_disown(zv->zv_objset, zv);
+	zfs_rlock_destroy(&zv->zv_range_lock);
+	zfs_rlock_destroy(&zv->zv_mrange_lock);
 	kmem_free(zv, sizeof (zvol_state_t));
 }
 
