@@ -32,11 +32,12 @@ extern int total_time_in_sec;
 extern int write_op;
 extern int verify_err;
 extern int verify;
+extern int test_iterations;
 
 extern unsigned long zfs_arc_max;
 extern unsigned long zfs_arc_min;
 
-extern int replay_fn(void);
+extern void replay_fn(void *arg);
 extern void setup_unit_test(void);
 extern void unit_test_create_pool_ds(void);
 extern void open_pool_ds(void **, void **);
@@ -50,4 +51,11 @@ typedef struct worker_args {
 	uint64_t active_size;
 } worker_args_t;
 
+typedef struct uzfs_test_info {
+	thread_func_t func;
+	char *name;
+} uzfs_test_info_t;
+
+void uzfs_zvol_zap_operation(void *arg);
+void unit_test_fn(void *arg);
 #endif

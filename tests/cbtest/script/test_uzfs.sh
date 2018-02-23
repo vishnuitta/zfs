@@ -547,14 +547,15 @@ test_raidz_pool()
 
 run_uzfs_test()
 {
-	log_must $UZFS_TEST
-	log_must $UZFS_TEST -s
-	log_must $UZFS_TEST -l
-	log_must $UZFS_TEST -s -l
-	log_must $UZFS_TEST -i 8192 -b 65536
-	log_must $UZFS_TEST -s -i 8192 -b 65536
-	log_must $UZFS_TEST -l -i 8192 -b 65536
-	log_must $UZFS_TEST -s -l -i 8192 -b 65536
+	log_must_not $UZFS_TEST
+	log_must $UZFS_TEST -s -T 2
+	log_must $UZFS_TEST -l -T 2
+	log_must $UZFS_TEST -s -l -T 2
+	log_must $UZFS_TEST -i 8192 -b 65536 -T 2
+	log_must $UZFS_TEST -s -i 8192 -b 65536 -T 2
+	log_must $UZFS_TEST -l -i 8192 -b 65536 -T 2
+	log_must $UZFS_TEST -s -l -i 8192 -b 65536 -T 2
+	log_must $UZFS_TEST -t 10 -T 0
 
 	log_must . $UZFS_TEST_SYNC_SH
 

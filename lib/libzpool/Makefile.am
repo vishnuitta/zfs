@@ -20,6 +20,7 @@ USER_C = \
 	util.c \
 	uzfs_io.c \
 	uzfs_mgmt.c \
+	uzfs_zap.c \
 	vdev_disk_aio.c
 
 KERNEL_C = \

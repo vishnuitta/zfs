@@ -1,0 +1,145 @@
+#include <sys/types.h>
+#include <sys/spa.h>
+#include <uzfs_mgmt.h>
+#include <uzfs_zap.h>
+#include <uzfs_test.h>
+
+/*
+ * populate_string will fill buf with [A-Z] characters
+ */
+static void
+populate_string(char *buf, uint64_t size)
+{
+	int i = 0;
+	int idx;
+
+	for (i = 0; i < size; i++) {
+		idx = uzfs_random('Z' - 'A');
+		idx += 'A';
+		buf[i] = (char)idx;
+	}
+	buf[size - 1] = '\0';
+}
+
+static void
+destroy_zap_entries(uzfs_zap_kv_t **kv_array, uint64_t zap_count)
+{
+	int i = 0;
+	uzfs_zap_kv_t *kv;
+
+	for (i = 0; i < zap_count; i++) {
+		kv = kv_array[i];
+		free(kv->key);
+		free(kv->value);
+		free(kv);
+		kv = NULL;
+	}
+}
+
+static void
+fill_up_zap_entries(uzfs_zap_kv_t **array, uint64_t n)
+{
+	int i = 0;
+	uzfs_zap_kv_t *zap;
+	uint64_t key_len, value_len;
+
+	for (i = 0; i < n; i++, zap = NULL) {
+		zap = malloc(sizeof (uzfs_zap_kv_t));
+		key_len = uzfs_random(32);
+		value_len = uzfs_random(32);
+
+		key_len = (key_len < 8) ? 8 : key_len;
+		value_len = (value_len < 8) ? 8 : value_len;
+
+		zap->key = malloc(key_len);
+		zap->value = malloc(value_len);
+		zap->size = value_len;
+
+		populate_string(zap->key, key_len);
+		populate_string(zap->value, value_len);
+		array[i] = zap;
+	}
+}
+
+static void
+update_zap_entries(uzfs_zap_kv_t **array, uint64_t n)
+{
+	int i = 0;
+	uzfs_zap_kv_t *zap;
+
+	for (i = 0; i < n; i++) {
+		zap = array[i];
+		populate_string(zap->value, zap->size);
+	}
+
+}
+
+void
+verify_zap_entries(void *zvol, uzfs_zap_kv_t **key_array, uint64_t count)
+{
+	uzfs_zap_kv_t *kv;
+	char *value, *temp_value;
+	int i = 0;
+
+	for (i = 0; i < count; i++) {
+		kv = key_array[i];
+		temp_value = kv->value;
+		kv->value = calloc(1, kv->size);
+		uzfs_read_zap_entry(zvol, kv);
+		VERIFY0(strncmp(kv->value, temp_value, kv->size));
+		free(temp_value);
+		value = NULL;
+	}
+}
+
+void
+uzfs_zvol_zap_operation(void *arg)
+{
+	uzfs_test_info_t *test_info = (uzfs_test_info_t *)arg;
+	int i = 0;
+	hrtime_t end, now;
+	void *spa, *zvol;
+	uzfs_zap_kv_t **kv_array;
+	int zap_count;
+
+	setup_unit_test();
+	unit_test_create_pool_ds();
+	open_pool_ds(&spa, &zvol);
+
+	now = gethrtime();
+	end = now + (hrtime_t)(total_time_in_sec * (hrtime_t)(NANOSEC));
+
+	while (i++ < test_iterations) {
+		zap_count = uzfs_random(16) + 1;
+
+		kv_array = malloc(zap_count * sizeof (*kv_array));
+		fill_up_zap_entries(kv_array, zap_count);
+
+		/* update key/value pair in ZAP entries */
+		VERIFY0(uzfs_update_zap_entry(zvol,
+		    (const uzfs_zap_kv_t **) kv_array, zap_count));
+
+		verify_zap_entries(zvol, kv_array, zap_count);
+
+		/* update value against existing ZAP key entries */
+		update_zap_entries(kv_array, zap_count);
+
+		VERIFY0(uzfs_update_zap_entry(zvol,
+		    (const uzfs_zap_kv_t **) kv_array, zap_count));
+
+		verify_zap_entries(zvol, kv_array, zap_count);
+
+		destroy_zap_entries(kv_array, zap_count);
+		free(kv_array);
+		kv_array = NULL;
+
+		printf("%s pass:%d\n", test_info->name, i);
+
+		now = gethrtime();
+		if (now > end)
+			break;
+	}
+
+	uzfs_close_dataset(zvol);
+	uzfs_close_pool(spa);
+}
