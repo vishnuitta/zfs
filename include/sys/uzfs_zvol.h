@@ -24,6 +24,7 @@
 
 #include <sys/zvol.h>
 #include <sys/zfs_rlock.h>
+#include <sys/zil.h>
 
 #if !defined(_KERNEL)
 

@@ -20,7 +20,6 @@
  */
 
 #include <sys/dmu_objset.h>
-#include <sys/zap.h>
 #include <sys/uzfs_zvol.h>
 
 

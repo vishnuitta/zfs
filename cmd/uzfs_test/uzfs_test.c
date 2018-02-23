@@ -27,14 +27,23 @@
 int total_time_in_sec = 60;
 int log_device = 0;
 int sync_data = 0;
+int test_iterations = 1;
 uint64_t io_block_size = 1024;
 uint64_t block_size = 4096;
 uint64_t active_size = 0;
 uint64_t vol_size = 0;
+int run_test = 0;
+uint32_t uzfs_test_id = 0;
+
+uzfs_test_info_t uzfs_tests[] = {
+	{ uzfs_zvol_zap_operation, "uzfs zap operation test" },
+	{ replay_fn, "zvol replay test" },
+	{ unit_test_fn, "zvol read/write verification test"},
+};
+
 uint64_t metaverify = 0;
 int verify = 0;
 int write_op = 0;
-int replay = 0;
 int silent = 0;
 int verify_err = 0;
 
@@ -318,11 +327,21 @@ unit_test_create_pool_ds(void)
 
 static void usage(int num)
 {
+	int i = 0;
+	int count = sizeof (uzfs_tests) / sizeof (uzfs_tests[0]);
+
 	printf("uzfs_test -t <total_time_in_sec> -a <active data size>"
 	    " -b <block_size> -i <io size> -v <vol size> -l(for log device)"
-	    " -m <metadata to verify during replay> -r(for testing replay)"
+	    " -m <metadata to verify during replay>"
 	    " -s(for sync on) -S(for silent) -V <data to verify during replay>"
-	    " -w(for write during replay)\n");
+	    " -w(for write during replay) -T <test id>\n");
+
+	printf("Test id:\n");
+
+	for (i = 0; i < count; i++) {
+		printf("\tid: %d (test : %s)\n", i, uzfs_tests[i].name);
+	}
+
 	if (num == 0)
 		exit(1);
 }
@@ -386,7 +405,9 @@ static void process_options(int argc, char **argv)
 {
 	int opt;
 	uint64_t val = 0;
-	while ((opt = getopt(argc, argv, "a:b:i:lm:rsSt:v:V:w")) != EOF) {
+	uint64_t num_tests = sizeof (uzfs_tests) / sizeof (uzfs_tests[0]);
+
+	while ((opt = getopt(argc, argv, "a:b:i:lm:sSt:v:V:wT:n:")) != EOF) {
 		if (optarg != NULL)
 			val = nicenumtoull(optarg);
 		switch (opt) {
@@ -412,9 +433,6 @@ static void process_options(int argc, char **argv)
 					val = nicenumtoull(optarg);
 				metaverify = val;
 				break;
-			case 'r':
-				replay = 1;
-				break;
 			case 's':
 				sync_data = 1;
 				break;
@@ -439,6 +457,15 @@ static void process_options(int argc, char **argv)
 				break;
 			case 'w':
 				write_op = 1;
+				break;
+			case 'T':
+				run_test = 1;
+				if (val >= num_tests)
+					usage(0);
+				uzfs_test_id = val;
+				break;
+			case 'n':
+				test_iterations = val;
 				break;
 			default:
 				usage(0);
@@ -476,7 +503,7 @@ open_pool_ds(void **spa, void **zv)
 }
 
 void
-unit_test_fn(void)
+unit_test_fn(void *arg)
 {
 	void *spa, *zv;
 	kthread_t *reader1;
@@ -548,13 +575,15 @@ main(int argc, char **argv)
 		printf("initialization errored.. %d\n", err);
 		exit(1);
 	}
+
 	if (silent == 0)
 		printf("zarcmax: %lu zarcmin:%lu\n", zfs_arc_max, zfs_arc_min);
 
-	if (replay == 1)
-		err = replay_fn();
-	else
-		unit_test_fn();
+	if (!run_test)
+		usage(0);
+
+	uzfs_tests[uzfs_test_id].func(&uzfs_tests[uzfs_test_id]);
+
 	uzfs_fini();
-	return (err);
+	return (0);
 }

@@ -136,8 +136,8 @@ done:
 		exit(1);
 }
 
-int
-replay_fn(void)
+void
+replay_fn(void *arg)
 {
 	void *spa, *zv;
 
@@ -162,5 +162,7 @@ replay_fn(void)
 			printf("verify error: %d\n", verify_err);
 	uzfs_close_dataset(zv);
 	uzfs_close_pool(spa);
-	return (verify_err);
+
+	if (verify_err)
+		exit(verify_err);
 }
