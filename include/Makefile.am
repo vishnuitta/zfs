@@ -19,7 +19,6 @@ USER_H = \
 	$(top_srcdir)/include/libuutil_impl.h \
 	$(top_srcdir)/include/libzfs.h \
 	$(top_srcdir)/include/libuzfs.h \
-	$(top_srcdir)/include/gtest_helper.h \
 	$(top_srcdir)/include/libzfs_core.h \
 	$(top_srcdir)/include/libzfs_impl.h \
 	$(top_srcdir)/include/uzfs_io.h \
