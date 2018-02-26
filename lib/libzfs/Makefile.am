@@ -27,8 +27,7 @@ USER_C = \
 	libzfs_status.c \
 	libzfs_util.c \
 	libuzfs_handle.c \
-	libuzfs_server.c \
-	libuzfs_gtest.c
+	libuzfs_server.c
 
 KERNEL_C = \
 	zfs_ioctl.c \

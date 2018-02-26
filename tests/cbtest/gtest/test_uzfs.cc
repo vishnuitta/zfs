@@ -1,18 +1,20 @@
+
 #include <gtest/gtest.h>
-#include <gtest_helper.h>
+#include <libuzfs.h>
 
 TEST(uZFSServer, Setup) {
-	EXPECT_EQ(true, gtest_kernel_init());
+	kernel_init(FREAD);
+	EXPECT_GT(kthread_nr, 0);
 }
 
 TEST(uZFSServer, ClientConnectNoServer) {
-	EXPECT_EQ(false, gtest_libuzfs_client_init());
+	EXPECT_NE(0, libuzfs_client_init(NULL));
 }
 
 TEST(uZFSServer, InitServer) {
-	EXPECT_EQ(true, gtest_libuzfs_ioctl_init());
+	EXPECT_EQ(0, libuzfs_ioctl_init());
 }
 
 TEST(uZFSServer, ClientConnectServer) {
-	EXPECT_EQ(true, gtest_libuzfs_client_init());
+	EXPECT_EQ(0, libuzfs_client_init(NULL));
 }
