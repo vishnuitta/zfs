@@ -23,8 +23,18 @@
 #include <sys/zap.h>
 #include <sys/uzfs_zvol.h>
 #include <sys/stat.h>
+#include <uzfs.h>
 
 static int uzfs_fd_rand = -1;
+
+/*
+ * Pool tasks that need to be done during pool open and close
+ */
+uzfs_pool_task_funcs_t uzfs_pool_tasks[UZFS_POOL_MAX_TASKS] = {
+	{ post_open_pool, post_close_pool },
+	{ create_txg_update_thread, close_txg_update_thread },
+	{ dummy_pool_task, pre_close_pool }
+};
 
 static nvlist_t *
 make_root(char *path, int ashift, int log)
@@ -102,15 +112,50 @@ uzfs_init(void)
 	return (err);
 }
 
-/* Opens the pool if any with 'name' */
+/*
+ * closes uzfs pool
+ */
+void
+uzfs_close_pool(spa_t *spa)
+{
+	int i;
+	for (i = (UZFS_POOL_MAX_TASKS - 1); i >= 0; i--) {
+		if (uzfs_spa(spa)->tasks_initialized[i] == B_TRUE) {
+			uzfs_spa(spa)->tasks_initialized[i] = B_FALSE;
+			uzfs_pool_tasks[i].close_func(spa);
+		}
+	}
+	spa_close(spa, "UZFS_SPA_TAG");
+}
+
+/*
+ * Opens the pool if any with 'name'
+ */
 int
 uzfs_open_pool(char *name, spa_t **s)
 {
 	spa_t *spa = NULL;
-	int err = spa_open(name, &spa, "SPA");
+	int i;
+	int err = spa_open(name, &spa, "UZFS_SPA_TAG");
 	if (err != 0) {
 		spa = NULL;
 		goto ret;
+	}
+
+	if (spa->spa_us != NULL) {
+		spa_close(spa, "UZFS_SPA_TAG");
+		spa = NULL;
+		err = EEXIST;
+		goto ret;
+	}
+	for (i = 0; i < UZFS_POOL_MAX_TASKS; i++) {
+		err = uzfs_pool_tasks[i].open_func(spa);
+		if (err != 0) {
+			uzfs_close_pool(spa);
+			spa = NULL;
+			goto ret;
+		}
+		uzfs_spa(spa)->tasks_initialized[i] = B_TRUE;
 	}
 ret:
 	*s = spa;
@@ -346,7 +391,7 @@ uzfs_synced_txg(zvol_state_t *zv)
 	return (spa_last_synced_txg(zv->zv_spa));
 }
 
-/* disowns, closes dataset and pool */
+/* disowns, closes dataset */
 void
 uzfs_close_dataset(zvol_state_t *zv)
 {
@@ -356,12 +401,6 @@ uzfs_close_dataset(zvol_state_t *zv)
 	zfs_rlock_destroy(&zv->zv_range_lock);
 	zfs_rlock_destroy(&zv->zv_mrange_lock);
 	kmem_free(zv, sizeof (zvol_state_t));
-}
-
-void
-uzfs_close_pool(spa_t *spa)
-{
-	spa_close(spa, "SPA");
 }
 
 void

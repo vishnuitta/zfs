@@ -79,7 +79,8 @@ verify_zap_entries(void *zvol, uzfs_zap_kv_t **key_array, uint64_t count)
 {
 	uzfs_zap_kv_t *kv;
 	char *value, *temp_value;
-	int i = 0;
+	int i = 0, err;
+	uzfs_zap_kv_t dummy_key;
 
 	for (i = 0; i < count; i++) {
 		kv = key_array[i];
@@ -89,6 +90,17 @@ verify_zap_entries(void *zvol, uzfs_zap_kv_t **key_array, uint64_t count)
 		VERIFY0(strncmp(kv->value, temp_value, kv->size));
 		free(temp_value);
 		value = NULL;
+	}
+
+	dummy_key.key = malloc(20);
+	dummy_key.value = malloc(20);
+	dummy_key.size = 20;
+
+	dummy_key.key = "DUMMY";
+	err = uzfs_read_zap_entry(zvol, &dummy_key);
+	if (err == 0) {
+		printf("read zap should fail..\n");
+		exit(1);
 	}
 }
 
@@ -101,13 +113,14 @@ uzfs_zvol_zap_operation(void *arg)
 	void *spa, *zvol;
 	uzfs_zap_kv_t **kv_array;
 	int zap_count;
+	uint64_t txg1, txg2, txg3, txg4;
+	struct timespec ts;
+	int err1, err2;
+	txg_update_interval_time = hz;
 
 	setup_unit_test();
 	unit_test_create_pool_ds();
 	open_pool_ds(&spa, &zvol);
-
-	now = gethrtime();
-	end = now + (hrtime_t)(total_time_in_sec * (hrtime_t)(NANOSEC));
 
 	while (i++ < test_iterations) {
 		zap_count = uzfs_random(16) + 1;
@@ -116,7 +129,7 @@ uzfs_zvol_zap_operation(void *arg)
 		fill_up_zap_entries(kv_array, zap_count);
 
 		/* update key/value pair in ZAP entries */
-		VERIFY0(uzfs_update_zap_entry(zvol,
+		VERIFY0(uzfs_update_zap_entries(zvol,
 		    (const uzfs_zap_kv_t **) kv_array, zap_count));
 
 		verify_zap_entries(zvol, kv_array, zap_count);
@@ -124,7 +137,7 @@ uzfs_zvol_zap_operation(void *arg)
 		/* update value against existing ZAP key entries */
 		update_zap_entries(kv_array, zap_count);
 
-		VERIFY0(uzfs_update_zap_entry(zvol,
+		VERIFY0(uzfs_update_zap_entries(zvol,
 		    (const uzfs_zap_kv_t **) kv_array, zap_count));
 
 		verify_zap_entries(zvol, kv_array, zap_count);
@@ -134,6 +147,39 @@ uzfs_zvol_zap_operation(void *arg)
 		kv_array = NULL;
 
 		printf("%s pass:%d\n", test_info->name, i);
+	}
+
+	now = gethrtime();
+	end = now + (hrtime_t)(total_time_in_sec * (hrtime_t)(NANOSEC));
+
+	zfs_txg_timeout = 1;
+	ts.tv_sec = 3;
+	ts.tv_nsec = 0;
+
+	while (1) {
+		err1 = uzfs_read_last_iter_txg(spa, &txg1);
+		if ((err1 != 0) && (err1 != 2)) {
+			printf("error in reading last iter txg..\n");
+			exit(1);
+		}
+
+		txg2 = spa_last_synced_txg(spa);
+
+		nanosleep(&ts, NULL);
+
+		err2 = uzfs_read_last_iter_txg(spa, &txg3);
+		if ((err2 != 0) && (err2 != 2)) {
+			printf("error in reading last iter txg..\n");
+			exit(1);
+		}
+
+		txg4 = spa_last_synced_txg(spa);
+
+		if (txg2 != txg4)
+			if ((txg1 == txg3) && ((err1 == 0) || (err2 == 0))) {
+				printf("doesn't seem to be updating txg..\n");
+				exit(1);
+			}
 
 		now = gethrtime();
 		if (now > end)

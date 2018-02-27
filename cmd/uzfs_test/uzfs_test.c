@@ -274,17 +274,11 @@ unit_test_create_pool_ds(void)
 	err2 = uzfs_create_pool("testp1", "/tmp/uztest.xyz", &spa2);
 	err3 = uzfs_open_pool("testp", &spa3);
 	err4 = uzfs_open_pool("testp1", &spa4);
-	if (spa1 != NULL || spa2 != NULL || spa4 != NULL ||
-	    err1 == 0 || err2 == 0 || err4 == 0) {
+	if (spa1 != NULL || spa2 != NULL || spa3 != NULL || spa4 != NULL ||
+	    err1 == 0 || err2 == 0 || err3 == 0 || err4 == 0) {
 		printf("shouldn't create/open, but succeeded..\n");
 		exit(1);
 	}
-
-	if (err3 != 0 || spa3 == NULL) {
-		printf("opening pool errored %d..\n", err3);
-		exit(1);
-	}
-	uzfs_close_pool(spa3);
 
 	err = uzfs_create_dataset(spa, "ds0", vol_size, block_size, 0, &zv);
 	if (zv == NULL || err != 0) {

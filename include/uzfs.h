@@ -19,26 +19,32 @@
  * CDDL HEADER END
  */
 
-#ifndef	_UZFS_ZAP_H
-#define	_UZFS_ZAP_H
+#include <uzfs_task.h>
+#include <sys/spa_impl.h>
 
-typedef struct {
-	char *key; 	/* zap key to update */
-	char *value;	/* value to update against zap key */
-	size_t size;	/* size of value */
-} uzfs_zap_kv_t;
+#ifndef	_UZFS_H
 
-#define	LAST_ITER_TXG	"last_iter_txg"
+#define	_UZFS_H
 
-extern long long txg_update_interval_time;
+typedef int (*const uzfs_pool_task_func_t)(void *spa);
 
-/*
- * Here, allocation/freeing of kv_array needs to be handled by caller function.
- */
-int uzfs_update_zap_entries(void *zv, const uzfs_zap_kv_t **kv_array,
-    uint64_t n);
-int uzfs_read_zap_entry(void *zv, uzfs_zap_kv_t *entry);
-int uzfs_read_last_iter_txg(void *spa, uint64_t *val);
-void uzfs_update_txg_zap_thread(void *s);
+typedef struct uzfs_pool_task_funcs {
+	uzfs_pool_task_func_t open_func;
+	uzfs_pool_task_func_t close_func;
+} uzfs_pool_task_funcs_t;
+
+#define	UZFS_POOL_MAX_TASKS	3
+
+typedef struct uzfs_spa {
+	boolean_t	tasks_initialized[UZFS_POOL_MAX_TASKS];
+	boolean_t	close_pool;
+	kmutex_t	mtx;
+	kcondvar_t	cv;
+	kthread_t	*update_txg_tid;
+} uzfs_spa_t;
+
+extern uzfs_pool_task_funcs_t uzfs_pool_tasks[UZFS_POOL_MAX_TASKS];
+
+#define	uzfs_spa(s)	((uzfs_spa_t *)(s->spa_us))
 
 #endif

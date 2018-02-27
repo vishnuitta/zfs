@@ -19,6 +19,7 @@ USER_C = \
 	taskq.c \
 	util.c \
 	uzfs_io.c \
+	uzfs_task.c \
 	uzfs_mgmt.c \
 	uzfs_zap.c \
 	vdev_disk_aio.c
