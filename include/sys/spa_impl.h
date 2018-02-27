@@ -288,6 +288,10 @@ struct spa {
 	refcount_t	spa_refcount;		/* number of opens */
 
 	taskq_t		*spa_upgrade_taskq;	/* taskq for upgrade jobs */
+
+#if !defined(_KERNEL)
+	void		*spa_us;		/* uzfs_pool structure */
+#endif
 };
 
 extern char *spa_config_path;
