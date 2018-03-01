@@ -24,6 +24,7 @@
 #include <sys/uzfs_zvol.h>
 #include <sys/stat.h>
 #include <uzfs.h>
+#include <zrepl_mgmt.h>
 
 static int uzfs_fd_rand = -1;
 
@@ -383,6 +384,101 @@ uzfs_create_dataset(spa_t *spa, char *ds_name, uint64_t vol_size,
 ret:
 	*z = zv;
 	return (error);
+}
+
+/* uZFS Zvol create call back function */
+int
+uzfs_zvol_create_cb(const char *ds_name, void *arg)
+{
+
+	zvol_state_t	*zv = NULL;
+	objset_t 	*os;
+	spa_t		*spa;
+	dmu_object_info_t doi;
+	int 		error = -1;
+	uint64_t 	vol_size;
+	uint64_t 	block_size;
+
+	printf("ds_name %s\n", ds_name);
+	zv = kmem_zalloc(sizeof (zvol_state_t), KM_SLEEP);
+	if (zv == NULL) {
+		return (-1);
+	}
+
+	error = spa_open(ds_name, &spa, zv);
+	if (error != 0) {
+		(void) spa_destroy((char *)ds_name);
+		spa = NULL;
+		goto free_zv;
+	}
+
+	error = dmu_objset_own(ds_name, DMU_OST_ZVOL, FALSE, zv, &os);
+	if (error) {
+		printf("Returning from here for ds_name: %s\n", ds_name);
+		goto close_spa;
+	}
+
+	error = dmu_object_info(os, ZVOL_OBJ, &doi);
+	if (error) {
+		goto close_spa;
+	}
+
+	block_size = doi.doi_data_block_size;
+	error = zap_lookup(os, ZVOL_ZAP_OBJ, "size", 8, 1, &vol_size);
+	if (error) {
+		goto close_spa;
+	}
+
+	strlcpy(zv->zv_name, ds_name, MAXNAMELEN);
+	zv->zv_objset = os;
+	zv->zv_zilog = zil_open(os, zvol_get_data);
+	zfs_rlock_init(&zv->zv_range_lock);
+	zv->zv_spa = spa;
+	zv->zv_volblocksize = block_size;
+	zv->zv_volsize = vol_size;
+	zv->zv_sync = 1;
+
+	error = dnode_hold(os, ZVOL_OBJ, zv, &zv->zv_dn);
+	if (error) {
+		goto free_zil;
+	}
+
+	if (spa_writeable(dmu_objset_spa(os))) {
+//		if (zil_replay_disable)
+//			zil_destroy(dmu_objset_zil(os), B_FALSE);
+//		else
+			zil_replay(os, zv, zvol_replay_vector);
+	}
+
+	if (uzfs_zinfo_init(zv, ds_name) != 0) {
+		printf("Failed in uzfs_zinfo_init\n");
+		goto exit;
+	}
+	return (0);
+
+exit:
+	dnode_rele(zv->zv_dn, zv);
+free_zil:
+	zil_close(zv->zv_zilog);
+	zfs_rlock_destroy(&zv->zv_range_lock);
+	dmu_objset_disown(zv->zv_objset, zv);
+
+close_spa:
+	spa_close(spa, zv);
+free_zv:
+	kmem_free(zv, sizeof (zvol_state_t));
+	return (-1);
+}
+
+/* uZFS Zvol destroy call back function */
+int
+uzfs_zvol_destroy_cb(const char *ds_name, void *arg)
+{
+
+	printf("deleting ds_name %s\n", ds_name);
+
+	uzfs_zinfo_destrtoy(ds_name);
+	return (0);
 }
 
 uint64_t
