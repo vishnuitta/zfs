@@ -3506,7 +3506,7 @@ spa_open_common(const char *pool, spa_t **spapp, void *tag, nvlist_t *nvpolicy,
 	}
 
 	if (firstopen) {
-#ifndef _UZFS
+#ifdef _KERNEL
 		zvol_create_minors(spa, spa_name(spa), B_TRUE);
 #else
 		dmu_objset_find(spa_name(spa), uzfs_zvol_create_cb, NULL,

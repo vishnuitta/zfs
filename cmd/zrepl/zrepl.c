@@ -1,6 +1,6 @@
 
-#include </usr/include/arpa/inet.h>
-#include </usr/include/netdb.h>
+#include <arpa/inet.h>
+#include <netdb.h>
 
 #include <syslog.h>
 #include <libuzfs.h>
@@ -323,6 +323,15 @@ uzfs_zvol_io_receiver(void *arg)
 		    (hdr.opcode == ZVOL_OPCODE_READ) ||
 		    (hdr.opcode == ZVOL_OPCODE_HANDSHAKE) ||
 		    (hdr.opcode == ZVOL_OPCODE_SYNC));
+		if ((hdr.opcode != ZVOL_OPCODE_HANDSHAKE) &&
+		    (zinfo == NULL)) {
+			/*
+			 * TODO: Stats need to be maintained for any
+			 * such IO which came before handshake ?
+			 */
+			ZREPL_ERRLOG("Handshake yet to happen\n");
+			continue;
+		}
 
 		zio_cmd = zio_cmd_alloc(&hdr, fd);
 		if ((hdr.opcode == ZVOL_OPCODE_WRITE) ||
@@ -347,6 +356,12 @@ uzfs_zvol_io_receiver(void *arg)
 			}
 
 			ASSERT(!zinfo->is_io_ack_sender_created);
+			if (zinfo->is_io_ack_sender_created) {
+				ZREPL_ERRLOG("Multiple handshake on IO port "
+				    "for volume%s\n", zinfo->name);
+				uzfs_zinfo_drop_refcnt(zinfo, false);
+				continue;
+			}
 
 			(void) pthread_mutex_lock(&zinfo->zinfo_mutex);
 			if (!zinfo->is_io_ack_sender_created) {
@@ -426,7 +441,7 @@ uzfs_zvol_mgmt_do_handshake(zvol_io_hdr_t *hdr, int sfd, char *name)
 	}
 
 	strncpy(mgmt_ack.volname, name, strlen(name));
-	mgmt_ack.port = 3232;
+	mgmt_ack.port = atoi(accpt_port);
 	rc = uzfs_zvol_get_ip(mgmt_ack.ip);
 	printf("IP address: %s\n", mgmt_ack.ip);
 	if (rc == -1) {
@@ -472,7 +487,7 @@ get_controller_ip_address(void)
 	buf = kmem_alloc(1024, KM_SLEEP);
 	nbytes = fread(buf, sizeof (char), 1024, fp);
 
-	if (nbytes == 0) {
+	if (nbytes <= 0) {
 		printf("Read error\n");
 		return (buf);
 	}
@@ -480,6 +495,115 @@ get_controller_ip_address(void)
 	return (buf);
 }
 
+/*
+ * One thread per replica, which will be
+ * responsible for initial handshake and
+ * exchanging info like IP add, port etc.
+ */
+static void
+uzfs_zvol_mgmt_thread(void *arg)
+{
+
+	int sfd, rc, count;
+	struct sockaddr_in istgt_addr;
+	zvol_io_hdr_t hdr = {0, };
+	char *name = NULL;
+	char *buf = NULL;
+
+
+	sfd = create_and_bind(mgmt_port);
+	if (sfd == -1) {
+		goto exit;
+	}
+
+	buf = get_controller_ip_address();
+	if (buf == NULL) {
+		printf("parsing IP address did not work\n");
+		goto exit;
+	}
+
+	printf("Controller IP address is: %s", buf);
+	bzero((char *)&istgt_addr, sizeof (istgt_addr));
+	istgt_addr.sin_family = AF_INET;
+	istgt_addr.sin_addr.s_addr = inet_addr(buf);
+	istgt_addr.sin_port = htons(6060);
+	free(buf);
+retry:
+	rc = connect(sfd, (struct sockaddr *)&istgt_addr, sizeof (istgt_addr));
+	if ((rc == -1) && ((errno == EINTR) || (errno == ECONNREFUSED) ||
+	    (errno == ETIMEDOUT) || (errno == EINPROGRESS))) {
+		ZREPL_ERRLOG("Failed to connect to istgt_controller"
+		    " with err:%d\n", errno);
+		sleep(2);
+		printf("Retrying ....\n");
+		goto retry;
+	} else {
+		printf("Connection to TGT controller successful\n");
+		ZREPL_LOG("Connection to TGT controller iss successful\n");
+	}
+
+	while (1) {
+		bzero(&hdr, sizeof (hdr));
+		count = read(sfd, (char *)&hdr, sizeof (hdr));
+		if (count <= 0) {
+			ZREPL_ERRLOG("Replica-iSCSI Tgt connection got "
+			    "disconnected with err:%d\n", errno);
+			/*
+			 * Error has occurred on this socket
+			 * close it and open a new socket after
+			 * 5 sec of sleep.
+			 */
+			close(sfd);
+			printf("Retrying ....\n");
+			sleep(5);
+			sfd = create_and_bind(mgmt_port);
+			if (sfd == -1) {
+				goto exit;
+			}
+
+retry1:
+			rc = connect(sfd, (struct sockaddr *)&istgt_addr,
+			    sizeof (istgt_addr));
+			if ((rc == -1) && ((errno == EINTR) ||
+			    (errno == ECONNREFUSED) || (errno == ETIMEDOUT))) {
+				ZREPL_ERRLOG("Failed to connect to"
+				    " istgt_controller with err:%d\n",
+				    errno);
+				sleep(2);
+				goto retry1;
+			} else {
+				printf("Connection to TGT controller "
+				    "successful\n");
+				ZREPL_LOG("Connection to TGT controller"
+				    "is successful\n");
+			}
+			continue;
+		}
+
+		if (hdr.opcode == ZVOL_OPCODE_HANDSHAKE) {
+			name = kmem_alloc(
+			    hdr.len * sizeof (char), KM_SLEEP);
+			count = read(sfd, name, sizeof (char) * hdr.len);
+			if (count == -1) {
+				ZREPL_ERRLOG("Read from socket failed"
+				    " with err:%d\n", errno);
+				goto exit;
+			}
+
+			rc = uzfs_zvol_mgmt_do_handshake(&hdr, sfd, name);
+			free(name);
+			if (rc == -1) {
+				ZREPL_ERRLOG("handshake failed with"
+				    " errno:%d\n", errno);
+				goto exit;
+			}
+		}
+	}
+exit:
+	printf("uzfs_zvol_mgmt_thread thread exiting\n");
+	zk_thread_exit();
+}
+#if 0
 /*
  * One thread per replica, which will be
  * responsible for initial handshake and
@@ -637,7 +761,7 @@ exit:
 	printf("uzfs_zvol_mgmt_thread thread exiting\n");
 	zk_thread_exit();
 }
-
+#endif
 /*
  * One thread per replica. Responsible for accepting
  * IO connections. This thread will accept a connection
@@ -727,15 +851,18 @@ uzfs_zvol_io_conn_acceptor(void)
 			 * socket, which means one or more incoming
 			 * connections.
 			 */
+#if 0
 			while (1) {
+#endif
 				in_len = sizeof (in_addr);
 				new_fd = accept(events[i].data.fd,
 				    &in_addr, &in_len);
+#if 0
 				if ((errno == EAGAIN) ||
 				    (errno == EWOULDBLOCK)) {
 					break;
 				}
-
+#endif
 				if (new_fd == -1) {
 					ZREPL_ERRLOG("accept err() :%d\n",
 					    errno);
@@ -754,6 +881,10 @@ uzfs_zvol_io_conn_acceptor(void)
 					    "descriptor %d "
 					    "(host=%s, port=%s)\n",
 					    new_fd, hbuf, sbuf);
+					printf("Accepted IO conn on "
+					    "descriptor %d "
+					    "(host=%s, port=%s)\n",
+					    new_fd, hbuf, sbuf);
 				}
 
 				free(hbuf);
@@ -767,7 +898,9 @@ uzfs_zvol_io_conn_acceptor(void)
 				    (void *)thread_fd, 0, NULL, TS_RUN, 0,
 				    PTHREAD_CREATE_DETACHED);
 				VERIFY3P(thrd_info, !=, NULL);
+#if 0
 			}
+#endif
 		}
 	}
 exit:
@@ -784,6 +917,7 @@ exit:
 	}
 
 	printf("uzfs_zvol_io_conn_acceptor thread exiting\n");
+	ZREPL_ERRLOG("uzfs_zvol_io_conn_acceptor thread exiting\n");
 	zk_thread_exit();
 }
 
@@ -926,6 +1060,10 @@ main(void)
 	snprintf(tinfo, sizeof (tinfo), "m#%d.%d",
 	    (int)(((uint64_t *)slf)[0]), getpid());
 
+	/*
+	 * TODO: Need to come up with optimal
+	 * value for these two variables.
+	 */
 	zfs_arc_max = (512 << 20);
 	zfs_arc_min = (256 << 20);
 	printf("zarcmax: %lu zarcmin:%lu\n", zfs_arc_max, zfs_arc_min);
@@ -972,5 +1110,5 @@ main(void)
 initialize_error:
 	uzfs_zrepl_close_log();
 	uzfs_fini();
-	return (0);
+	return (-1);
 }
