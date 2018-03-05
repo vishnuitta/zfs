@@ -161,9 +161,10 @@ zio_cmd_alloc(zvol_io_hdr_t *hdr, int fd)
  * Free zio command along with buffer.
  */
 static void
-zio_cmd_free(zvol_io_cmd_t **cmd, zvol_op_code_t opcode)
+zio_cmd_free(zvol_io_cmd_t **cmd)
 {
 	zvol_io_cmd_t *zio_cmd = *cmd;
+	zvol_op_code_t opcode = zio_cmd->hdr.opcode;
 	switch (opcode) {
 		case ZVOL_OPCODE_READ:
 		case ZVOL_OPCODE_WRITE:
@@ -339,7 +340,7 @@ uzfs_zvol_io_receiver(void *arg)
 			count = uzfs_zvol_socket_read(fd, zio_cmd->buf,
 			    (sizeof (char) * hdr.len));
 			if (count <= 0) {
-				zio_cmd_free(&zio_cmd, hdr.opcode);
+				zio_cmd_free(&zio_cmd);
 				ZREPL_ERRLOG("Socket read failed with "
 				    "error: %d\n", errno);
 				goto exit;
@@ -349,8 +350,10 @@ uzfs_zvol_io_receiver(void *arg)
 		ZREPL_LOG("Count:%d Size: %ld\n", count, hdr.len);
 		if (hdr.opcode == ZVOL_OPCODE_HANDSHAKE) {
 			zinfo = uzfs_zinfo_lookup(zio_cmd->buf);
-			zio_cmd_free(&zio_cmd, hdr.opcode);
+			zio_cmd_free(&zio_cmd);
 			if (zinfo == NULL) {
+				ZREPL_ERRLOG("Volume/LUN: %s not found",
+				    zinfo->name);
 				printf("Error in getting zinfo\n");
 				goto exit;
 			}
@@ -358,7 +361,7 @@ uzfs_zvol_io_receiver(void *arg)
 			ASSERT(!zinfo->is_io_ack_sender_created);
 			if (zinfo->is_io_ack_sender_created) {
 				ZREPL_ERRLOG("Multiple handshake on IO port "
-				    "for volume%s\n", zinfo->name);
+				    "for volume: %s\n", zinfo->name);
 				uzfs_zinfo_drop_refcnt(zinfo, false);
 				continue;
 			}
@@ -969,7 +972,7 @@ uzfs_zvol_io_ack_sender(void *arg)
 		    (char *)&zio_cmd->hdr, sizeof (zio_cmd->hdr));
 		if (rc == -1) {
 			ZREPL_ERRLOG("socket write err :%d\n", errno);
-			zio_cmd_free(&zio_cmd, zio_cmd->hdr.opcode);
+			zio_cmd_free(&zio_cmd);
 			goto exit;
 		}
 
@@ -1000,14 +1003,14 @@ uzfs_zvol_io_ack_sender(void *arg)
 				VERIFY(!"Should be a valid opcode");
 				break;
 		}
-		zio_cmd_free(&zio_cmd, zio_cmd->hdr.opcode);
+		zio_cmd_free(&zio_cmd);
 	}
 exit:
 	close(fd);
 	while (!STAILQ_EMPTY(&zinfo->complete_queue)) {
 		zio_cmd = STAILQ_FIRST(&zinfo->complete_queue);
 		STAILQ_REMOVE_HEAD(&zinfo->complete_queue, cmd_link);
-		zio_cmd_free(&zio_cmd, zio_cmd->hdr.opcode);
+		zio_cmd_free(&zio_cmd);
 	}
 	uzfs_zinfo_drop_refcnt(zinfo, false);
 
