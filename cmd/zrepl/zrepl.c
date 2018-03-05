@@ -1063,14 +1063,6 @@ main(void)
 	snprintf(tinfo, sizeof (tinfo), "m#%d.%d",
 	    (int)(((uint64_t *)slf)[0]), getpid());
 
-	/*
-	 * TODO: Need to come up with optimal
-	 * value for these two variables.
-	 */
-	zfs_arc_max = (512 << 20);
-	zfs_arc_min = (256 << 20);
-	printf("zarcmax: %lu zarcmin:%lu\n", zfs_arc_max, zfs_arc_min);
-
 	rc = uzfs_init();
 	uzfs_zrepl_open_log();
 	if (rc != 0) {
@@ -1087,6 +1079,8 @@ main(void)
 	uzfs_zrepl_walk_pool_directory();
 	sleep(5);
 
+	/* Ignore SIGPIPE signal */
+	signal(SIGPIPE, SIG_IGN);
 	if (libuzfs_ioctl_init() < 0) {
 		ZREPL_ERRLOG("Failed to initialize libuzfs ioctl\n");
 		(void) fprintf(stderr, "%s",
