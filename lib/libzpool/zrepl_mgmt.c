@@ -179,8 +179,8 @@ uzfs_zinfo_init(void *zv, const char *ds_name)
 	bzero(zinfo, sizeof (zvol_info_t));
 	ASSERT(zinfo != NULL);
 
-	zinfo->uzfs_zvol_taskq = taskq_create("replica", boot_ncpus, defclsyspri,
-	    boot_ncpus, INT_MAX,
+	zinfo->uzfs_zvol_taskq = taskq_create("replica", boot_ncpus,
+	    defclsyspri, boot_ncpus, INT_MAX,
 	    TASKQ_PREPOPULATE | TASKQ_DYNAMIC);
 
 	STAILQ_INIT(&zinfo->complete_queue);

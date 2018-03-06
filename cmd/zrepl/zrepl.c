@@ -47,7 +47,7 @@ create_and_bind(const char *port, int bind_needed)
 		sfd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
 		if (sfd == -1) {
 			continue;
-		} else if(bind_needed == 0) {
+		} else if (bind_needed == 0) {
 			break;
 		}
 

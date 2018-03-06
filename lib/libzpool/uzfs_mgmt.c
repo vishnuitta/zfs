@@ -479,12 +479,6 @@ uzfs_zvol_destroy_cb(const char *ds_name, void *arg)
 	return (0);
 }
 
-uint64_t
-uzfs_synced_txg(zvol_state_t *zv)
-{
-	return (spa_last_synced_txg(zv->zv_spa));
-}
-
 /* disowns, closes dataset */
 void
 uzfs_close_dataset(zvol_state_t *zv)
