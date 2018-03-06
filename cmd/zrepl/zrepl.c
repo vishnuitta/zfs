@@ -431,8 +431,7 @@ uzfs_zvol_mgmt_do_handshake(zvol_io_hdr_t *hdr, int sfd, char *name)
 {
 	int 		count, rc = 0;
 	zvol_info_t 	*zinfo;
-	mgmt_ack_t 	mgmt_ack = {0, };
-
+	mgmt_ack_t 	mgmt_ack;
 	char 		*packet = NULL;
 	char 		*p = NULL;
 
@@ -445,6 +444,7 @@ uzfs_zvol_mgmt_do_handshake(zvol_io_hdr_t *hdr, int sfd, char *name)
 		hdr->status = ZVOL_OP_STATUS_FAILED;
 	}
 
+	bzero(&mgmt_ack, sizeof (mgmt_ack));
 	strncpy(mgmt_ack.volname, name, strlen(name));
 	mgmt_ack.port = atoi(accpt_port);
 	rc = uzfs_zvol_get_ip(mgmt_ack.ip);
