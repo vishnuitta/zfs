@@ -435,7 +435,6 @@ uzfs_zvol_create_cb(const char *ds_name, void *arg)
 	zv->zv_spa = spa;
 	zv->zv_volblocksize = block_size;
 	zv->zv_volsize = vol_size;
-	zv->zv_sync = 1;
 
 	error = dnode_hold(os, ZVOL_OBJ, zv, &zv->zv_dn);
 	if (error) {
