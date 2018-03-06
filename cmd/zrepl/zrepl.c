@@ -27,7 +27,7 @@ __thread char  tinfo[20] =  {0};
 static void uzfs_zvol_io_ack_sender(void *arg);
 
 static int
-create_and_bind(const char *port)
+create_and_bind(const char *port, int bind_needed)
 {
 	int s, sfd;
 	struct addrinfo hints = {0, };
@@ -47,6 +47,8 @@ create_and_bind(const char *port)
 		sfd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
 		if (sfd == -1) {
 			continue;
+		} else if(bind_needed == 0) {
+			break;
 		}
 
 		s = bind(sfd, rp->ai_addr, rp->ai_addrlen);
@@ -463,9 +465,11 @@ uzfs_zvol_mgmt_do_handshake(zvol_io_hdr_t *hdr, int sfd, char *name)
 		ZREPL_ERRLOG("Write to socket failed"
 		    " with err:%d\n", errno);
 		rc = -1;
-		goto exit;
 	}
 exit:
+	if (packet != NULL) {
+		free(packet);
+	}
 	uzfs_zinfo_drop_refcnt(zinfo, false);
 	return (rc);
 }
@@ -514,7 +518,7 @@ uzfs_zvol_mgmt_thread(void *arg)
 	char *buf = NULL;
 
 
-	sfd = create_and_bind(mgmt_port);
+	sfd = create_and_bind(mgmt_port, false);
 	if (sfd == -1) {
 		goto exit;
 	}
@@ -559,7 +563,7 @@ retry:
 			close(sfd);
 			printf("Retrying ....\n");
 			sleep(5);
-			sfd = create_and_bind(mgmt_port);
+			sfd = create_and_bind(mgmt_port, false);
 			if (sfd == -1) {
 				goto exit;
 			}
@@ -625,7 +629,7 @@ uzfs_zvol_mgmt_thread(void *arg)
 	char *buf = NULL;
 
 
-	sfd = create_and_bind(mgmt_port);
+	sfd = create_and_bind(mgmt_port, false);
 	if (sfd == -1) {
 		goto exit;
 	}
@@ -693,7 +697,7 @@ retry:
 				close(events[i].data.fd);
 				printf("Retrying ....\n");
 				sleep(5);
-				sfd = create_and_bind(mgmt_port);
+				sfd = create_and_bind(mgmt_port, false);
 				if (sfd == -1) {
 					goto exit;
 				}
@@ -785,7 +789,7 @@ uzfs_zvol_io_conn_acceptor(void)
 	struct epoll_event *events = NULL;
 
 	sfd = efd = -1;
-	sfd = create_and_bind(accpt_port);
+	sfd = create_and_bind(accpt_port, true);
 	if (sfd == -1) {
 		goto exit;
 	}
