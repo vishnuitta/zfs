@@ -104,7 +104,7 @@ extern zvol_info_t *uzfs_zinfo_lookup(const char *name);
 extern void uzfs_zinfo_drop_refcnt(zvol_info_t *zinfo, int locked);
 extern void uzfs_zinfo_take_refcnt(zvol_info_t *zinfo, int locked);
 extern void uzfs_zinfo_replay_zil_all(void);
-extern int uzfs_zinfo_destrtoy(const char *ds_name);
+extern int uzfs_zinfo_destroy(const char *ds_name);
 
 #define	ZREPL_LOG(fmt, ...)  syslog(LOG_NOTICE,				\
 		"%-18.18s:%4d: %-20.20s: " fmt, __func__, __LINE__,	\

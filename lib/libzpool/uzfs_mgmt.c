@@ -477,7 +477,7 @@ uzfs_zvol_destroy_cb(const char *ds_name, void *arg)
 
 	printf("deleting ds_name %s\n", ds_name);
 
-	uzfs_zinfo_destrtoy(ds_name);
+	uzfs_zinfo_destroy(ds_name);
 	return (0);
 }
 

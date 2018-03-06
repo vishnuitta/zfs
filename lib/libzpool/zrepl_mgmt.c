@@ -30,13 +30,13 @@ uzfs_zinfo_drop_refcnt(zvol_info_t *zinfo, int locked)
 		(void) pthread_mutex_lock(&zvol_list_mutex);
 	}
 
+	zinfo->refcnt--;
 	if (zinfo->refcnt == 0) {
 		(void) uzfs_zinfo_free(zinfo);
 		(void) pthread_mutex_unlock(&zvol_list_mutex);
 		return;
 	}
 
-	zinfo->refcnt--;
 	if (!locked) {
 		(void) pthread_mutex_unlock(&zvol_list_mutex);
 	}
@@ -139,7 +139,7 @@ uzfs_zinfo_destroy_mutex(zvol_info_t *zinfo)
 }
 
 int
-uzfs_zinfo_destrtoy(const char *name)
+uzfs_zinfo_destroy(const char *name)
 {
 
 	zvol_info_t	*zinfo = NULL;
@@ -179,8 +179,8 @@ uzfs_zinfo_init(void *zv, const char *ds_name)
 	bzero(zinfo, sizeof (zvol_info_t));
 	ASSERT(zinfo != NULL);
 
-	zinfo->uzfs_zvol_taskq = taskq_create("replica", max_ncpus, defclsyspri,
-	    max_ncpus, INT_MAX,
+	zinfo->uzfs_zvol_taskq = taskq_create("replica", boot_ncpus, defclsyspri,
+	    boot_ncpus, INT_MAX,
 	    TASKQ_PREPOPULATE | TASKQ_DYNAMIC);
 
 	STAILQ_INIT(&zinfo->complete_queue);
