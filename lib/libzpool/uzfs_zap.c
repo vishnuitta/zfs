@@ -23,6 +23,7 @@
 #include <sys/dsl_synctask.h>
 #include <sys/dsl_pool.h>
 #include <sys/dmu_objset.h>
+#include <sys/zap_impl.h>
 #include <sys/dmu_tx.h>
 #include <sys/zap.h>
 #include <sys/uzfs_zvol.h>
@@ -50,6 +51,24 @@ uzfs_update_zap_entries(void *zvol, const uzfs_zap_kv_t **array,
 	int err;
 	int i = 0;
 
+	/*
+	 * micro zap will upgrade to fat-zap in following cases:
+	 * 	1. key length is greater or equal to MZAP_NAME_LEN
+	 *	2. value size is greater than 8
+	 * To avoid this, update zap-entries only if key length < MZAP_NAME_LEN
+	 * and value_size == 1.
+	 */
+	for (i = 0; i < count; i++) {
+		kv = array[i];
+		/*
+		 * checks to avoid fat zap upgrade and value size
+		 */
+		if (strlen(kv->key) >= MZAP_NAME_LEN)
+			return (EINVAL);
+		if (kv->size != 8)
+			return (EINVAL);
+	}
+
 	tx = dmu_tx_create(os);
 	dmu_tx_hold_zap(tx, ZVOL_ZAP_OBJ, TRUE, NULL);
 
@@ -61,8 +80,8 @@ uzfs_update_zap_entries(void *zvol, const uzfs_zap_kv_t **array,
 
 	for (i = 0; i < count; i++) {
 		kv = array[i];
-		VERIFY0(zap_update(os, ZVOL_ZAP_OBJ, kv->key, 1, kv->size,
-		    kv->value, tx));
+		VERIFY0(zap_update(os, ZVOL_ZAP_OBJ, kv->key, kv->size, 1,
+		    &kv->value, tx));
 	}
 
 	dmu_tx_commit(tx);
@@ -80,8 +99,8 @@ uzfs_read_zap_entry(void *zvol, uzfs_zap_kv_t *entry)
 	objset_t *os = zv->zv_objset;
 	int err;
 
-	err = zap_lookup(os, ZVOL_ZAP_OBJ, entry->key, 1, entry->size,
-	    entry->value);
+	err = zap_lookup(os, ZVOL_ZAP_OBJ, entry->key, entry->size, 1,
+	    &entry->value);
 	if (err)
 		return (SET_ERROR(err));
 
