@@ -43,7 +43,8 @@ extern unsigned long zfs_arc_min;
 extern void replay_fn(void *arg);
 extern void setup_unit_test(void);
 extern void unit_test_create_pool_ds(void);
-extern void open_pool_ds(void **, void **);
+extern void open_pool(void **);
+extern void open_ds(void *, void **);
 
 typedef struct worker_args {
 	void *zv;

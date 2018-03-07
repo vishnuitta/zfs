@@ -260,11 +260,11 @@ uzfs_objset_create_cb(objset_t *new_os, void *arg, cred_t *cr, dmu_tx_t *tx)
 	VERIFY(error == 0);
 }
 
+
 /* owns objset with name 'ds_name' in pool 'spa'. Sets 'sync' property */
 int
-uzfs_open_dataset(spa_t *spa, const char *ds_name, zvol_state_t **z)
+uzfs_open_dataset_init(spa_t *spa, const char *ds_name, zvol_state_t **z)
 {
-	char name[ZFS_MAX_DATASET_NAME_LEN];
 	zvol_state_t *zv = NULL;
 	int error = -1;
 	objset_t *os;
@@ -275,7 +275,6 @@ uzfs_open_dataset(spa_t *spa, const char *ds_name, zvol_state_t **z)
 
 	if (spa == NULL)
 		goto ret;
-	(void) snprintf(name, sizeof (name), "%s/%s", spa_name(spa), ds_name);
 
 	zv = kmem_zalloc(sizeof (zvol_state_t), KM_SLEEP);
 	if (zv == NULL)
@@ -285,9 +284,9 @@ uzfs_open_dataset(spa_t *spa, const char *ds_name, zvol_state_t **z)
 	zfs_rlock_init(&zv->zv_range_lock);
 	zfs_rlock_init(&zv->zv_mrange_lock);
 
-	strlcpy(zv->zv_name, name, MAXNAMELEN);
+	strlcpy(zv->zv_name, ds_name, MAXNAMELEN);
 
-	error = dmu_objset_own(name, DMU_OST_ZVOL, 1, zv, &os);
+	error = dmu_objset_own(ds_name, DMU_OST_ZVOL, 1, zv, &os);
 	if (error)
 		goto free_ret;
 	zv->zv_objset = os;
@@ -347,6 +346,21 @@ ret:
 	return (error);
 }
 
+/* owns objset with name 'ds_name' in pool 'spa'. Sets 'sync' property */
+int
+uzfs_open_dataset(spa_t *spa, const char *ds_name, zvol_state_t **z)
+{
+	char name[ZFS_MAX_DATASET_NAME_LEN];
+	int error = -1;
+
+	if (spa == NULL)
+		return (error);
+	(void) snprintf(name, sizeof (name), "%s/%s", spa_name(spa), ds_name);
+
+	error = uzfs_open_dataset_init(spa, name, z);
+	return (error);
+}
+
 /*
  * Creates dataset 'ds_name' in pool 'spa' with volume size 'vol_size',
  * block size as 'block_size'
@@ -391,81 +405,28 @@ uzfs_zvol_create_cb(const char *ds_name, void *arg)
 {
 
 	zvol_state_t	*zv = NULL;
-	objset_t 	*os;
 	spa_t		*spa;
-	dmu_object_info_t doi;
 	int 		error = -1;
-	uint64_t 	vol_size;
-	uint64_t 	block_size;
 
 	printf("ds_name %s\n", ds_name);
-	zv = kmem_zalloc(sizeof (zvol_state_t), KM_SLEEP);
-	if (zv == NULL) {
-		return (-1);
-	}
-
-	error = spa_open(ds_name, &spa, zv);
+	error = spa_open(ds_name, &spa, "UZINFO");
 	if (error != 0) {
 		(void) spa_destroy((char *)ds_name);
-		spa = NULL;
-		goto free_zv;
+		return (error);
 	}
 
-	error = dmu_objset_own(ds_name, DMU_OST_ZVOL, FALSE, zv, &os);
+	error = uzfs_open_dataset_init(spa, ds_name, &zv);
 	if (error) {
-		printf("Returning from here for ds_name: %s\n", ds_name);
-		goto close_spa;
-	}
-
-	error = dmu_object_info(os, ZVOL_OBJ, &doi);
-	if (error) {
-		goto close_spa;
-	}
-
-	block_size = doi.doi_data_block_size;
-	error = zap_lookup(os, ZVOL_ZAP_OBJ, "size", 8, 1, &vol_size);
-	if (error) {
-		goto close_spa;
-	}
-
-	strlcpy(zv->zv_name, ds_name, MAXNAMELEN);
-	zv->zv_objset = os;
-	zv->zv_zilog = zil_open(os, zvol_get_data);
-	zfs_rlock_init(&zv->zv_range_lock);
-	zv->zv_spa = spa;
-	zv->zv_volblocksize = block_size;
-	zv->zv_volsize = vol_size;
-
-	error = dnode_hold(os, ZVOL_OBJ, zv, &zv->zv_dn);
-	if (error) {
-		goto free_zil;
-	}
-
-	if (spa_writeable(dmu_objset_spa(os))) {
-//		if (zil_replay_disable)
-//			zil_destroy(dmu_objset_zil(os), B_FALSE);
-//		else
-			zil_replay(os, zv, zvol_replay_vector);
+		spa_close(spa, "UZINFO");
+		printf("Failed to open dataset: %s\n", ds_name);
+		return (error);
 	}
 
 	if (uzfs_zinfo_init(zv, ds_name) != 0) {
 		printf("Failed in uzfs_zinfo_init\n");
-		goto exit;
+		return (error);
 	}
 	return (0);
-
-exit:
-	dnode_rele(zv->zv_dn, zv);
-free_zil:
-	zil_close(zv->zv_zilog);
-	zfs_rlock_destroy(&zv->zv_range_lock);
-	dmu_objset_disown(zv->zv_objset, zv);
-
-close_spa:
-	spa_close(spa, zv);
-free_zv:
-	kmem_free(zv, sizeof (zvol_state_t));
-	return (-1);
 }
 
 /* uZFS Zvol destroy call back function */

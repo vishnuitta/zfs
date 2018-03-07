@@ -33,8 +33,6 @@ uzfs_zinfo_drop_refcnt(zvol_info_t *zinfo, int locked)
 	zinfo->refcnt--;
 	if (zinfo->refcnt == 0) {
 		(void) uzfs_zinfo_free(zinfo);
-		(void) pthread_mutex_unlock(&zvol_list_mutex);
-		return;
 	}
 
 	if (!locked) {
@@ -152,15 +150,16 @@ uzfs_zinfo_destroy(const char *name)
 		    (strncmp(zinfo->name, name, namelen) == 0 &&
 		    (zinfo->name[namelen] == '/' ||
 		    zinfo->name[namelen] == '@'))) {
-			printf("Vol to be destroyed %s\n", zinfo->name);
 			zv = zinfo->zv;
 			uzfs_remove_zinfo_list(zinfo);
 			zil_close(zv->zv_zilog);
 			zfs_rlock_destroy(&zv->zv_range_lock);
+			zfs_rlock_destroy(&zv->zv_mrange_lock);
 			dnode_rele(zv->zv_dn, zv);
 			dmu_objset_disown(zv->zv_objset, zv);
-			spa_close(zv->zv_spa, zv);
+			spa_close(zv->zv_spa, "UZINFO");
 			kmem_free(zv, sizeof (zvol_state_t));
+			break;
 		}
 	}
 	(void) pthread_mutex_unlock(&zvol_list_mutex);
@@ -198,12 +197,10 @@ uzfs_zinfo_init(void *zv, const char *ds_name)
 static int
 uzfs_zinfo_free(zvol_info_t *zinfo)
 {
-
-
-	printf("uzfs_zinfo_free in failure path\n");
 	taskq_destroy(zinfo->uzfs_zvol_taskq);
 	(void) uzfs_zinfo_destroy_mutex(zinfo);
 	ASSERT(STAILQ_EMPTY(&zinfo->complete_queue));
+	printf("Freeing volume =%s\n", zinfo->name);
 
 	free(zinfo);
 	return (0);
