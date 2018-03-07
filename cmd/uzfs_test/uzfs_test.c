@@ -42,6 +42,9 @@ uzfs_test_info_t uzfs_tests[] = {
 	{ uzfs_zvol_zap_operation, "uzfs zap operation test" },
 	{ replay_fn, "zvol replay test" },
 	{ unit_test_fn, "zvol read/write verification test"},
+	{ uzfs_txg_diff_verifcation_test,
+	    "test to verify modified blocks between two txg for zvol" },
+	{ uzfs_txg_diff_tree_test, "txg_diff_tree functionality test" },
 };
 
 uint64_t metaverify = 0;
@@ -416,14 +419,10 @@ static void process_options(int argc, char **argv)
 					val = nicenumtoull(optarg);
 				break;
 		}
+
 		switch (opt) {
 			case 'a':
 				active_size = val;
-				if (vol_size == 0)
-					vol_size = active_size;
-				else
-					active_size = (active_size < vol_size)
-					    ? (active_size) : (vol_size);
 				break;
 			case 'b':
 				block_size = val;
@@ -457,11 +456,6 @@ static void process_options(int argc, char **argv)
 				break;
 			case 'v':
 				vol_size = val;
-				if (active_size == 0)
-					active_size = vol_size;
-				else
-					active_size = (active_size < vol_size)
-					    ? (active_size) : (vol_size);
 				break;
 			case 'V':
 				verify = val;
@@ -482,8 +476,14 @@ static void process_options(int argc, char **argv)
 				usage(0);
 		}
 	}
-	if (active_size == 0 || vol_size == 0)
-		active_size = vol_size = 1024*1024*1024ULL;
+	if (active_size == 0)
+		active_size = 1024*1024*1024ULL;
+
+	if (vol_size == 0)
+		vol_size = 1024*1024*1024ULL;
+
+	if (active_size > vol_size)
+		vol_size = active_size;
 
 	if (silent == 0) {
 		printf("vol size: %lu active size: %lu create: %d\n", vol_size,
