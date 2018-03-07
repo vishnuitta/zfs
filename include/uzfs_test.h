@@ -33,6 +33,7 @@ extern int write_op;
 extern int verify_err;
 extern int verify;
 extern int test_iterations;
+extern uint64_t active_size;
 extern uint32_t create;
 extern char *pool;
 extern char *ds;
@@ -62,4 +63,6 @@ typedef struct uzfs_test_info {
 
 void uzfs_zvol_zap_operation(void *arg);
 void unit_test_fn(void *arg);
+void uzfs_txg_diff_tree_test(void *arg);
+void uzfs_txg_diff_verifcation_test(void *arg);
 #endif
