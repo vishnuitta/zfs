@@ -24,7 +24,8 @@ USER_C = \
 	uzfs_mtree.c \
 	uzfs_test_mgmt.c \
 	uzfs_zap.c \
-	vdev_disk_aio.c
+	vdev_disk_aio.c \
+	zrepl_mgmt.c
 
 KERNEL_C = \
 	zfs_comutil.c \
