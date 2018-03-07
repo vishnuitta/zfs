@@ -23,6 +23,7 @@
 #include <uzfs_io.h>
 #include <uzfs_test.h>
 #include <math.h>
+#include <zrepl_mgmt.h>
 
 int total_time_in_sec = 60;
 int log_device = 0;
@@ -261,7 +262,9 @@ void
 unit_test_create_pool_ds(void)
 {
 	void *spa1, *spa2, *spa3, *spa4, *spa;
-	void *zv1, *zv2, *zv3, *zv4, *zv5, *zv;
+	void *zv1 = NULL; void *zv3 = NULL;
+	void *zv2 = NULL; void *zv4 = NULL;
+	void *zv5 = NULL; void *zv = NULL;
 	int err, err1, err2, err3, err4, err5;
 
 	err1 = uzfs_create_pool(pool, "/tmp/uztest.xyz", &spa1);
@@ -498,8 +501,9 @@ static void process_options(int argc, char **argv)
 		printf("total run time in seconds: %d\n", total_time_in_sec);
 	}
 }
+
 void
-open_pool_ds(void **spa, void **zv)
+open_pool(void **spa)
 {
 	int err;
 	err = uzfs_open_pool(pool, spa);
@@ -507,7 +511,13 @@ open_pool_ds(void **spa, void **zv)
 		printf("pool open errored.. %d\n", err);
 		exit(1);
 	}
-	err = uzfs_open_dataset(*spa, ds, zv);
+}
+
+void
+open_ds(void *spa, void **zv)
+{
+	int err;
+	err = uzfs_open_dataset(spa, ds, zv);
 	if (err != 0) {
 		printf("ds open errored.. %d\n", err);
 		exit(1);
@@ -520,11 +530,13 @@ unit_test_fn(void *arg)
 	void *spa, *zv;
 	kthread_t *reader1;
 	kthread_t *writer[3];
+	char name[MAXNAMELEN];
 	int i;
 	kmutex_t mtx;
 	kcondvar_t cv;
 	int threads_done = 0;
 	int num_threads = 0;
+	zvol_info_t *zinfo = NULL;
 	worker_args_t reader1_args, writer_args[3];
 
 	mutex_init(&mtx, NULL, MUTEX_DEFAULT, NULL);
@@ -535,7 +547,13 @@ unit_test_fn(void *arg)
 		unit_test_create_pool_ds();
 	}
 
-	open_pool_ds(&spa, &zv);
+	open_pool(&spa);
+	if (create == 1) {
+		open_ds(spa, &zv);
+	} else {
+		zinfo = uzfs_zinfo_lookup(ds);
+		zv = zinfo->zv;
+	}
 
 	reader1_args.zv = zv;
 	reader1_args.threads_done = &threads_done;
@@ -570,8 +588,15 @@ unit_test_fn(void *arg)
 	cv_destroy(&cv);
 	mutex_destroy(&mtx);
 
-	uzfs_close_dataset(zv);
-	uzfs_close_pool(spa);
+	if (create == 1) {
+		uzfs_close_dataset(zv);
+		uzfs_close_pool(spa);
+	} else {
+		strlcpy(name, zinfo->name, MAXNAMELEN);
+		uzfs_zinfo_drop_refcnt(zinfo, 0);
+		uzfs_zinfo_destroy(name);
+		uzfs_close_pool(spa);
+	}
 }
 
 int

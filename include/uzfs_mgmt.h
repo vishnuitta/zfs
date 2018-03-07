@@ -30,6 +30,8 @@ extern int uzfs_vdev_add(void *spa, char *path, int ashift, int log);
 extern int uzfs_create_dataset(void *spa, char *ds, uint64_t vol_size,
     uint64_t block_size, void **zv);
 extern int uzfs_open_dataset(void *spa, char *ds, void **zv);
+extern int uzfs_zvol_create_cb(const char *ds_name, void *n);
+extern int uzfs_zvol_destroy_cb(const char *ds_name, void *n);
 extern uint64_t uzfs_synced_txg(void *zv);
 extern void uzfs_close_dataset(void *zv);
 extern void uzfs_close_pool(void *spa);

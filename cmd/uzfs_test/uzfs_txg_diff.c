@@ -168,7 +168,8 @@ uzfs_txg_diff_verifcation_test(void *arg)
 
 	setup_unit_test();
 	unit_test_create_pool_ds();
-	open_pool_ds(&spa, &zvol);
+	open_pool(&spa);
+	open_ds(spa, &zvol);
 
 	vol_blocks = active_size / block_size;
 	buf = umem_alloc(block_size, UMEM_NOFAIL);
