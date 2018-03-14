@@ -33,7 +33,8 @@ TMPDIR="/tmp"
 VOLSIZE="1G"
 UZFS_TEST_POOL="testp"
 UZFS_TEST_VOL="ds0"
-UZFS_TEST_VOLSIZE="1G"
+UZFS_TEST_VOLSIZE="128M"
+UZFS_TEST_VOLSIZE_IN_NUM=134217728
 SRCPOOL="src_pool"
 SRCVOL="src_vol"
 DSTPOOL="dst_pool"
@@ -590,32 +591,33 @@ run_uzfs_test()
 	log_must truncate -s 2G "$TMPDIR/uztest.log"
 
 	log_must setup_uzfs_test nolog 4096 nosync
-	log_must $UZFS_TEST -T 2
+	log_must $UZFS_TEST -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -T 2
 
 	log_must setup_uzfs_test nolog 4096 sync
-	log_must $UZFS_TEST -s -T 2
+	log_must $UZFS_TEST -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -s -T 2
 
 	log_must setup_uzfs_test log 4096 nosync
-	log_must $UZFS_TEST -l -T 2
+	log_must $UZFS_TEST -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -l -T 2
 
 	log_must setup_uzfs_test log 4096 sync
-	log_must $UZFS_TEST -s -l -T 2
+	log_must $UZFS_TEST -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -s -l -T 2
 
 	log_must setup_uzfs_test nolog 65536 nosync
-	log_must $UZFS_TEST -i 8192 -b 65536 -T 2
+	log_must $UZFS_TEST -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -i 8192 -b 65536 -T 2
 
 	log_must setup_uzfs_test nolog 65536 sync
-	log_must $UZFS_TEST -s -i 8192 -b 65536 -T 2
+	log_must $UZFS_TEST -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -s -i 8192 -b 65536 -T 2
 
 	log_must setup_uzfs_test log 65536 nosync
-	log_must $UZFS_TEST -l -i 8192 -b 65536 -T 2
+	log_must $UZFS_TEST -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -l -i 8192 -b 65536 -T 2
+
+	log_must setup_uzfs_test log 65536 sync
+	log_must $UZFS_TEST -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -s -l -i 8192 -b 65536 -T 2
 
 	K=1024
 	M=$(( 1024 * 1024 ))
 	G=$(( 1024 * 1024 * 1024 ))
 
-	log_must setup_uzfs_test log 65536 sync
-	log_must $UZFS_TEST -s -l -i 8192 -b 65536 -T 2
 	log_must $UZFS_TEST -t 10 -a  $(( 50 * 1024 * 1024 )) -T 3 -n 10000
 	log_must $UZFS_TEST -t 10 -a  $(( 100 * 1024 * 1024 )) -T 3 -n 10000
 	log_must $UZFS_TEST -t 10 -a  $(( 1000 * 1024 * 1024 )) -T 3 -n 10000

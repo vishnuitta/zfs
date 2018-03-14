@@ -284,6 +284,9 @@ uzfs_open_dataset_init(spa_t *spa, const char *ds_name, zvol_state_t **z)
 	zfs_rlock_init(&zv->zv_range_lock);
 	zfs_rlock_init(&zv->zv_mrange_lock);
 
+	mutex_init(&zv->zv_dmu_sync_mtx, NULL, MUTEX_DEFAULT, NULL);
+	list_create(&zv->zv_dmu_sync_list, sizeof (dmu_sync_node_t), offsetof(dmu_sync_node_t, next));
+
 	strlcpy(zv->zv_name, ds_name, MAXNAMELEN);
 
 	error = dmu_objset_own(ds_name, DMU_OST_ZVOL, 1, zv, &os);
@@ -398,6 +401,19 @@ ret:
 	*z = zv;
 	return (error);
 }
+
+void
+add_ref_cnt(dmu_sync_node_t *node) {
+	node->cnt++;
+}
+
+void
+drop_ref_cnt(dmu_sync_node_t *node) {
+	node->cnt--;
+	if(node->cnt == 0)
+		kmem_free(node, sizeof (dmu_sync_node_t));
+}
+
 
 /* uZFS Zvol create call back function */
 int

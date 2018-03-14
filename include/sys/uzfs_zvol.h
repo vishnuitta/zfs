@@ -47,6 +47,13 @@ typedef struct metaobj_blk_offset {
 	uint64_t m_offset;
 } metaobj_blk_offset_t;
 
+typedef struct dmu_sync_node {
+	list_node_t	next;
+	uint64_t	offset;
+	uint64_t	end;
+	uint64_t	cnt;
+} dmu_sync_node_t;
+
 /*
  * The in-core state of each volume.
  */
@@ -68,7 +75,12 @@ struct zvol_state {
 	 * This should not be greater than volblocksize
 	 */
 	uint64_t zv_metavolblocksize;
+	kmutex_t zv_dmu_sync_mtx;
+	list_t zv_dmu_sync_list;
 };
+
+void add_ref_cnt(dmu_sync_node_t *);
+void drop_ref_cnt(dmu_sync_node_t *);
 
 typedef struct zvol_state zvol_state_t;
 

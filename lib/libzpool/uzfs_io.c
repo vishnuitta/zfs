@@ -21,8 +21,38 @@
 
 #include <sys/dmu_objset.h>
 #include <sys/uzfs_zvol.h>
+#include <sys/zil_impl.h>
 
+static boolean_t
+check_io_overlap_with_sync_list(zvol_state_t *zv, uint64_t r_offset, uint64_t r_len)
+{
+	dmu_sync_node_t  *syncnode, *p_syncnode;
 
+	syncnode = list_head(&zv->zv_dmu_sync_list);
+	while(syncnode != NULL) {
+		add_ref_cnt(syncnode);
+		if(syncnode->offset < r_offset) {
+			if (syncnode->end > r_offset) {
+				drop_ref_cnt(syncnode);
+				return B_TRUE;
+			}
+		} else if (syncnode->offset == r_offset) {
+			drop_ref_cnt(syncnode);
+			return B_TRUE;
+		} else {
+			if ((r_offset + r_len) > syncnode->offset) {
+				drop_ref_cnt(syncnode);
+				return B_TRUE;
+			}
+		}
+		p_syncnode = syncnode;
+		syncnode = list_next(&zv->zv_dmu_sync_list, syncnode);
+		drop_ref_cnt(p_syncnode);
+	}
+	return B_FALSE;
+}
+
+extern ssize_t zvol_immediate_write_sz;
 /* Writes data 'buf' to dataset 'zv' at 'offset' for 'len' */
 int
 uzfs_write_data(zvol_state_t *zv, char *buf, uint64_t offset, uint64_t len,
@@ -41,6 +71,7 @@ uzfs_write_data(zvol_state_t *zv, char *buf, uint64_t offset, uint64_t len,
 	metaobj_blk_offset_t metablk;
 	uint64_t metadatasize = zv->zv_volmetadatasize;
 	uint64_t len_in_first_aligned_block = 0;
+	dmu_sync_node_t *node = NULL;
 
 	sync = dmu_objset_syncprop(os);
 	if (zv->zv_volmetablocksize == 0)
@@ -50,15 +81,37 @@ uzfs_write_data(zvol_state_t *zv, char *buf, uint64_t offset, uint64_t len,
 	 * Handling the case where readlen is smaller than blocksize.
 	 * This can also be avoided later for better performance.
 	 */
-	r_offset = (offset / blocksize) * blocksize;
-	r_len = ((len + blocksize - 1) / blocksize) * blocksize;
+	r_offset = P2ALIGN_TYPED(offset, blocksize, uint64_t);
+	r_len = P2ALIGN_TYPED(((offset - r_offset) + len + blocksize - 1), blocksize, uint64_t);
 
 	len_in_first_aligned_block = (blocksize - (offset - r_offset));
 
 	if (len_in_first_aligned_block > len)
 		len_in_first_aligned_block = len;
 
+start:	
 	rl = zfs_range_lock(&zv->zv_range_lock, r_offset, r_len, RL_WRITER);
+
+	if (sync &&
+	    ((zv->zv_zilog->zl_logbias == ZFS_LOGBIAS_THROUGHPUT) ||
+	    (blocksize > ZIL_MAX_COPIED_DATA) ||
+	    (!spa_has_slogs(zv->zv_zilog->zl_spa) && len >= blocksize &&
+	    blocksize > zvol_immediate_write_sz))) {
+
+		node = kmem_alloc(sizeof (dmu_sync_node_t), KM_SLEEP);
+		node->offset = r_offset;
+		node->end = r_offset + r_len;
+		node->cnt = 1;
+
+		mutex_enter(&zv->zv_dmu_sync_mtx);
+		if (check_io_overlap_with_sync_list(zv, r_offset, r_len)) {
+			mutex_exit(&zv->zv_dmu_sync_mtx);
+			zfs_range_unlock(rl);
+			goto start;
+		}
+		list_insert_tail(&zv->zv_dmu_sync_list, node);
+		mutex_exit(&zv->zv_dmu_sync_mtx);
+	}
 
 	while (offset < end && offset < volsize) {
 		if (len_in_first_aligned_block != 0) {
@@ -109,11 +162,18 @@ uzfs_write_data(zvol_state_t *zv, char *buf, uint64_t offset, uint64_t len,
 		len -= bytes;
 	}
 exit_with_error:
+
 	zfs_range_unlock(rl);
 
-	if (sync)
+	if (sync) {
 		zil_commit(zv->zv_zilog, ZVOL_OBJ);
-
+		if (node != NULL) {
+			mutex_enter(&zv->zv_dmu_sync_mtx);
+			list_remove(&zv->zv_dmu_sync_list, node);
+			drop_ref_cnt(node);
+			mutex_exit(&zv->zv_dmu_sync_mtx);
+		}
+	}
 	return (ret);
 }
 
@@ -148,8 +208,8 @@ uzfs_read_data(zvol_state_t *zv, char *buf, uint64_t offset, uint64_t len,
 		mread = 0;
 	}
 
-	r_offset = (offset / blocksize) * blocksize;
-	r_len = ((len + blocksize - 1) / blocksize) * blocksize;
+	r_offset = P2ALIGN_TYPED(offset, blocksize, uint64_t);
+	r_len = P2ALIGN_TYPED(((offset - r_offset) + len + blocksize - 1), blocksize, uint64_t);
 
 	len_in_first_aligned_block = (blocksize - (offset - r_offset));
 
