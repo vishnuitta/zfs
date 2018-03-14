@@ -285,7 +285,8 @@ uzfs_open_dataset_init(spa_t *spa, const char *ds_name, zvol_state_t **z)
 	zfs_rlock_init(&zv->zv_mrange_lock);
 
 	mutex_init(&zv->zv_dmu_sync_mtx, NULL, MUTEX_DEFAULT, NULL);
-	list_create(&zv->zv_dmu_sync_list, sizeof (dmu_sync_node_t), offsetof(dmu_sync_node_t, next));
+	list_create(&zv->zv_dmu_sync_list, sizeof (dmu_sync_node_t),
+	    offsetof(dmu_sync_node_t, next));
 
 	strlcpy(zv->zv_name, ds_name, MAXNAMELEN);
 
@@ -403,14 +404,16 @@ ret:
 }
 
 void
-add_ref_cnt(dmu_sync_node_t *node) {
+add_ref_cnt(dmu_sync_node_t *node)
+{
 	node->cnt++;
 }
 
 void
-drop_ref_cnt(dmu_sync_node_t *node) {
+drop_ref_cnt(dmu_sync_node_t *node)
+{
 	node->cnt--;
-	if(node->cnt == 0)
+	if (node->cnt == 0)
 		kmem_free(node, sizeof (dmu_sync_node_t));
 }
 
@@ -463,6 +466,8 @@ uzfs_close_dataset(zvol_state_t *zv)
 	zil_close(zv->zv_zilog);
 	dnode_rele(zv->zv_dn, zv);
 	dmu_objset_disown(zv->zv_objset, zv);
+	list_destroy(&zv->zv_dmu_sync_list);
+	mutex_destroy(&zv->zv_dmu_sync_mtx);
 	zfs_rlock_destroy(&zv->zv_range_lock);
 	zfs_rlock_destroy(&zv->zv_mrange_lock);
 	kmem_free(zv, sizeof (zvol_state_t));

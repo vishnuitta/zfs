@@ -23,36 +23,42 @@
 #include <sys/uzfs_zvol.h>
 #include <sys/zil_impl.h>
 
+extern ssize_t zvol_immediate_write_sz;
+
+/*
+ * checks for IO overlap with any ongoing sync IOs
+ * lock handling need to be done by caller
+ */
 static boolean_t
-check_io_overlap_with_sync_list(zvol_state_t *zv, uint64_t r_offset, uint64_t r_len)
+check_io_overlap_with_sync_list(zvol_state_t *zv, uint64_t r_offset,
+    uint64_t r_len)
 {
 	dmu_sync_node_t  *syncnode, *p_syncnode;
 
 	syncnode = list_head(&zv->zv_dmu_sync_list);
-	while(syncnode != NULL) {
+	while (syncnode != NULL) {
 		add_ref_cnt(syncnode);
-		if(syncnode->offset < r_offset) {
+		if (syncnode->offset < r_offset) {
 			if (syncnode->end > r_offset) {
 				drop_ref_cnt(syncnode);
-				return B_TRUE;
+				return (B_TRUE);
 			}
 		} else if (syncnode->offset == r_offset) {
 			drop_ref_cnt(syncnode);
-			return B_TRUE;
+			return (B_TRUE);
 		} else {
 			if ((r_offset + r_len) > syncnode->offset) {
 				drop_ref_cnt(syncnode);
-				return B_TRUE;
+				return (B_TRUE);
 			}
 		}
 		p_syncnode = syncnode;
 		syncnode = list_next(&zv->zv_dmu_sync_list, syncnode);
 		drop_ref_cnt(p_syncnode);
 	}
-	return B_FALSE;
+	return (B_FALSE);
 }
 
-extern ssize_t zvol_immediate_write_sz;
 /* Writes data 'buf' to dataset 'zv' at 'offset' for 'len' */
 int
 uzfs_write_data(zvol_state_t *zv, char *buf, uint64_t offset, uint64_t len,
@@ -82,16 +88,21 @@ uzfs_write_data(zvol_state_t *zv, char *buf, uint64_t offset, uint64_t len,
 	 * This can also be avoided later for better performance.
 	 */
 	r_offset = P2ALIGN_TYPED(offset, blocksize, uint64_t);
-	r_len = P2ALIGN_TYPED(((offset - r_offset) + len + blocksize - 1), blocksize, uint64_t);
+	r_len = P2ALIGN_TYPED(((offset - r_offset) + len + blocksize - 1),
+	    blocksize, uint64_t);
 
 	len_in_first_aligned_block = (blocksize - (offset - r_offset));
 
 	if (len_in_first_aligned_block > len)
 		len_in_first_aligned_block = len;
 
-start:	
+start:
 	rl = zfs_range_lock(&zv->zv_range_lock, r_offset, r_len, RL_WRITER);
 
+/*
+ * Matching the cases to enter dmu_sync code during zil_commit
+ * from zvol_log_write
+ */
 	if (sync &&
 	    ((zv->zv_zilog->zl_logbias == ZFS_LOGBIAS_THROUGHPUT) ||
 	    (blocksize > ZIL_MAX_COPIED_DATA) ||
@@ -209,7 +220,8 @@ uzfs_read_data(zvol_state_t *zv, char *buf, uint64_t offset, uint64_t len,
 	}
 
 	r_offset = P2ALIGN_TYPED(offset, blocksize, uint64_t);
-	r_len = P2ALIGN_TYPED(((offset - r_offset) + len + blocksize - 1), blocksize, uint64_t);
+	r_len = P2ALIGN_TYPED(((offset - r_offset) + len + blocksize - 1),
+	    blocksize, uint64_t);
 
 	len_in_first_aligned_block = (blocksize - (offset - r_offset));
 
