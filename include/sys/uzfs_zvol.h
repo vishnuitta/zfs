@@ -75,6 +75,10 @@ struct zvol_state {
 	 * This should not be greater than volblocksize
 	 */
 	uint64_t zv_metavolblocksize;
+
+	/*
+	 * list of ongoing sync IOs is maintained, and, mtx
+	 */
 	kmutex_t zv_dmu_sync_mtx;
 	list_t zv_dmu_sync_list;
 };
