@@ -323,10 +323,13 @@ setup_unit_test(void)
 void
 unit_test_create_pool_ds(void)
 {
-	void *spa1, *spa2, *spa3, *spa4, *spa;
-	void *zv1 = NULL; void *zv3 = NULL;
-	void *zv2 = NULL; void *zv4 = NULL;
-	void *zv5 = NULL; void *zv = NULL;
+	spa_t *spa1, *spa2, *spa3, *spa4, *spa;
+	zvol_state_t *zv1 = NULL;
+	zvol_state_t *zv3 = NULL;
+	zvol_state_t *zv2 = NULL;
+	zvol_state_t *zv4 = NULL;
+	zvol_state_t *zv5 = NULL;
+	zvol_state_t *zv = NULL;
 	int err, err1, err2, err3, err4, err5;
 
 	err1 = uzfs_create_pool(pool, "/tmp/uztest.xyz", &spa1);
@@ -570,7 +573,7 @@ static void process_options(int argc, char **argv)
 }
 
 void
-open_pool(void **spa)
+open_pool(spa_t **spa)
 {
 	int err;
 	err = uzfs_open_pool(pool, spa);
@@ -581,7 +584,7 @@ open_pool(void **spa)
 }
 
 void
-open_ds(void *spa, void **zv)
+open_ds(spa_t *spa, zvol_state_t **zv)
 {
 	int err;
 	err = uzfs_open_dataset(spa, ds, zv);
@@ -594,8 +597,9 @@ open_ds(void *spa, void **zv)
 void
 unit_test_fn(void *arg)
 {
-	void *spa, *zv;
-//	kthread_t *reader1;
+	spa_t *spa;
+	zvol_state_t *zv;
+	kthread_t *reader1;
 	kthread_t *writer[3];
 	char name[MAXNAMELEN];
 	int i;
@@ -605,7 +609,7 @@ unit_test_fn(void *arg)
 	int num_threads = 0;
 	uint64_t total_ios = 0;
 	zvol_info_t *zinfo = NULL;
-//	worker_args_t reader1_args;
+	worker_args_t reader1_args;
 	worker_args_t writer_args[3];
 
 	mutex_init(&mtx, NULL, MUTEX_DEFAULT, NULL);
@@ -623,7 +627,7 @@ unit_test_fn(void *arg)
 		zinfo = uzfs_zinfo_lookup(ds);
 		zv = zinfo->zv;
 	}
-/*
+
 	reader1_args.zv = zv;
 	reader1_args.threads_done = &threads_done;
 	reader1_args.total_ios = NULL;
@@ -635,7 +639,7 @@ unit_test_fn(void *arg)
 	reader1 = zk_thread_create(NULL, 0, (thread_func_t)reader_thread,
 	    &reader1_args, 0, NULL, TS_RUN, 0, PTHREAD_CREATE_DETACHED);
 	num_threads++;
-*/
+
 	for (i = 0; i < 3; i++) {
 		writer_args[i].zv = zv;
 		writer_args[i].threads_done = &threads_done;
