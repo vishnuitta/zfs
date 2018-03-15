@@ -403,21 +403,6 @@ ret:
 	return (error);
 }
 
-void
-add_ref_cnt(dmu_sync_node_t *node)
-{
-	node->cnt++;
-}
-
-void
-drop_ref_cnt(dmu_sync_node_t *node)
-{
-	node->cnt--;
-	if (node->cnt == 0)
-		kmem_free(node, sizeof (dmu_sync_node_t));
-}
-
-
 /* uZFS Zvol create call back function */
 int
 uzfs_zvol_create_cb(const char *ds_name, void *arg)

@@ -26,7 +26,7 @@
 extern ssize_t zvol_immediate_write_sz;
 
 /*
- * checks for IO overlap with any ongoing sync IOs
+ * Check for overlap with ongoing sync IOs
  * lock handling need to be done by caller
  */
 static boolean_t
@@ -37,27 +37,25 @@ check_io_overlap_with_sync_list(zvol_state_t *zv, uint64_t r_offset,
 
 	syncnode = list_head(&zv->zv_dmu_sync_list);
 	while (syncnode != NULL) {
-		add_ref_cnt(syncnode);
 		if (syncnode->offset < r_offset) {
-			if (syncnode->end > r_offset) {
-				drop_ref_cnt(syncnode);
+			if (syncnode->end > r_offset)
 				return (B_TRUE);
-			}
 		} else if (syncnode->offset == r_offset) {
-			drop_ref_cnt(syncnode);
 			return (B_TRUE);
 		} else {
-			if ((r_offset + r_len) > syncnode->offset) {
-				drop_ref_cnt(syncnode);
+			if ((r_offset + r_len) > syncnode->offset)
 				return (B_TRUE);
-			}
 		}
 		p_syncnode = syncnode;
 		syncnode = list_next(&zv->zv_dmu_sync_list, syncnode);
-		drop_ref_cnt(p_syncnode);
 	}
 	return (B_FALSE);
 }
+
+/*
+ * Sleep time in ns to allow other thread to complete dmu_sync
+ */
+#define	DMU_SYNC_SLEEP_TIME	10000
 
 /* Writes data 'buf' to dataset 'zv' at 'offset' for 'len' */
 int
@@ -77,9 +75,13 @@ uzfs_write_data(zvol_state_t *zv, char *buf, uint64_t offset, uint64_t len,
 	metaobj_blk_offset_t metablk;
 	uint64_t metadatasize = zv->zv_volmetadatasize;
 	uint64_t len_in_first_aligned_block = 0;
-	dmu_sync_node_t *node = NULL;
+	dmu_sync_node_t node;
+	struct timespec ts;
+	ts.tv_sec = 0;
+	ts.tv_nsec = DMU_SYNC_SLEEP_TIME;
 
-	sync = dmu_objset_syncprop(os);
+	list_link_init(&node.next);
+	sync = (dmu_objset_syncprop(os) == ZFS_SYNC_ALWAYS) ? 1 : 0;
 	if (zv->zv_volmetablocksize == 0)
 		metadata = NULL;
 	/*
@@ -100,8 +102,12 @@ start:
 	rl = zfs_range_lock(&zv->zv_range_lock, r_offset, r_len, RL_WRITER);
 
 /*
- * Matching the cases to enter dmu_sync code during zil_commit
- * from zvol_log_write
+ * For cases mentioned below, data will not be written to ZIL, and will
+ * be written directly into data disks using dmu_sync, which will be linked
+ * to volume tree during sync.
+ * While one thread writing to data disks using dmu_sync,
+ * another thread can dirty same buffer causing crash.
+ * Below 'if' code avoids dirtying until zil_commit is done for first thread
  */
 	if (sync &&
 	    ((zv->zv_zilog->zl_logbias == ZFS_LOGBIAS_THROUGHPUT) ||
@@ -109,18 +115,17 @@ start:
 	    (!spa_has_slogs(zv->zv_zilog->zl_spa) && len >= blocksize &&
 	    blocksize > zvol_immediate_write_sz))) {
 
-		node = kmem_alloc(sizeof (dmu_sync_node_t), KM_SLEEP);
-		node->offset = r_offset;
-		node->end = r_offset + r_len;
-		node->cnt = 1;
+		node.offset = r_offset;
+		node.end = r_offset + r_len;
 
 		mutex_enter(&zv->zv_dmu_sync_mtx);
 		if (check_io_overlap_with_sync_list(zv, r_offset, r_len)) {
 			mutex_exit(&zv->zv_dmu_sync_mtx);
 			zfs_range_unlock(rl);
+			nanosleep(&ts, NULL);
 			goto start;
 		}
-		list_insert_tail(&zv->zv_dmu_sync_list, node);
+		list_insert_tail(&zv->zv_dmu_sync_list, &node);
 		mutex_exit(&zv->zv_dmu_sync_mtx);
 	}
 
@@ -178,10 +183,9 @@ exit_with_error:
 
 	if (sync) {
 		zil_commit(zv->zv_zilog, ZVOL_OBJ);
-		if (node != NULL) {
+		if (list_link_active(&node.next)) {
 			mutex_enter(&zv->zv_dmu_sync_mtx);
-			list_remove(&zv->zv_dmu_sync_list, node);
-			drop_ref_cnt(node);
+			list_remove(&zv->zv_dmu_sync_list, &node);
 			mutex_exit(&zv->zv_dmu_sync_mtx);
 		}
 	}
