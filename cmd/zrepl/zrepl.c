@@ -515,7 +515,6 @@ uzfs_zvol_mgmt_thread(void *arg)
 	struct sockaddr_in istgt_addr;
 	zvol_io_hdr_t hdr = {0, };
 	char *name = NULL;
-	char *buf = NULL;
 
 
 	sfd = create_and_bind(mgmt_port, false);
