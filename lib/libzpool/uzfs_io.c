@@ -34,7 +34,7 @@
 	} while (0)
 
 #define	CHECK_FIRST_ALIGNED_BLOCK(len_in_first_aligned_block,	\
-    offset, blocksize)	\
+    offset, len, blocksize)	\
 	do {							\
 		uint64_t r_offset;				\
 		r_offset = P2ALIGN_TYPED(offset, blocksize,	\
@@ -45,15 +45,15 @@
 			len_in_first_aligned_block = len;	\
 	} while (0)
 
-#define	WRITE_METADATA(zv, metablk, metadata, tx)		\
+#define	WRITE_METADATA(zv, metablk, mdata, tx)			\
 	do {							\
 		rl_t *mrl;					\
 		mrl = zfs_range_lock(&zv->zv_mrange_lock,	\
-		    metablk.m_offset, zv->zv_volmetadatasize, 	\
+		    metablk.m_offset, metablk.m_len,		\
 		    RL_WRITER);					\
 		dmu_write(zv->zv_objset, ZVOL_META_OBJ,		\
-		    metablk.m_offset, zv->zv_volmetadatasize,	\
-		    metadata, tx);				\
+		    metablk.m_offset, metablk.m_len,		\
+		    mdata, tx);					\
 		zfs_range_unlock(mrl);				\
 	} while (0)
 
@@ -69,6 +69,7 @@ uzfs_write_data(zvol_state_t *zv, char *buf, uint64_t offset, uint64_t len,
 	uint64_t wrote = 0;
 	objset_t *os = zv->zv_objset;
 	rl_t *rl;
+	uint64_t mlen = 0;
 	int ret = 0, error;
 	metaobj_blk_offset_t metablk;
 	uint64_t metadatasize = zv->zv_volmetadatasize;
@@ -76,12 +77,24 @@ uzfs_write_data(zvol_state_t *zv, char *buf, uint64_t offset, uint64_t len,
 	uint32_t count = 0;
 	list_t *chunk_io = NULL;
 	uint64_t orig_offset = offset;
+	char *mdata = NULL, *tmdata = NULL, *tmdataend = NULL;
 
 	sync = (dmu_objset_syncprop(os) == ZFS_SYNC_ALWAYS) ? 1 : 0;
 	if (zv->zv_volmetablocksize == 0)
 		metadata = NULL;
 
-	CHECK_FIRST_ALIGNED_BLOCK(len_in_first_aligned_block, offset,
+	if (metadata != NULL) {
+		mlen = get_metadata_len(zv, offset, len);
+		VERIFY((mlen % metadatasize) == 0);
+		tmdata = mdata = kmem_alloc(mlen, KM_SLEEP);
+		tmdataend = mdata + mlen;
+		while (tmdata < tmdataend) {
+			memcpy(tmdata, metadata, metadatasize);
+			tmdata += metadatasize;
+		}
+	}
+
+	CHECK_FIRST_ALIGNED_BLOCK(len_in_first_aligned_block, offset, len,
 	    blocksize);
 
 	rl = zfs_range_lock(&zv->zv_range_lock, offset, len, RL_WRITER);
@@ -99,7 +112,7 @@ chunk_io:
 			GET_NEXT_CHUNK(chunk_io, offset, len, end);
 			wrote = offset - orig_offset;
 			CHECK_FIRST_ALIGNED_BLOCK(
-			    len_in_first_aligned_block, offset,
+			    len_in_first_aligned_block, offset, len,
 			    blocksize);
 
 			zv->rebuild_data.rebuild_bytes += len;
@@ -125,10 +138,10 @@ chunk_io:
 
 		if (metadata != NULL) {
 			/* This assumes metavolblocksize same as volblocksize */
-			get_metaobj_block_details(&metablk, zv, offset);
+			get_metaobj_block_details(&metablk, zv, offset, bytes);
 
 			dmu_tx_hold_write(tx, ZVOL_META_OBJ, metablk.m_offset,
-			    metadatasize);
+			    metablk.m_len);
 		}
 
 		error = dmu_tx_assign(tx, TXG_WAIT);
@@ -140,7 +153,7 @@ chunk_io:
 		dmu_write(os, ZVOL_OBJ, offset, bytes, buf + wrote, tx);
 
 		if (metadata)
-			WRITE_METADATA(zv, metablk, metadata, tx);
+			WRITE_METADATA(zv, metablk, mdata, tx);
 
 		zvol_log_write(zv, tx, offset, bytes, sync, metadata);
 
@@ -166,6 +179,9 @@ exit_with_error:
 	if (sync)
 		zil_commit(zv->zv_zilog, ZVOL_OBJ);
 
+	if (mdata)
+		kmem_free(mdata, mlen);
+
 	return (ret);
 }
 
@@ -184,7 +200,6 @@ uzfs_read_data(zvol_state_t *zv, char *buf, uint64_t offset, uint64_t len,
 	rl_t *rl, *mrl;
 	int ret = 0;
 	uint64_t r_offset;
-	uint64_t metadatasize = zv->zv_volmetadatasize;
 	void *mdata = NULL;
 	uint64_t mread = 0;
 	uint64_t mlen = 0;
@@ -228,19 +243,19 @@ uzfs_read_data(zvol_state_t *zv, char *buf, uint64_t offset, uint64_t len,
 
 		if ((md != NULL) && (mdlen != NULL)) {
 			/* This assumes metavolblocksize same as volblocksize */
-			get_metaobj_block_details(&metablk, zv, offset);
+			get_metaobj_block_details(&metablk, zv, offset, bytes);
 
 			mrl = zfs_range_lock(&zv->zv_mrange_lock,
-			    metablk.m_offset, metadatasize, RL_READER);
+			    metablk.m_offset, metablk.m_len, RL_READER);
 			error = dmu_read(os, ZVOL_META_OBJ, metablk.m_offset,
-			    metadatasize, mdata + mread, 0);
+			    metablk.m_len, mdata + mread, 0);
 			if (error) {
 				zfs_range_unlock(mrl);
 				ret = UZFS_IO_MREAD_FAIL;
 				goto exit_with_error;
 			}
 			zfs_range_unlock(mrl);
-			mread += metadatasize;
+			mread += metablk.m_len;
 		}
 		offset += bytes;
 		read += bytes;
