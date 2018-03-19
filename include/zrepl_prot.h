@@ -60,8 +60,7 @@ typedef struct zvol_io_hdr_s {
 	uint64_t	io_seq;
 	uint64_t	offset;
 	uint64_t	len;
-	// XXX (void *) must be removed from over-the-wire data
-	void		*q_ptr;
+	uint8_t 	flags;
 	zvol_op_status_t status;
 } zvol_io_hdr_t;
 

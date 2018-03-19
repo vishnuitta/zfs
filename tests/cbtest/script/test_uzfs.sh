@@ -632,6 +632,40 @@ setup_uzfs_test()
 	return 0
 }
 
+run_zrepl_uzfs_test()
+{
+	$TGT &
+	TGT_PID2=$!
+	sleep 10
+
+	log_must truncate -s 2G "$TMPDIR/uztest.1a"
+	log_must truncate -s 2G "$TMPDIR/uztest.log"
+
+	export_pool $UZFS_TEST_POOL
+
+	if [ "$1" == "log" ]; then
+		log_must $ZPOOL create -f $UZFS_TEST_POOL "$TMPDIR/uztest.1a" \
+		    log "$TMPDIR/uztest.log"
+	else
+		log_must $ZPOOL create -f $UZFS_TEST_POOL "$TMPDIR/uztest.1a"
+	fi
+
+	log_must $ZFS create -V $UZFS_TEST_VOLSIZE \
+	    $UZFS_TEST_POOL/$UZFS_TEST_VOL -b $2
+
+	if [ "$3" == "sync" ]; then
+		log_must $ZFS set sync=always $UZFS_TEST_POOL/$UZFS_TEST_VOL
+	else
+		log_must $ZFS set sync=standard $UZFS_TEST_POOL/$UZFS_TEST_VOL
+	fi
+
+	log_must_not $UZFS_TEST
+	log_must $UZFS_TEST -T 5
+	sleep 20
+	log_must kill -SIGKILL $TGT_PID2
+	return 0
+}
+
 run_uzfs_test()
 {
 	log_must_not $UZFS_TEST
@@ -709,7 +743,8 @@ else
 fi
 
 close_test
-
+log_must run_zrepl_uzfs_test nolog 4096 nosync
+ 
 log_must run_uzfs_test
 
 log_must run_dmu_test

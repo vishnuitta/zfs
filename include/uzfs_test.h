@@ -39,6 +39,7 @@ extern uint64_t block_size;
 extern uint32_t create;
 extern char *pool;
 extern char *ds;
+extern int max_iops;
 
 extern unsigned long zfs_arc_max;
 extern unsigned long zfs_arc_min;
@@ -56,6 +57,8 @@ typedef struct worker_args {
 	int *threads_done;
 	uint64_t io_block_size;
 	uint64_t active_size;
+	int sfd;
+	int max_iops;
 } worker_args_t;
 
 typedef struct uzfs_test_info {
@@ -67,4 +70,5 @@ void uzfs_zvol_zap_operation(void *arg);
 void unit_test_fn(void *arg);
 void uzfs_txg_diff_tree_test(void *arg);
 void uzfs_txg_diff_verifcation_test(void *arg);
+void zrepl_utest(void *arg);
 #endif
