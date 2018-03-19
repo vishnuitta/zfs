@@ -34,16 +34,30 @@ uzfs_write_data(zvol_state_t *zv, char *buf, uint64_t offset, uint64_t len,
 	uint64_t wrote = 0;
 	objset_t *os = zv->zv_objset;
 	rl_t *rl, *mrl;
+	uint64_t mlen = 0;
 	int ret = 0, error;
 	uint64_t r_offset, r_len;
 	uint64_t r_moffset, r_mlen;
 	metaobj_blk_offset_t metablk;
 	uint64_t metadatasize = zv->zv_volmetadatasize;
 	uint64_t len_in_first_aligned_block = 0;
+	char *mdata = NULL, *tmdata = NULL, *tmdataend = NULL;
 
 	sync = (dmu_objset_syncprop(os) == ZFS_SYNC_ALWAYS) ? 1 : 0;
 	if (zv->zv_volmetablocksize == 0)
 		metadata = NULL;
+
+	if (metadata != NULL) {
+		mlen = get_metadata_len(zv, offset, len);
+		VERIFY((mlen % metadatasize) == 0);
+		tmdata = mdata = kmem_alloc(mlen, KM_SLEEP);
+		tmdataend = mdata + mlen;
+		while (tmdata < tmdataend) {
+			memcpy(tmdata, metadata, metadatasize);
+			tmdata += metadatasize;
+		}
+	}
+
 	/*
 	 * Taking lock on entire block at ZFS layer.
 	 * Handling the case where readlen is smaller than blocksize.
@@ -76,12 +90,12 @@ uzfs_write_data(zvol_state_t *zv, char *buf, uint64_t offset, uint64_t len,
 
 		if (metadata != NULL) {
 			/* This assumes metavolblocksize same as volblocksize */
-			get_metaobj_block_details(&metablk, zv, offset);
+			get_metaobj_block_details(&metablk, zv, offset, bytes);
 
 			r_moffset = metablk.r_offset;
 			r_mlen = metablk.r_len;
 			dmu_tx_hold_write(tx, ZVOL_META_OBJ, metablk.m_offset,
-			    metadatasize);
+			    metablk.m_len);
 		}
 
 		error = dmu_tx_assign(tx, TXG_WAIT);
@@ -96,7 +110,7 @@ uzfs_write_data(zvol_state_t *zv, char *buf, uint64_t offset, uint64_t len,
 			mrl = zfs_range_lock(&zv->zv_mrange_lock, r_moffset,
 			    r_mlen, RL_WRITER);
 			dmu_write(os, ZVOL_META_OBJ, metablk.m_offset,
-			    metadatasize, metadata, tx);
+			    metablk.m_len, mdata, tx);
 			zfs_range_unlock(mrl);
 		}
 
@@ -113,6 +127,9 @@ exit_with_error:
 
 	if (sync)
 		zil_commit(zv->zv_zilog, ZVOL_OBJ);
+
+	if (mdata)
+		kmem_free(mdata, mlen);
 
 	return (ret);
 }
@@ -132,7 +149,6 @@ uzfs_read_data(zvol_state_t *zv, char *buf, uint64_t offset, uint64_t len,
 	rl_t *rl, *mrl;
 	int ret = 0;
 	uint64_t r_offset, r_len, r_moffset, r_mlen;
-	uint64_t metadatasize = zv->zv_volmetadatasize;
 	void *mdata = NULL;
 	uint64_t mread = 0;
 	uint64_t mlen = 0;
@@ -178,7 +194,7 @@ uzfs_read_data(zvol_state_t *zv, char *buf, uint64_t offset, uint64_t len,
 
 		if ((md != NULL) && (mdlen != NULL)) {
 			/* This assumes metavolblocksize same as volblocksize */
-			get_metaobj_block_details(&metablk, zv, offset);
+			get_metaobj_block_details(&metablk, zv, offset, bytes);
 
 			r_moffset = metablk.r_offset;
 			r_mlen = metablk.r_len;
@@ -186,14 +202,14 @@ uzfs_read_data(zvol_state_t *zv, char *buf, uint64_t offset, uint64_t len,
 			mrl = zfs_range_lock(&zv->zv_mrange_lock, r_moffset,
 			    r_mlen, RL_READER);
 			error = dmu_read(os, ZVOL_META_OBJ, metablk.m_offset,
-			    metadatasize, mdata + mread, 0);
+			    metablk.m_len, mdata + mread, 0);
 			if (error) {
 				zfs_range_unlock(mrl);
 				ret = UZFS_IO_MREAD_FAIL;
 				goto exit_with_error;
 			}
 			zfs_range_unlock(mrl);
-			mread += metadatasize;
+			mread += metablk.m_len;
 		}
 		offset += bytes;
 		read += bytes;
