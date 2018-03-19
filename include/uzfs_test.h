@@ -55,6 +55,7 @@ typedef struct worker_args {
 	void *zv;
 	kmutex_t *mtx;
 	kcondvar_t *cv;
+	uint64_t *total_ios;
 	int *threads_done;
 	uint64_t io_block_size;
 	uint64_t active_size;
