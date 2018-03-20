@@ -118,20 +118,18 @@ reader_thread(void *arg)
 		}
 		count = read(sfd, (void *)hdr, sizeof (zvol_io_hdr_t));
 		if (count == -1) {
-			printf("Read error\n");
+			printf("Read error reader_thread\n");
 			break;
 		}
 
 		if (hdr->opcode == ZVOL_OPCODE_WRITE) {
 			write_ack_cnt++;
-			printf("write ack count %d\n", write_ack_cnt);
 			bzero(hdr, sizeof (zvol_io_hdr_t));
 			continue;
 		}
 
 		if (hdr->opcode == ZVOL_OPCODE_READ) {
 			read_ack_cnt++;
-			printf("Read ack count %d\n", read_ack_cnt);
 
 			int nbytes = hdr->len;
 			char *p = buf;
@@ -139,7 +137,8 @@ reader_thread(void *arg)
 				count = read(sfd, (void *)p, nbytes);
 				if (count == -1) {
 					printf("\n");
-					printf("Read error\n");
+					printf("Read error in reader_thread "
+					    "reading data\n");
 				}
 				p += count;
 				nbytes -= count;
@@ -155,6 +154,8 @@ reader_thread(void *arg)
 		bzero(buf, warg->io_block_size);
 	}
 
+	printf("Total iops requested:%d writes:%d total reads: %d\n",
+	    warg->max_iops, write_ack_cnt, read_ack_cnt);
 	free(hdr);
 	free(buf);
 	mutex_enter(mtx);
@@ -195,7 +196,6 @@ writer_thread(void *arg)
 		printf("Sending HDR failed\n");
 		goto exit;
 	}
-	printf("Sending HDR is passed\n");
 
 	count = write(sfd, (void *)(io->buf), io->hdr.len);
 	if (count == -1) {
@@ -203,7 +203,6 @@ writer_thread(void *arg)
 		goto exit;
 	}
 
-	printf("Sending volname is passed\n");
 	bzero(io, sizeof (struct data_io));
 	populate(io->buf, warg->io_block_size);
 
@@ -232,7 +231,6 @@ writer_thread(void *arg)
 		i++;
 	}
 
-	printf("Start reading ........\n");
 	/* Read and validate data */
 	i = 0;
 	nbytes = 0;

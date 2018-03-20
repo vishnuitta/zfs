@@ -190,7 +190,6 @@ uzfs_zvol_socket_read(int fd, char *buf, uint64_t nbytes)
 {
 	uint64_t count = 0;
 	char *p = buf;
-	ZREPL_ERRLOG("Trying to read nbytes: %lu\n", nbytes);
 	while (nbytes) {
 		count = read(fd, (void *)p, nbytes);
 		if ((count <= 0) && (errno == EAGAIN)) {
@@ -200,11 +199,9 @@ uzfs_zvol_socket_read(int fd, char *buf, uint64_t nbytes)
 			return (-1);
 		}
 
-		ZREPL_ERRLOG("In read count:%lu nbytes: %lu\n", count, nbytes);
 		p += count;
 		nbytes -= count;
 	}
-	ZREPL_LOG("Successful read count:%lu nbytes: %lu\n", count, nbytes);
 	return (1);
 }
 
@@ -272,10 +269,6 @@ uzfs_zvol_worker(void *arg)
 		ZREPL_ERRLOG("Zvol op_code :%d failed with "
 		    "error: %d\n", hdr->opcode, errno);
 		hdr->status = ZVOL_OP_STATUS_FAILED;
-	} else {
-		ZREPL_LOG("Zvol io_seq:%ld op_code :%d passed\n",
-		    hdr->io_seq, hdr->opcode);
-		hdr->status = ZVOL_OP_STATUS_OK;
 	}
 
 	(void) pthread_mutex_lock(&zinfo->complete_queue_mutex);
@@ -319,9 +312,6 @@ uzfs_zvol_io_receiver(void *arg)
 			goto exit;
 		}
 
-		printf("op_code=%d io_seq=%ld offset=%ld len=%ld\n", hdr.opcode,
-		    hdr.io_seq, hdr.offset, hdr.len);
-
 		ASSERT((hdr.opcode == ZVOL_OPCODE_WRITE) ||
 		    (hdr.opcode == ZVOL_OPCODE_READ) ||
 		    (hdr.opcode == ZVOL_OPCODE_HANDSHAKE) ||
@@ -349,7 +339,6 @@ uzfs_zvol_io_receiver(void *arg)
 			}
 		}
 
-		ZREPL_LOG("Count:%d Size: %ld\n", count, hdr.len);
 		if (hdr.opcode == ZVOL_OPCODE_HANDSHAKE) {
 			zinfo = uzfs_zinfo_lookup(zio_cmd->buf);
 			zio_cmd_free(&zio_cmd);
@@ -386,8 +375,6 @@ uzfs_zvol_io_receiver(void *arg)
 			(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
 			continue;
 		}
-		// printf("Enqueuing op_code=%d io_seq=%ld offset=%ld\n",
-		//    hdr.opcode, hdr.io_seq, hdr.offset);
 
 		/* Take refcount for uzfs_zvol_worker to work on it */
 		uzfs_zinfo_take_refcnt(zinfo, false);
@@ -830,8 +817,6 @@ uzfs_zvol_io_ack_sender(void *arg)
 				/* Send handsake ack */
 				break;
 			case ZVOL_OPCODE_READ:
-				printf("ACK for op:%d with seq-id %ld\n",
-				    zio_cmd->hdr.opcode, zio_cmd->hdr.io_seq);
 				/* Send data read from disk */
 				rc = uzfs_zvol_socket_write(zio_cmd->conn,
 				    zio_cmd->buf,

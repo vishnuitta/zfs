@@ -634,12 +634,12 @@ setup_uzfs_test()
 
 run_zrepl_uzfs_test()
 {
-	$TGT &
-	TGT_PID2=$!
-	sleep 10
-
 	log_must truncate -s 2G "$TMPDIR/uztest.1a"
 	log_must truncate -s 2G "$TMPDIR/uztest.log"
+
+	$TGT >/dev/null &
+	TGT_PID2=$!
+	sleep 10 
 
 	export_pool $UZFS_TEST_POOL
 
@@ -659,10 +659,14 @@ run_zrepl_uzfs_test()
 		log_must $ZFS set sync=standard $UZFS_TEST_POOL/$UZFS_TEST_VOL
 	fi
 
+
 	log_must_not $UZFS_TEST
 	log_must $UZFS_TEST -T 5
-	sleep 20
+	sleep 5
 	log_must kill -SIGKILL $TGT_PID2
+
+	log_must rm "$TMPDIR/uztest.1a"
+	log_must rm "$TMPDIR/uztest.log"
 	return 0
 }
 
