@@ -158,7 +158,6 @@ TEST_F(ZreplTest, HandshakeOk) {
 	TestZvol zvol("handshake");
 
 	connect();
-	sleep(5);
 	zvol.create();
 
 	hdr_out.version = REPLICA_VERSION;
@@ -189,6 +188,7 @@ TEST_F(ZreplTest, HandshakeOk) {
 TEST_F(ZreplTest, HandshakeWrongVersion) {
 	zvol_io_hdr_t hdr_out, hdr_in;
 	int rc;
+	char *msg;
 	mgmt_ack_t mgmt_ack;
 	TestZvol zvol("handshake");
 
@@ -201,10 +201,16 @@ TEST_F(ZreplTest, HandshakeWrongVersion) {
 	hdr_out.offset = 0;
 	hdr_out.len = zvol.name.length() + 1;
 
-	rc = write(m_fd, &hdr_out, sizeof (hdr_out));
-	ASSERT_EQ(rc, sizeof (hdr_out));
-	rc = write(m_fd, zvol.name.c_str(), hdr_out.len);
-	ASSERT_EQ(rc, hdr_out.len);
+	/*
+	 * It must be set in one chunk so that server does not close the
+	 * connection after sending header but before sending zvol name.
+	 */
+	msg = (char *)malloc(sizeof (hdr_out) + hdr_out.len);
+	memcpy(msg, &hdr_out, sizeof (hdr_out));
+	memcpy(msg + sizeof (hdr_out), zvol.name.c_str(), hdr_out.len);
+	rc = write(m_fd, msg, sizeof (hdr_out) + hdr_out.len);
+	ASSERT_EQ(rc, sizeof (hdr_out) + hdr_out.len);
+	free(msg);
 
 	rc = read(m_fd, &hdr_in, sizeof (hdr_in));
 	ASSERT_EQ(rc, sizeof (hdr_in));
