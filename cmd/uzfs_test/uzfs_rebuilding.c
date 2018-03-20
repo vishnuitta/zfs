@@ -127,14 +127,12 @@ replica_reader_thread(void *arg)
 		if ((offset + len) > end)
 			len = end - offset;
 
-		err = uzfs_read_data(zvol1, buf1[idx], offset,
-		    len, NULL, NULL);
+		err = uzfs_read_data(zvol1, buf1[idx], offset, len, NULL);
 		if (err != 0)
 			printf("IO error at offset: %lu len: %lu\n", offset,
 			    len);
 
-		err = uzfs_read_data(zvol2, buf2[idx], offset,
-		    len, NULL, NULL);
+		err = uzfs_read_data(zvol2, buf2[idx], offset, len, NULL);
 		if (err != 0)
 			printf("IO error at offset: %lu len: %lu\n", offset,
 			    len);
@@ -182,8 +180,7 @@ uzfs_test_txg_diff_traverse_cb(off_t offset, size_t len,
 	io->len = len;
 	io->buf = umem_alloc(len, UMEM_NOFAIL);
 
-	err = uzfs_read_data(r_data->zvol, io->buf, offset, len,
-	    NULL, NULL);
+	err = uzfs_read_data(r_data->zvol, io->buf, offset, len, NULL);
 
 	if (err) {
 		umem_free(io, sizeof (*io));
