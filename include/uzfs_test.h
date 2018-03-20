@@ -62,6 +62,7 @@ typedef struct worker_args {
 	uint64_t active_size;
 	int sfd;
 	int max_iops;
+	uint64_t io_num;
 } worker_args_t;
 
 typedef struct uzfs_test_info {

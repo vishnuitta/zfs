@@ -101,6 +101,37 @@ verify_data(char *buf, uint64_t offset, int idx, uint64_t block_size)
 }
 
 void
+verify_vol_data(void *zv, uint64_t block_size, uint64_t vol_size)
+{
+	uint64_t len, mlen, i, j;
+	char *buf;
+	uint64_t *io_num;
+
+	buf = kmem_alloc(block_size, KM_SLEEP);
+	len = block_size;
+	for (i=0; i<vol_size; i+=len) {
+		len = block_size;
+		if (len > (vol_size - i))
+			len = vol_size - i;
+		if (iodata[i/block_size] == 0)
+			continue;
+		uzfs_read_data(zv, buf, i, len, &io_num, &mlen);
+		for (j=0; j<len; j++)
+			if (data[i+j] != buf[j]) {
+				printf("verify error at %lu\n", (i+j));
+				exit(1);
+			}
+		for (j=0; j < mlen/8; j++)
+			if (iodata[i/block_size] != io_num[j]) {
+				printf("verify merror at %lu %lu %lu %lu\n", i/block_size, j, io_num[j], iodata[i/block_size]);
+				exit(1);
+			}
+		if (mlen != 0)
+			kmem_free(io_num, mlen);
+	}
+}
+
+void
 reader_thread(void *arg)
 {
 	worker_args_t *warg = (worker_args_t *)arg;
@@ -208,9 +239,10 @@ writer_thread(void *arg)
 	uint64_t *total_ios = warg->total_ios;
 	uint64_t vol_size = warg->active_size;
 	uint64_t block_size = warg->io_block_size;
-	static uint64_t io_num = 0;
+	uint64_t io_num = warg->io_num;
 	rl_t *rl;
 
+	i = 0;
 	for (j = 0; j < 15; j++)
 		buf[j] = (char *)umem_alloc(sizeof (char)*(j+1)*block_size,
 		    UMEM_NOFAIL);
@@ -242,9 +274,10 @@ writer_thread(void *arg)
 			    (idx + 1) * block_size);
 
 		memcpy(&data[offset], buf[idx], (idx + 1)*block_size);
-		for (i=0; i<(idx+1); i++)
+		for (i=0; i<(idx+1); i++) {
 			iodata[blk_offset+i] = io_num;
-
+//			printf("%lu: %lu\n", io_num, blk_offset + i);
+		}
 		zfs_range_unlock(rl);
 		ios += (idx + 1);
 		now = gethrtime();
@@ -526,7 +559,7 @@ static void process_options(int argc, char **argv)
 
 	data = kmem_zalloc(vol_size, KM_SLEEP);
 	vol_blocks = (vol_size) / io_block_size;
-	iodata = kmem_zalloc(vol_blocks, KM_SLEEP);
+	iodata = kmem_zalloc(vol_blocks*sizeof(uint64_t), KM_SLEEP);
 
 	if (silent == 0) {
 		printf("vol size: %lu active size: %lu create: %d\n", vol_size,
@@ -618,6 +651,7 @@ unit_test_fn(void *arg)
 		writer_args[i].cv = &cv;
 		writer_args[i].io_block_size = io_block_size;
 		writer_args[i].active_size = active_size;
+		writer_args[i].io_num = (i << 20);
 
 		writer[i] = zk_thread_create(NULL, 0,
 		    (thread_func_t)writer_thread, &writer_args[i], 0, NULL,
@@ -629,6 +663,8 @@ unit_test_fn(void *arg)
 	while (threads_done != num_threads)
 		cv_wait(&cv, &mtx);
 	mutex_exit(&mtx);
+
+	verify_vol_data(zv, io_block_size, active_size);
 
 	if (silent == 0)
 		printf("Total write IOs: %lu\n", total_ios);
