@@ -219,53 +219,71 @@ ret:
 }
 
 /*
- * callback when a zvol objset is created
+ * Create zvol meta object and related entries in zvol zap object.
+ */
+int
+uzfs_zvol_create_meta(objset_t *os, uint64_t block_size,
+    uint64_t meta_block_size, uint64_t meta_vol_block_size, dmu_tx_t *tx)
+{
+	uint64_t metadatasize;
+	int error;
+
+	if (meta_block_size > block_size)
+		meta_block_size = block_size;
+	error = dmu_object_claim(os, ZVOL_META_OBJ, DMU_OT_ZVOL,
+	    meta_block_size, DMU_OT_NONE, 0, tx);
+	if (error != 0)
+		return (error);
+
+	metadatasize = sizeof (blk_metadata_t);
+	error = zap_update(os, ZVOL_ZAP_OBJ, "metadatasize", 8, 1,
+	    &metadatasize, tx);
+	if (error != 0)
+		return (error);
+
+	if (meta_vol_block_size > block_size)
+		meta_vol_block_size = block_size;
+	error = zap_update(os, ZVOL_ZAP_OBJ, "metavolblocksize", 8, 1,
+	    &meta_vol_block_size, tx);
+	if (error != 0)
+		return (error);
+
+	return (0);
+}
+
+/*
+ * callback when a zvol objset is created.
+ * Create the objects common to all uzfs datasets.
  * Any error here will bring down the process
+ *
+ * XXX this function duplicates the code from zvol_create_cb()
  */
 void
 uzfs_objset_create_cb(objset_t *new_os, void *arg, cred_t *cr, dmu_tx_t *tx)
 {
-	/*
-	 * Create the objects common to all uzfs datasets.
-	 */
-	uint64_t error, metablocksize, metadatasize, metavolblocksize;
-
-	zvol_properties_t *properties = (zvol_properties_t *)arg;
+	zvol_properties_t *props = (zvol_properties_t *)arg;
+	int error;
 
 	error = dmu_object_claim(new_os, ZVOL_OBJ, DMU_OT_ZVOL,
-	    properties->block_size, DMU_OT_NONE, 0, tx);
+	    props->block_size, DMU_OT_NONE, 0, tx);
 	VERIFY(error == 0);
 
 	error = zap_create_claim(new_os, ZVOL_ZAP_OBJ, DMU_OT_ZVOL_PROP,
 	    DMU_OT_NONE, 0, tx);
 	VERIFY(error == 0);
 
-	metablocksize = (properties->meta_block_size < properties->block_size) ?
-	    (properties->meta_block_size) : (properties->block_size);
-	error = dmu_object_claim(new_os, ZVOL_META_OBJ, DMU_OT_ZVOL,
-	    metablocksize, DMU_OT_NONE, 0, tx);
-	VERIFY(error == 0);
-
 	error = zap_update(new_os, ZVOL_ZAP_OBJ, "size", 8, 1,
-	    &properties->vol_size, tx);
+	    &props->vol_size, tx);
 	VERIFY(error == 0);
 
-	metadatasize = sizeof (blk_metadata_t);
-	error = zap_update(new_os, ZVOL_ZAP_OBJ, "metadatasize", 8, 1,
-	    &metadatasize, tx);
-	VERIFY(error == 0);
-
-	metavolblocksize = (properties->meta_vol_block_size <
-	    properties->block_size) ? (properties->meta_vol_block_size) :
-	    (properties->block_size);
-	error = zap_update(new_os, ZVOL_ZAP_OBJ, "metavolblocksize", 8, 1,
-	    &metavolblocksize, tx);
+	error = uzfs_zvol_create_meta(new_os, props->block_size,
+	    props->meta_block_size, props->meta_vol_block_size, tx);
 	VERIFY(error == 0);
 }
 
 
-/* owns objset with name 'ds_name' in pool 'spa'. Sets 'sync' property */
-int
+/* owns objset with name 'ds_name' in pool 'spa' */
+static int
 uzfs_open_dataset_init(const char *ds_name, zvol_state_t **z)
 {
 	zvol_state_t *zv = NULL;
@@ -278,8 +296,10 @@ uzfs_open_dataset_init(const char *ds_name, zvol_state_t **z)
 	spa_t *spa = NULL;
 
 	zv = kmem_zalloc(sizeof (zvol_state_t), KM_SLEEP);
-	if (zv == NULL)
+	if (zv == NULL) {
+		error = ENOMEM;
 		goto ret;
+	}
 
 	error = spa_open(ds_name, &spa, zv);
 	if (error != 0) {
@@ -309,23 +329,24 @@ uzfs_open_dataset_init(const char *ds_name, zvol_state_t **z)
 	if (error)
 		goto disown_free;
 
+	/* Meta-object may not exist if dataset wasn't created by uzfs */
 	error = dmu_object_info(os, ZVOL_META_OBJ, &doi);
+	if (error)
+		goto disown_free;
 
-	error |= zap_lookup(os, ZVOL_ZAP_OBJ, "metavolblocksize", 8, 1,
+	error = zap_lookup(os, ZVOL_ZAP_OBJ, "metavolblocksize", 8, 1,
 	    &meta_vol_block_size);
+	if (error)
+		goto disown_free;
 
-	error |= zap_lookup(os, ZVOL_ZAP_OBJ, "metadatasize", 8, 1,
+	error = zap_lookup(os, ZVOL_ZAP_OBJ, "metadatasize", 8, 1,
 	    &meta_data_size);
+	if (error)
+		goto disown_free;
 
-	if (error) {
-		zv->zv_volmetablocksize = 0;
-		zv->zv_volmetadatasize = 0;
-		zv->zv_metavolblocksize = 0;
-	} else {
-		zv->zv_volmetablocksize = doi.doi_data_block_size;
-		zv->zv_volmetadatasize = meta_data_size;
-		zv->zv_metavolblocksize = meta_vol_block_size;
-	}
+	zv->zv_volmetablocksize = doi.doi_data_block_size;
+	zv->zv_volmetadatasize = meta_data_size;
+	zv->zv_metavolblocksize = meta_vol_block_size;
 
 	error = dnode_hold(os, ZVOL_OBJ, zv, &zv->zv_dn);
 	if (error) {

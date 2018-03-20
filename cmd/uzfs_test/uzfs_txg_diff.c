@@ -174,6 +174,7 @@ uzfs_txg_diff_verifcation_test(void *arg)
 	int max_io, count, i = 0;
 	avl_tree_t *write_io_tree;
 	avl_index_t where;
+	blk_metadata_t md;
 	uzfs_zvol_blk_phy_t *blk_info, temp_blk_info;
 
 	setup_unit_test();
@@ -214,8 +215,9 @@ uzfs_txg_diff_verifcation_test(void *arg)
 
 			populate_data(buf, offset, 0, block_size);
 
+			md.io_num = io_num;
 			if (uzfs_write_data(zvol, buf, offset, uzfs_random(1) ?
-			    block_size : io_block_size, &io_num, B_FALSE))
+			    block_size : io_block_size, &md, B_FALSE))
 				printf("IO error at offset: %lu len: %lu\n",
 				    offset, block_size);
 
