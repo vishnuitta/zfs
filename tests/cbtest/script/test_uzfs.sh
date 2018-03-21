@@ -107,7 +107,6 @@ close_test()
 	if [ $TGT_PID -ne -1 ]; then
 		kill -SIGKILL $TGT_PID
 	fi
-
 	rm "$TMPDIR/test_disk1.img"
 	rm "$TMPDIR/test_disk2.img"
 	rm "$TMPDIR/test_disk3.img"
@@ -687,6 +686,16 @@ run_uzfs_test()
 {
 	log_must_not $UZFS_TEST
 
+	log_must $UZFS_TEST -t 30 -c -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -T 6
+	#log_must $UZFS_TEST -t 30 -c -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -s -T 6
+	log_must $UZFS_TEST -t 30 -c -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -l -T 6
+	#log_must $UZFS_TEST -t 30 -c -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -s -l -T 6
+
+	log_must $UZFS_TEST -t 30 -c -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -i 8192 -b 65536 -T 6
+	#log_must $UZFS_TEST -t 30 -c -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -s -i 8192 -b 65536 -T 6
+	log_must $UZFS_TEST -t 30 -c -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -l -i 8192 -b 65536 -T 6
+	#log_must $UZFS_TEST -t 30 -c -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -s -l -i 8192 -b 65536 -T 6
+
 	log_must truncate -s 2G "$TMPDIR/uztest.1a"
 	log_must truncate -s 2G "$TMPDIR/uztest.log"
 
@@ -701,7 +710,7 @@ run_uzfs_test()
 	log_must_not greater $ios1 $ios2
 
 	log_must setup_uzfs_test nolog 4096 standard
-	log_must $UZFS_TEST -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -T 2
+	log_must $UZFS_TEST -t 30 -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -T 2
 
 
 	log_must setup_uzfs_test log 4096 disabled
@@ -715,7 +724,7 @@ run_uzfs_test()
 	log_must_not greater $ios1 $ios2
 
 	log_must setup_uzfs_test log 4096 standard
-	log_must $UZFS_TEST -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -l -T 2
+	log_must $UZFS_TEST -t 30 -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -l -T 2
 
 
 	log_must setup_uzfs_test nolog 65536 disabled
@@ -729,7 +738,7 @@ run_uzfs_test()
 	log_must_not greater $ios1 $ios2
 
 	log_must setup_uzfs_test nolog 65536 standard
-	log_must $UZFS_TEST -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -i 8192 -b 65536 -T 2
+	log_must $UZFS_TEST -t 30 -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -i 8192 -b 65536 -T 2
 
 
 	log_must setup_uzfs_test log 65536 disabled
@@ -743,7 +752,8 @@ run_uzfs_test()
 	log_must_not greater $ios1 $ios2
 
 	log_must setup_uzfs_test log 65536 standard
-	log_must $UZFS_TEST -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -l -i 8192 -b 65536 -T 2
+	log_must $UZFS_TEST -t 30 -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -l -i 8192 -b 65536 -T 2
+
 
 
 	K=1024
@@ -757,7 +767,7 @@ run_uzfs_test()
 
 	log_must $UZFS_TEST -t 10 -T 0 -n 10
 
-#	log_must . $UZFS_TEST_SYNC_SH
+	log_must . $UZFS_TEST_SYNC_SH
 
 	log_must rm "$TMPDIR/uztest.1a"
 	log_must rm "$TMPDIR/uztest.log"

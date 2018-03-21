@@ -43,6 +43,7 @@ int max_iops = 0;
 zfs_rlock_t zrl;
 char *data;
 uint64_t *iodata;
+uint64_t g_io_num = 10;
 
 void uzfs_test_get_metablk_details(void *arg);
 uzfs_test_info_t uzfs_tests[] = {
@@ -54,7 +55,9 @@ uzfs_test_info_t uzfs_tests[] = {
 	{ uzfs_txg_diff_tree_test, "txg_diff_tree functionality test" },
 	{ uzfs_rebuild_test, "uzfs rebuild pool test"},
 	{ zrepl_utest, "ZFS replication test" },
-	{ uzfs_test_get_metablk_details, "Tests offset,len of get_metablk" },
+	{ uzfs_test_get_metablk_details, "Tests offset,len calculations of"\
+	    " metadata for given data block" },
+	{ unit_test_fn, "zvol random read/write verification with metadata" },
 };
 
 uint64_t metaverify = 0;
@@ -100,35 +103,44 @@ verify_data(char *buf, uint64_t offset, int idx, uint64_t block_size)
 		exit(1);
 }
 
+/*
+ * Verifies data/metadata read from vol with in-memory copy
+ * block_size is size at which IOs are done
+ * vol_size is active dataset size
+ */
 void
 verify_vol_data(void *zv, uint64_t block_size, uint64_t vol_size)
 {
 	uint64_t len, mlen, i, j;
 	char *buf;
 	uint64_t *io_num;
+	uint64_t metadatasize = 8;
 
 	buf = kmem_alloc(block_size, KM_SLEEP);
 	len = block_size;
-	for (i=0; i<vol_size; i+=len) {
+	for (i = 0; i < vol_size; i += len) {
 		len = block_size;
 		if (len > (vol_size - i))
 			len = vol_size - i;
 		if (iodata[i/block_size] == 0)
 			continue;
 		uzfs_read_data(zv, buf, i, len, &io_num, &mlen);
-		for (j=0; j<len; j++)
+		for (j = 0; j < len; j++)
 			if (data[i+j] != buf[j]) {
 				printf("verify error at %lu\n", (i+j));
 				exit(1);
 			}
-		for (j=0; j < mlen/8; j++)
+		for (j = 0; j < mlen/(metadatasize); j++)
 			if (iodata[i/block_size] != io_num[j]) {
-				printf("verify merror at %lu %lu %lu %lu\n", i/block_size, j, io_num[j], iodata[i/block_size]);
+				printf("verify merror at %lu %lu %lu %lu\n",
+				    i/block_size, j, io_num[j],
+				    iodata[i/block_size]);
 				exit(1);
 			}
 		if (mlen != 0)
 			kmem_free(io_num, mlen);
 	}
+	printf("Data/metadata verification passed.\n");
 }
 
 void
@@ -239,8 +251,9 @@ writer_thread(void *arg)
 	uint64_t *total_ios = warg->total_ios;
 	uint64_t vol_size = warg->active_size;
 	uint64_t block_size = warg->io_block_size;
-	uint64_t io_num = warg->io_num;
+	uint64_t io_num;
 	rl_t *rl;
+	uint64_t *p_io_num;
 
 	i = 0;
 	for (j = 0; j < 15; j++)
@@ -256,27 +269,40 @@ writer_thread(void *arg)
 		printf("Starting write..\n");
 
 	while (1) {
-		io_num++;
+		mutex_enter(mtx);
+		io_num = g_io_num++;
+		mutex_exit(mtx);
+
 		blk_offset = uzfs_random(vol_blocks - 16);
 		offset = blk_offset * block_size;
 
 		idx = uzfs_random(15);
 
-		//populate_data(buf[idx], offset, idx, block_size);
-		populate_random_data(buf[idx], offset, idx, block_size);
+		if (uzfs_test_id == 2)
+			populate_data(buf[idx], offset, idx, block_size);
+		else
+			populate_random_data(buf[idx], offset, idx, block_size);
 
-		rl = zfs_range_lock(&zrl, offset, (idx + 1)*block_size, RL_WRITER);
+		rl = zfs_range_lock(&zrl, offset, (idx + 1)*block_size,
+		    RL_WRITER);
 		/* randomness in io_num is to test VERSION_0 zil records */
+		p_io_num = &io_num;
+		if (uzfs_test_id == 2)
+			if (uzfs_random(2) == 0)
+				p_io_num = NULL;
+
 		err = uzfs_write_data(zv, buf[idx], offset,
-		    (idx + 1) * block_size, &io_num, B_FALSE);
+		    (idx + 1) * block_size, p_io_num, B_FALSE);
 		if (err != 0)
 			printf("WIO error at offset: %lu len: %lu\n", offset,
 			    (idx + 1) * block_size);
 
-		memcpy(&data[offset], buf[idx], (idx + 1)*block_size);
-		for (i=0; i<(idx+1); i++) {
-			iodata[blk_offset+i] = io_num;
-//			printf("%lu: %lu\n", io_num, blk_offset + i);
+		if (uzfs_test_id == 6) {
+			memcpy(&data[offset], buf[idx], (idx + 1)*block_size);
+			for (i = 0; i < (idx+1); i++) {
+				iodata[blk_offset+i] = io_num;
+//				printf("%lu: %lu\n", io_num, blk_offset + i);
+			}
 		}
 		zfs_range_unlock(rl);
 		ios += (idx + 1);
@@ -557,14 +583,17 @@ static void process_options(int argc, char **argv)
 	if (active_size > vol_size)
 		vol_size = active_size << 1;
 
-	data = kmem_zalloc(vol_size, KM_SLEEP);
-	vol_blocks = (vol_size) / io_block_size;
-	iodata = kmem_zalloc(vol_blocks*sizeof(uint64_t), KM_SLEEP);
+	if (uzfs_test_id == 6) {
+		data = kmem_zalloc(vol_size, KM_SLEEP);
+		vol_blocks = (vol_size) / io_block_size;
+		iodata = kmem_zalloc(vol_blocks*sizeof (uint64_t), KM_SLEEP);
+	}
 
 	if (silent == 0) {
 		printf("vol size: %lu active size: %lu create: %d\n", vol_size,
 		    active_size, create);
-		printf("pool: %s ds: %s\n", pool, ds);
+		printf("pool: %s ds: %s Test: %s\n", pool, ds,
+		    uzfs_tests[uzfs_test_id].name);
 		printf("block size: %lu io blksize: %lu\n", block_size,
 		    io_block_size);
 		printf("log: %d sync: %d silent: %d\n", log_device, sync_data,
@@ -630,19 +659,22 @@ unit_test_fn(void *arg)
 		zinfo = uzfs_zinfo_lookup(ds);
 		zv = zinfo->zv;
 	}
-/*
-	reader1_args.zv = zv;
-	reader1_args.threads_done = &threads_done;
-	reader1_args.total_ios = NULL;
-	reader1_args.mtx = &mtx;
-	reader1_args.cv = &cv;
-	reader1_args.io_block_size = io_block_size;
-	reader1_args.active_size = active_size;
 
-	reader1 = zk_thread_create(NULL, 0, (thread_func_t)reader_thread,
-	    &reader1_args, 0, NULL, TS_RUN, 0, PTHREAD_CREATE_DETACHED);
-	num_threads++;
-*/
+	if (uzfs_test_id == 2) {
+		reader1_args.zv = zv;
+		reader1_args.threads_done = &threads_done;
+		reader1_args.total_ios = NULL;
+		reader1_args.mtx = &mtx;
+		reader1_args.cv = &cv;
+		reader1_args.io_block_size = io_block_size;
+		reader1_args.active_size = active_size;
+
+		reader1 = zk_thread_create(NULL, 0,
+		    (thread_func_t)reader_thread, &reader1_args, 0, NULL,
+		    TS_RUN, 0, PTHREAD_CREATE_DETACHED);
+		num_threads++;
+	}
+
 	for (i = 0; i < 3; i++) {
 		writer_args[i].zv = zv;
 		writer_args[i].threads_done = &threads_done;
@@ -651,7 +683,6 @@ unit_test_fn(void *arg)
 		writer_args[i].cv = &cv;
 		writer_args[i].io_block_size = io_block_size;
 		writer_args[i].active_size = active_size;
-		writer_args[i].io_num = (i << 20);
 
 		writer[i] = zk_thread_create(NULL, 0,
 		    (thread_func_t)writer_thread, &writer_args[i], 0, NULL,
@@ -664,7 +695,8 @@ unit_test_fn(void *arg)
 		cv_wait(&cv, &mtx);
 	mutex_exit(&mtx);
 
-	verify_vol_data(zv, io_block_size, active_size);
+	if (uzfs_test_id == 6)
+		verify_vol_data(zv, io_block_size, active_size);
 
 	if (silent == 0)
 		printf("Total write IOs: %lu\n", total_ios);
@@ -684,34 +716,40 @@ unit_test_fn(void *arg)
 }
 
 void
-check_offset_len(uint64_t offset, uint64_t len, uint64_t blocksize, uint64_t exp_offset,
-    uint64_t exp_len) {
+check_offset_len(uint64_t offset, uint64_t len, uint64_t blocksize,
+    uint64_t exp_offset, uint64_t exp_len)
+{
 	uint64_t r_offset = P2ALIGN_TYPED(offset, blocksize, uint64_t);
-	uint64_t r_len = P2ALIGN_TYPED(((offset - r_offset) + len + blocksize - 1),
+	uint64_t r_len;
+
+	r_len = P2ALIGN_TYPED(((offset - r_offset) + len + blocksize - 1),
 	    blocksize, uint64_t);
 
 	if ((r_offset != exp_offset) || (r_len != exp_len)) {
-		printf("Error: %lu %lu %lu %lu %lu %lu %lu\n", offset, len, blocksize,
-		    exp_offset, exp_len, r_offset, r_len);
+		printf("Error: %lu %lu %lu %lu %lu %lu %lu\n", offset, len,
+		    blocksize, exp_offset, exp_len, r_offset, r_len);
 		exit(1);
 	}
 }
 
 void
-check_metaobj_block(uint64_t offset, uint64_t len, uint64_t blocksize, uint64_t metablocksize, uint64_t metadatasize, uint64_t exp_r_offset, uint64_t exp_r_len, uint64_t exp_m_offset, uint64_t exp_m_len)
+check_metaobj_block_details(uint64_t offset, uint64_t len,
+    uint64_t blocksize, uint64_t metablocksize, uint64_t metadatasize,
+    uint64_t exp_r_offset, uint64_t exp_r_len,
+    uint64_t exp_m_offset, uint64_t exp_m_len)
 {
-	uint64_t s_offset = (offset / blocksize) * metadatasize;
-	uint64_t e_offset = ((offset + len - 1) / blocksize) * metadatasize;
+	metaobj_blk_offset_t m;
 
-	uint64_t r_offset = P2ALIGN_TYPED(s_offset, metablocksize, uint64_t);
-	uint64_t r_len = P2ALIGN_TYPED(e_offset, metablocksize, uint64_t) - r_offset +
-	    metablocksize;
-	uint64_t m_offset = s_offset;
-	uint64_t m_len = (e_offset - s_offset + metadatasize);
+	get_metaobj_block_details(&m, blocksize, metablocksize, metadatasize,
+	    offset, len);
 
-	if ((r_offset != exp_r_offset) || (r_len != exp_r_len) || (m_offset != exp_m_offset) || (m_len != exp_m_len)) {
-		printf("Error: %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu\n", offset, len, blocksize,
-		    metablocksize, metadatasize, exp_r_offset, exp_r_len, exp_m_offset, exp_m_len, r_offset, r_len, m_offset, m_len);
+	if ((m.r_offset != exp_r_offset) || (m.r_len != exp_r_len) ||
+	    (m.m_offset != exp_m_offset) || (m.m_len != exp_m_len)) {
+		printf("Error: %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu"
+		    " %lu\n", offset, len, blocksize, metablocksize,
+		    metadatasize, exp_r_offset, exp_r_len, exp_m_offset,
+		    exp_m_len, m.r_offset, m.r_len, m.m_offset, m.m_len);
+		exit(1);
 	}
 }
 
@@ -728,9 +766,11 @@ uzfs_test_get_metablk_details(void *arg)
 	check_offset_len(15*1024, 18*1024, 16*1024, 0, 48*1024);
 	check_offset_len(31*1024, 18*1024, 16*1024, 16*1024, 48*1024);
 
-	check_metaobj_block(6*1024, 2*1024, 1024, 2*1024, 8, 0, 2*1024, 48, 16);
+	check_metaobj_block_details(6*1024, 2*1024, 1024, 2*1024, 8, 0, 2*1024,
+	    48, 16);
 	uint64_t start = 2*(2*1024/8)*1024;
-	check_metaobj_block(start-1024, 2*1024, 1024, 2*1024, 8, 2*1024, 4*1024, 4*1024-8, 16);
+	check_metaobj_block_details(start-1024, 2*1024, 1024, 2*1024, 8, 2*1024,
+	    4*1024, 4*1024-8, 16);
 
 	printf("Test passed\n");
 }

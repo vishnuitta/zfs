@@ -138,7 +138,8 @@ chunk_io:
 
 		if (metadata != NULL) {
 			/* This assumes metavolblocksize same as volblocksize */
-			get_metaobj_block_details(&metablk, zv, offset, bytes);
+			get_zv_metaobj_block_details(&metablk, zv, offset,
+			    bytes);
 
 			dmu_tx_hold_write(tx, ZVOL_META_OBJ, metablk.m_offset,
 			    metablk.m_len);
@@ -243,7 +244,8 @@ uzfs_read_data(zvol_state_t *zv, char *buf, uint64_t offset, uint64_t len,
 
 		if ((md != NULL) && (mdlen != NULL)) {
 			/* This assumes metavolblocksize same as volblocksize */
-			get_metaobj_block_details(&metablk, zv, offset, bytes);
+			get_zv_metaobj_block_details(&metablk, zv, offset,
+			    bytes);
 
 			mrl = zfs_range_lock(&zv->zv_mrange_lock,
 			    metablk.m_offset, metablk.m_len, RL_READER);

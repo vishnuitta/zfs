@@ -609,25 +609,38 @@ zvol_replay_truncate(zvol_state_t *zv, lr_truncate_t *lr, boolean_t byteswap)
 
 #if !defined(_KERNEL)
 /*
- * This function assumes length of data as one (meta vol) block size
+ * Finds m_offset, m_length in metadata for data at offset, len
+ * blocksize is granularity at which metadata is maintained
+ * metablocksize is metadata's blocksize
+ * metadatasize is the size of metadata of one block 'blocksize'
  */
 void
-get_metaobj_block_details(metaobj_blk_offset_t *m, zvol_state_t *zv,
-    uint64_t offset, uint64_t len)
+get_metaobj_block_details(metaobj_blk_offset_t *m, uint64_t blocksize,
+    uint64_t metablocksize, uint64_t metadatasize, uint64_t offset,
+    uint64_t len)
 {
-	uint64_t blocksize = zv->zv_metavolblocksize;
-	uint64_t metablocksize = zv->zv_volmetablocksize;
-	uint64_t metadatasize = zv->zv_volmetadatasize;
 	uint64_t s_offset, e_offset;
 
 	s_offset = (offset / blocksize) * metadatasize;
 	e_offset = ((offset + len - 1) / blocksize) * metadatasize;
 
 	m->r_offset = P2ALIGN_TYPED(s_offset, metablocksize, uint64_t);
-	m->r_len = P2ALIGN_TYPED(e_offset, metablocksize, uint64_t) - m->r_offset +
-	    metablocksize;
+	m->r_len = P2ALIGN_TYPED(e_offset, metablocksize, uint64_t) -
+	    m->r_offset + metablocksize;
 	m->m_offset = s_offset;
 	m->m_len = (e_offset - s_offset + metadatasize);
+}
+
+void
+get_zv_metaobj_block_details(metaobj_blk_offset_t *m, zvol_state_t *zv,
+    uint64_t offset, uint64_t len)
+{
+	uint64_t blocksize = zv->zv_metavolblocksize;
+	uint64_t metablocksize = zv->zv_volmetablocksize;
+	uint64_t metadatasize = zv->zv_volmetadatasize;
+
+	get_metaobj_block_details(m, blocksize, metablocksize,
+	    metadatasize, offset, len);
 }
 
 uint64_t
@@ -686,7 +699,7 @@ zvol_replay_write(zvol_state_t *zv, lr_write_t *lr, boolean_t byteswap)
 
 #if !defined(_KERNEL)
 	if (lr->lr_version == VERSION_1) {
-		get_metaobj_block_details(&metablk, zv, offset, length);
+		get_zv_metaobj_block_details(&metablk, zv, offset, length);
 		metadatasize = zv->zv_volmetadatasize;
 		tmdata = mdata = kmem_alloc(metablk.m_len, KM_SLEEP);
 		tmdataend = mdata + metablk.m_len;
@@ -706,7 +719,8 @@ zvol_replay_write(zvol_state_t *zv, lr_write_t *lr, boolean_t byteswap)
 		dmu_write(os, ZVOL_OBJ, offset, length, data, tx);
 #if !defined(_KERNEL)
 		if (lr->lr_version == VERSION_1) {
-			get_metaobj_block_details(&metablk, zv, offset, length);
+			get_zv_metaobj_block_details(&metablk, zv, offset,
+			    length);
 			dmu_write(os, ZVOL_META_OBJ, metablk.m_offset,
 			    metablk.m_len, mdata, tx);
 		}
