@@ -25,6 +25,7 @@ extern unsigned long zfs_arc_min;
 __thread char  tinfo[20] =  {0};
 
 static void uzfs_zvol_io_ack_sender(void *arg);
+static int get_controller_ip_address(char *buf, int len);
 
 static int
 create_and_bind(const char *port, int bind_needed)
@@ -186,13 +187,15 @@ zio_cmd_free(zvol_io_cmd_t **cmd)
 
 
 static int
-uzfs_zvol_socket_read(int fd, char *buf, uint64_t nbytes)
+uzfs_zvol_socket_read(int fd, char *buf, uint64_t nbytes, int flags)
 {
 	uint64_t count = 0;
 	char *p = buf;
 	while (nbytes) {
 		count = read(fd, (void *)p, nbytes);
-		if ((count <= 0) && (errno == EAGAIN)) {
+		if ((count <= 0) && (flags & O_NONBLOCK) &&
+		    ((errno == EAGAIN) || (errno == EWOULDBLOCK))) {
+			printf("EAGAIN ERROR\n");
 			continue;
 		} else if (count <= 0) {
 			printf("Read error\n");
@@ -202,7 +205,7 @@ uzfs_zvol_socket_read(int fd, char *buf, uint64_t nbytes)
 		p += count;
 		nbytes -= count;
 	}
-	return (1);
+	return (0);
 }
 
 
@@ -255,6 +258,7 @@ uzfs_zvol_worker(void *arg)
 			rc = uzfs_write_data(zinfo->zv,
 			    (char *)zio_cmd->buf,
 			    hdr->offset, hdr->len, NULL);
+			zinfo->ondisk_io_seq = zio_cmd->hdr.ondisk_io_seq;
 			break;
 
 		case ZVOL_OPCODE_SYNC:
@@ -296,11 +300,12 @@ uzfs_zvol_worker(void *arg)
  *              = 0 => ok
  */
 static int
-uzfs_zvol_read_header(int fd, zvol_io_hdr_t *hdr)
+uzfs_zvol_read_header(int fd, zvol_io_hdr_t *hdr, int flags)
 {
 	int rc;
 
-	rc = uzfs_zvol_socket_read(fd, (char *)hdr, sizeof (hdr->version));
+	rc = uzfs_zvol_socket_read(fd, (char *)hdr,
+	    sizeof (hdr->version), flags);
 	if (rc != 0) {
 		printf("error reading from socket: %d\n", errno);
 		return (-1);
@@ -311,7 +316,7 @@ uzfs_zvol_read_header(int fd, zvol_io_hdr_t *hdr)
 	}
 	rc = uzfs_zvol_socket_read(fd,
 	    ((char *)hdr) + sizeof (hdr->version),
-	    sizeof (*hdr) - sizeof (hdr->version));
+	    sizeof (*hdr) - sizeof (hdr->version), flags);
 	if (rc != 0) {
 		printf("error reading from socket: %d\n", errno);
 		return (-1);
@@ -342,7 +347,7 @@ uzfs_zvol_io_receiver(void *arg)
 		 * reading header
 		 */
 		if (zinfo == NULL) {
-			if (uzfs_zvol_read_header(fd, &hdr) != 0) {
+			if (uzfs_zvol_read_header(fd, &hdr, 0) != 0) {
 				printf("error reading header from socket\n");
 				goto exit;
 			}
@@ -352,7 +357,7 @@ uzfs_zvol_io_receiver(void *arg)
 			}
 		} else {
 			rc = uzfs_zvol_socket_read(fd, (char *)&hdr,
-			    sizeof (hdr));
+			    sizeof (hdr), 0);
 			if (rc != 0) {
 				printf("error reading from socket: %d\n",
 				    errno);
@@ -384,7 +389,7 @@ uzfs_zvol_io_receiver(void *arg)
 		if ((hdr.opcode == ZVOL_OPCODE_WRITE) ||
 		    (hdr.opcode == ZVOL_OPCODE_HANDSHAKE)) {
 			rc = uzfs_zvol_socket_read(fd, zio_cmd->buf,
-			    (sizeof (char) * hdr.len));
+			    (sizeof (char) * hdr.len), 0);
 			if (rc != 0) {
 				zio_cmd_free(&zio_cmd);
 				ZREPL_ERRLOG("Socket read failed with "
@@ -495,6 +500,8 @@ uzfs_zvol_mgmt_do_handshake(zvol_io_hdr_t *hdr, int sfd, char *name)
 		hdr->status = ZVOL_OP_STATUS_OK;
 		hdr->len = sizeof (mgmt_ack_t);
 	}
+
+	uzfs_zvol_get_last_committed_io_no(zinfo, &hdr->ondisk_io_seq);
 	if (zinfo != NULL)
 		uzfs_zinfo_drop_refcnt(zinfo, false);
 
@@ -513,6 +520,53 @@ uzfs_zvol_mgmt_do_handshake(zvol_io_hdr_t *hdr, int sfd, char *name)
 		rc = -1;
 	}
 	return (rc);
+}
+
+static int
+uzfs_zvol_connect_to_tgt_controller(void *arg)
+{
+	char ip_buf[256];
+	int sfd, rc;
+	struct sockaddr_in istgt_addr;
+	const char *target_addr = arg;
+
+	if (target_addr == NULL) {
+		if (get_controller_ip_address(ip_buf, sizeof (ip_buf)) != 0) {
+			printf("parsing IP address did not work\n");
+			return (-1);
+		}
+		target_addr = ip_buf;
+	}
+
+	printf("Controller IP address is: %s\n", target_addr);
+	sfd = create_and_bind(mgmt_port, false);
+	if (sfd == -1) {
+		return (-1);
+	}
+
+	rc = make_socket_non_blocking(sfd);
+	if (rc == -1) {
+		return (-1);
+	}
+
+	bzero((char *)&istgt_addr, sizeof (istgt_addr));
+	istgt_addr.sin_family = AF_INET;
+	istgt_addr.sin_addr.s_addr = inet_addr(target_addr);
+	istgt_addr.sin_port = htons(TARGET_PORT);
+retry:
+	rc = connect(sfd, (struct sockaddr *)&istgt_addr, sizeof (istgt_addr));
+	if ((rc == -1) && ((errno == EINTR) || (errno == ECONNREFUSED) ||
+	    (errno == ETIMEDOUT) || (errno == EINPROGRESS))) {
+		ZREPL_ERRLOG("Failed to connect to istgt_controller"
+		    " with err:%d\n", errno);
+		sleep(2);
+		printf("Retrying ....\n");
+		goto retry;
+	} else {
+		printf("Connection to TGT controller successful\n");
+		ZREPL_LOG("Connection to TGT controller iss successful\n");
+	}
+	return (sfd);
 }
 
 /*
@@ -548,114 +602,120 @@ get_controller_ip_address(char *buf, int len)
 static void
 uzfs_zvol_mgmt_thread(void *arg)
 {
-	const char *target_addr = arg;
-	char ip_buf[256];
-	int rc;
-	struct sockaddr_in istgt_addr;
-	zvol_io_hdr_t hdr = {0, };
-	char *buf;
-	int sfd = -1;
+	int			rc;
+	char			*buf;
+	int			sfd = -1;
+	int			efd = -1;
+	uint32_t		flags;
+	zvol_io_hdr_t		hdr = {0, };
+	struct epoll_event	event;
+	struct epoll_event	*events = NULL;
 
+	efd = epoll_create1(0);
+	if (efd == -1) {
+		ZREPL_ERRLOG("epoll_create() failed with errno:%d\n", errno);
+		goto exit;
+	}
 
-	sfd = create_and_bind(mgmt_port, false);
+	flags = EPOLLIN | EPOLLET | EPOLLERR | EPOLLHUP | EPOLLRDHUP;
+
+	sfd = uzfs_zvol_connect_to_tgt_controller(arg);
 	if (sfd == -1) {
 		goto exit;
 	}
 
-	if (target_addr == NULL) {
-		if (get_controller_ip_address(ip_buf, sizeof (ip_buf)) != 0) {
-			printf("parsing IP address did not work\n");
-			goto exit;
-		}
-		target_addr = ip_buf;
+	event.data.fd = sfd;
+	event.events = flags;
+	rc = epoll_ctl(efd, EPOLL_CTL_ADD, sfd, &event);
+	if (rc == -1) {
+		ZREPL_ERRLOG("epoll_ctl() failed with errno:%d\n", errno);
+		goto exit;
 	}
 
-	printf("Controller IP address is: %s\n", target_addr);
-	bzero((char *)&istgt_addr, sizeof (istgt_addr));
-	istgt_addr.sin_family = AF_INET;
-	istgt_addr.sin_addr.s_addr = inet_addr(target_addr);
-	istgt_addr.sin_port = htons(TARGET_PORT);
-retry:
-	rc = connect(sfd, (struct sockaddr *)&istgt_addr, sizeof (istgt_addr));
-	if ((rc == -1) && ((errno == EINTR) || (errno == ECONNREFUSED) ||
-	    (errno == ETIMEDOUT) || (errno == EINPROGRESS))) {
-		ZREPL_ERRLOG("Failed to connect to istgt_controller"
-		    " with err:%d\n", errno);
-		sleep(2);
-		printf("Retrying ....\n");
-		goto retry;
-	} else {
-		printf("Connection to TGT controller successful\n");
-		ZREPL_LOG("Connection to TGT controller iss successful\n");
-	}
+	/* Buffer where events are returned */
+	events = calloc(MAXEVENTS, sizeof (event));
 
 	while (1) {
-		rc = uzfs_zvol_read_header(sfd, &hdr);
-		if (rc < 0) {
-close_conn:
-			ZREPL_ERRLOG("Management connection disconnected\n");
-			/*
-			 * Error has occurred on this socket
-			 * close it and open a new socket after
-			 * 5 sec of sleep.
-			 */
-			close(sfd);
-			printf("Retrying ....\n");
-			sleep(5);
-			sfd = create_and_bind(mgmt_port, false);
-			if (sfd == -1)
-				goto exit;
-
-retry1:
-			rc = connect(sfd, (struct sockaddr *)&istgt_addr,
-			    sizeof (istgt_addr));
-			if ((rc == -1) && ((errno == EINTR) ||
-			    (errno == ECONNREFUSED) || (errno == ETIMEDOUT))) {
-				ZREPL_ERRLOG("Failed to connect to"
-				    " istgt_controller with err:%d\n",
-				    errno);
-				sleep(2);
-				goto retry1;
-			} else {
-				printf("Connection to TGT controller "
-				    "successful\n");
-				ZREPL_LOG("Connection to TGT controller"
-				    "is successful\n");
-			}
+		int i, n = 0;
+		n = epoll_wait(efd, events, MAXEVENTS, 1000);
+		if (n  == 0) {
+			printf("Event triggered by timer\n");
+			printf("Value of n is %d\n", n);
+			uzfs_zinfo_update_io_seq_for_all_volumes();
 			continue;
-		} else if (rc > 0) {
-			/* Send to target the correct version */
-			hdr.version = REPLICA_VERSION;
-			hdr.status = ZVOL_OP_STATUS_VERSION_MISMATCH;
-			hdr.opcode = ZVOL_OPCODE_HANDSHAKE;
-			hdr.len = 0;
-			(void) uzfs_zvol_socket_write(sfd, (char *)&hdr,
-			    sizeof (hdr));
-			goto close_conn;
 		}
 
-		buf = kmem_alloc(hdr.len * sizeof (char), KM_SLEEP);
-		rc = uzfs_zvol_socket_read(sfd, buf, hdr.len);
-		if (rc != 0)
-			goto close_conn;
-
-		switch (hdr.opcode) {
-		case ZVOL_OPCODE_HANDSHAKE:
-			rc = uzfs_zvol_mgmt_do_handshake(&hdr, sfd, buf);
-			if (rc != 0) {
-				ZREPL_ERRLOG("Handshake failed\n");
+		for (i = 0; i < n; i++) {
+			if ((events[i].events & EPOLLRDHUP) ||
+			    (events[i].events & EPOLLHUP) ||
+			    (events[i].events & EPOLLERR)) {
+				ZREPL_ERRLOG("epoll err() :%d\n", errno);
+close_conn:
+				close(events[i].data.fd);
+				sfd = uzfs_zvol_connect_to_tgt_controller(arg);
+				if (sfd == -1) {
+					goto exit;
+				}
+				event.data.fd = sfd;
+				event.events = flags;
+				rc = epoll_ctl(efd, EPOLL_CTL_ADD, sfd, &event);
+				if (rc == -1) {
+					ZREPL_ERRLOG("epoll_ctl() failed "
+					    "with errno:%d\n", errno);
+					goto exit;
+				}
+				continue;
 			}
-			break;
-		/* More management commands will come here in future */
-		default:
-			break;
-		}
 
-		free(buf);
+			rc = uzfs_zvol_read_header(events[i].data.fd,
+			    &hdr, O_NONBLOCK);
+			if (rc < 0) {
+				ZREPL_ERRLOG("Management connection "
+				    "disconnected\n");
+				/*
+				 * Error has occurred on this socket
+				 * close it and open a new socket after
+				 * 5 sec of sleep.
+				 */
+				goto close_conn;
+			} else if (rc > 0) {
+				/* Send to target the correct version */
+				hdr.version = REPLICA_VERSION;
+				hdr.status = ZVOL_OP_STATUS_VERSION_MISMATCH;
+				hdr.opcode = ZVOL_OPCODE_HANDSHAKE;
+				hdr.len = 0;
+				(void) uzfs_zvol_socket_write(events[i].data.fd,
+				    (char *)&hdr, sizeof (hdr));
+				goto close_conn;
+			}
+
+			buf = kmem_alloc(hdr.len * sizeof (char), KM_SLEEP);
+			rc = uzfs_zvol_socket_read(events[i].data.fd, buf,
+			    hdr.len, O_NONBLOCK);
+			if (rc != 0)
+				goto close_conn;
+
+			switch (hdr.opcode) {
+			case ZVOL_OPCODE_HANDSHAKE:
+				rc = uzfs_zvol_mgmt_do_handshake(&hdr,
+				    events[i].data.fd, buf);
+				if (rc != 0) {
+					ZREPL_ERRLOG("Handshake failed\n");
+				}
+				break;
+			/* More management commands will come here in future */
+			default:
+				break;
+			}
+			free(buf);
+		}
 	}
 exit:
 	if (sfd < 0)
 		close(sfd);
+
+	if (events != NULL)
+		free(events);
 	printf("uzfs_zvol_mgmt_thread thread exiting\n");
 	zk_thread_exit();
 }
