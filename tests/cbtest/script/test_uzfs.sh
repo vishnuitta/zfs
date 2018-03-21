@@ -34,7 +34,8 @@ TMPDIR="/tmp"
 VOLSIZE="1G"
 UZFS_TEST_POOL="testp"
 UZFS_TEST_VOL="ds0"
-UZFS_TEST_VOLSIZE="1G"
+UZFS_TEST_VOLSIZE="128M"
+UZFS_TEST_VOLSIZE_IN_NUM=134217728
 SRCPOOL="src_pool"
 SRCVOL="src_vol"
 DSTPOOL="dst_pool"
@@ -592,6 +593,10 @@ filename=$SRCPOOL/vol2
 EOF
 
 	# run the fio
+	echo "Running $FIO_SRCDIR/fio with lib path $SRC_PATH/lib/fio/.libs"
+	echo " and following configuration:"
+	cat $TMPDIR/test.fio
+	echo
 	LD_LIBRARY_PATH=$SRC_PATH/lib/fio/.libs $FIO_SRCDIR/fio $TMPDIR/test.fio
 	[ $? -eq 0 ] || log_fail "Fio test run failed"
 
@@ -623,11 +628,8 @@ setup_uzfs_test()
 	log_must $ZFS create -V $UZFS_TEST_VOLSIZE \
 	    $UZFS_TEST_POOL/$UZFS_TEST_VOL -b $2
 
-	if [ "$3" == "sync" ]; then
-		log_must $ZFS set sync=always $UZFS_TEST_POOL/$UZFS_TEST_VOL
-	else
-		log_must $ZFS set sync=standard $UZFS_TEST_POOL/$UZFS_TEST_VOL
-	fi
+	log_must $ZFS set sync=$3 $UZFS_TEST_POOL/$UZFS_TEST_VOL
+
 	log_must kill -SIGKILL $TGT_PID2
 	return 0
 }
@@ -670,6 +672,14 @@ run_zrepl_uzfs_test()
 	return 0
 }
 
+greater()
+{
+	if [ $1 -le $2 ]; then
+		return 0
+	fi
+	return 1
+}
+
 run_uzfs_test()
 {
 	log_must_not $UZFS_TEST
@@ -677,33 +687,66 @@ run_uzfs_test()
 	log_must truncate -s 2G "$TMPDIR/uztest.1a"
 	log_must truncate -s 2G "$TMPDIR/uztest.log"
 
-	log_must setup_uzfs_test nolog 4096 nosync
-	log_must $UZFS_TEST -T 2
+	log_must setup_uzfs_test nolog 4096 disabled
+	log_must $UZFS_TEST -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -T 2 > $TMPDIR/uzfs_test.out
+	ios1=$(cat /tmp/uzfs_test.out  | grep "Total write IOs" | awk '{print $4}')
 
-	log_must setup_uzfs_test nolog 4096 sync
-	log_must $UZFS_TEST -s -T 2
+	log_must setup_uzfs_test nolog 4096 always
+	log_must $UZFS_TEST -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -s -T 2 > $TMPDIR/uzfs_test.out
+	ios2=$(cat /tmp/uzfs_test.out  | grep "Total write IOs" | awk '{print $4}')
 
-	log_must setup_uzfs_test log 4096 nosync
-	log_must $UZFS_TEST -l -T 2
+	log_must_not greater $ios1 $ios2
 
-	log_must setup_uzfs_test log 4096 sync
-	log_must $UZFS_TEST -s -l -T 2
+	log_must setup_uzfs_test nolog 4096 standard
+	log_must $UZFS_TEST -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -T 2
 
-	log_must setup_uzfs_test nolog 65536 nosync
-	log_must $UZFS_TEST -i 8192 -b 65536 -T 2
 
-	log_must setup_uzfs_test nolog 65536 sync
-	log_must $UZFS_TEST -s -i 8192 -b 65536 -T 2
+	log_must setup_uzfs_test log 4096 disabled
+	log_must $UZFS_TEST -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -l -T 2 > $TMPDIR/uzfs_test.out
+	ios1=$(cat /tmp/uzfs_test.out  | grep "Total write IOs" | awk '{print $4}')
 
-	log_must setup_uzfs_test log 65536 nosync
-	log_must $UZFS_TEST -l -i 8192 -b 65536 -T 2
+	log_must setup_uzfs_test log 4096 always
+	log_must $UZFS_TEST -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -s -l -T 2 > $TMPDIR/uzfs_test.out
+	ios2=$(cat /tmp/uzfs_test.out  | grep "Total write IOs" | awk '{print $4}')
+
+	log_must_not greater $ios1 $ios2
+
+	log_must setup_uzfs_test log 4096 standard
+	log_must $UZFS_TEST -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -l -T 2
+
+
+	log_must setup_uzfs_test nolog 65536 disabled
+	log_must $UZFS_TEST -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -i 8192 -b 65536 -T 2 > $TMPDIR/uzfs_test.out
+	ios1=$(cat /tmp/uzfs_test.out  | grep "Total write IOs" | awk '{print $4}')
+
+	log_must setup_uzfs_test nolog 65536 always
+	log_must $UZFS_TEST -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -s -i 8192 -b 65536 -T 2 > $TMPDIR/uzfs_test.out
+	ios2=$(cat /tmp/uzfs_test.out  | grep "Total write IOs" | awk '{print $4}')
+
+	log_must_not greater $ios1 $ios2
+
+	log_must setup_uzfs_test nolog 65536 standard
+	log_must $UZFS_TEST -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -i 8192 -b 65536 -T 2
+
+
+	log_must setup_uzfs_test log 65536 disabled
+	log_must $UZFS_TEST -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -l -i 8192 -b 65536 -T 2 > $TMPDIR/uzfs_test.out
+	ios1=$(cat /tmp/uzfs_test.out  | grep "Total write IOs" | awk '{print $4}')
+
+	log_must setup_uzfs_test log 65536 always
+	log_must $UZFS_TEST -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -s -l -i 8192 -b 65536 -T 2 > $TMPDIR/uzfs_test.out
+	ios2=$(cat /tmp/uzfs_test.out  | grep "Total write IOs" | awk '{print $4}')
+
+	log_must_not greater $ios1 $ios2
+
+	log_must setup_uzfs_test log 65536 standard
+	log_must $UZFS_TEST -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -l -i 8192 -b 65536 -T 2
+
 
 	K=1024
 	M=$(( 1024 * 1024 ))
 	G=$(( 1024 * 1024 * 1024 ))
 
-	log_must setup_uzfs_test log 65536 sync
-	log_must $UZFS_TEST -s -l -i 8192 -b 65536 -T 2
 	log_must $UZFS_TEST -t 10 -a  $(( 50 * 1024 * 1024 )) -T 3 -n 10000
 	log_must $UZFS_TEST -t 10 -a  $(( 100 * 1024 * 1024 )) -T 3 -n 10000
 	log_must $UZFS_TEST -t 10 -a  $(( 1000 * 1024 * 1024 )) -T 3 -n 10000

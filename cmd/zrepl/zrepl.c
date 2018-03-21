@@ -288,6 +288,39 @@ uzfs_zvol_worker(void *arg)
 }
 
 /*
+ * Read header message from socket in safe manner, which is: first we read a
+ * version number and if valid then we read the rest of the message.
+ *
+ * Return value < 0 => error
+ *              > 0 => invalid version
+ *              = 0 => ok
+ */
+static int
+uzfs_zvol_read_header(int fd, zvol_io_hdr_t *hdr)
+{
+	int rc;
+
+	rc = uzfs_zvol_socket_read(fd, (char *)hdr, sizeof (hdr->version));
+	if (rc != 0) {
+		printf("error reading from socket: %d\n", errno);
+		return (-1);
+	}
+	if (hdr->version != REPLICA_VERSION) {
+		printf("invalid replica protocol version %d\n", hdr->version);
+		return (1);
+	}
+	rc = uzfs_zvol_socket_read(fd,
+	    ((char *)hdr) + sizeof (hdr->version),
+	    sizeof (*hdr) - sizeof (hdr->version));
+	if (rc != 0) {
+		printf("error reading from socket: %d\n", errno);
+		return (-1);
+	}
+
+	return (0);
+}
+
+/*
  * IO-Receiver would be per ZVOL, it would be
  * responsible for receiving IOs on given socket.
  */
@@ -299,17 +332,38 @@ uzfs_zvol_io_receiver(void *arg)
 	zvol_io_hdr_t	hdr;
 	thread_args_t	*thrd_arg;
 	zvol_io_cmd_t	*zio_cmd;
-	int 		count = 0;
 	kthread_t	*thrd_info;
 	fd = *(int *)arg;
 	free(arg);
 
 	while (1) {
-		count = uzfs_zvol_socket_read(fd, (char *)&hdr, sizeof (hdr));
-		if (count <= 0) {
-			printf("error has come on socket"
-			    " with error %d\n", errno);
-			goto exit;
+		/*
+		 * if we don't know the version yet, be more careful when
+		 * reading header
+		 */
+		if (zinfo == NULL) {
+			if (uzfs_zvol_read_header(fd, &hdr) != 0) {
+				printf("error reading header from socket\n");
+				goto exit;
+			}
+			if (hdr.opcode != ZVOL_OPCODE_HANDSHAKE) {
+				printf("Handshake yet to happen\n");
+				goto exit;
+			}
+		} else {
+			rc = uzfs_zvol_socket_read(fd, (char *)&hdr,
+			    sizeof (hdr));
+			if (rc != 0) {
+				printf("error reading from socket: %d\n",
+				    errno);
+				goto exit;
+			}
+			if (hdr.opcode != ZVOL_OPCODE_WRITE &&
+			    hdr.opcode != ZVOL_OPCODE_READ &&
+			    hdr.opcode != ZVOL_OPCODE_SYNC) {
+				printf("Unexpected opcode %d\n", hdr.opcode);
+				goto exit;
+			}
 		}
 
 		ASSERT((hdr.opcode == ZVOL_OPCODE_WRITE) ||
@@ -329,9 +383,9 @@ uzfs_zvol_io_receiver(void *arg)
 		zio_cmd = zio_cmd_alloc(&hdr, fd);
 		if ((hdr.opcode == ZVOL_OPCODE_WRITE) ||
 		    (hdr.opcode == ZVOL_OPCODE_HANDSHAKE)) {
-			count = uzfs_zvol_socket_read(fd, zio_cmd->buf,
+			rc = uzfs_zvol_socket_read(fd, zio_cmd->buf,
 			    (sizeof (char) * hdr.len));
-			if (count <= 0) {
+			if (rc != 0) {
 				zio_cmd_free(&zio_cmd);
 				ZREPL_ERRLOG("Socket read failed with "
 				    "error: %d\n", errno);
@@ -416,50 +470,48 @@ exit:
 static int
 uzfs_zvol_mgmt_do_handshake(zvol_io_hdr_t *hdr, int sfd, char *name)
 {
-	int 		count, rc = 0;
-	zvol_info_t 	*zinfo;
+	int 		rc;
+	zvol_info_t 	*zinfo = NULL;
 	mgmt_ack_t 	mgmt_ack;
-	char 		*packet = NULL;
-	char 		*p = NULL;
 
 	printf("Volume: %s sent for enq\n", name);
-	zinfo = uzfs_zinfo_lookup(name);
-	/*
-	 * XXX if anything in this function fails we should not send any
-	 * payload at all - just a header with failed status.
-	 */
-	if (zinfo == NULL) {
+
+	hdr->len = 0;
+	hdr->version = REPLICA_VERSION;
+	hdr->opcode = ZVOL_OPCODE_HANDSHAKE;
+
+	bzero(&mgmt_ack, sizeof (mgmt_ack));
+	strncpy(mgmt_ack.volname, name, sizeof (mgmt_ack.volname));
+	mgmt_ack.port = atoi(accpt_port);
+	rc = uzfs_zvol_get_ip(mgmt_ack.ip);
+
+	if (rc == -1) {
+		ZREPL_ERRLOG("Unable to get IP with err: %d\n", errno);
+		hdr->status = ZVOL_OP_STATUS_FAILED;
+	} else if ((zinfo = uzfs_zinfo_lookup(name)) == NULL) {
+		ZREPL_ERRLOG("Unknown zvol: %s\n", name);
 		hdr->status = ZVOL_OP_STATUS_FAILED;
 	} else {
 		hdr->status = ZVOL_OP_STATUS_OK;
+		hdr->len = sizeof (mgmt_ack_t);
 	}
-	hdr->len = sizeof (mgmt_ack_t);
-
-	bzero(&mgmt_ack, sizeof (mgmt_ack));
-	strncpy(mgmt_ack.volname, name, strlen(name));
-	mgmt_ack.port = atoi(accpt_port);
-	rc = uzfs_zvol_get_ip(mgmt_ack.ip);
-	if (rc == -1) {
-		hdr->status = ZVOL_OP_STATUS_FAILED;
-		ZREPL_ERRLOG("Unable to get IP"
-		    " with err:%d\n", errno);
-	}
-
-	packet = kmem_alloc((sizeof (mgmt_ack_t) + sizeof (*hdr)) *
-	    sizeof (char), KM_SLEEP);
-	bcopy(hdr, packet, sizeof (*hdr));
-	p = packet + sizeof (*hdr);
-	bcopy(&mgmt_ack, p, sizeof (mgmt_ack));
-	count = write(sfd, packet, (sizeof (*hdr) + sizeof (mgmt_ack_t)));
-	if (count == -1) {
-		ZREPL_ERRLOG("Write to socket failed"
-		    " with err:%d\n", errno);
-		rc = -1;
-	}
-	if (packet != NULL)
-		free(packet);
 	if (zinfo != NULL)
 		uzfs_zinfo_drop_refcnt(zinfo, false);
+
+	rc = uzfs_zvol_socket_write(sfd, (char *)hdr, sizeof (*hdr));
+	if (rc != 0) {
+		ZREPL_ERRLOG("Write to socket failed with err: %d\n", errno);
+		return (-1);
+	}
+	if (hdr->status != ZVOL_OP_STATUS_OK) {
+		return (-1);
+	}
+
+	rc = uzfs_zvol_socket_write(sfd, (char *)&mgmt_ack, sizeof (mgmt_ack));
+	if (rc != 0) {
+		ZREPL_ERRLOG("Write to socket failed with err: %d\n", errno);
+		rc = -1;
+	}
 	return (rc);
 }
 
@@ -497,11 +549,12 @@ static void
 uzfs_zvol_mgmt_thread(void *arg)
 {
 	const char *target_addr = arg;
-	char buf[256];
-	int sfd, rc, count;
+	char ip_buf[256];
+	int rc;
 	struct sockaddr_in istgt_addr;
 	zvol_io_hdr_t hdr = {0, };
-	char *name = NULL;
+	char *buf;
+	int sfd = -1;
 
 
 	sfd = create_and_bind(mgmt_port, false);
@@ -510,11 +563,11 @@ uzfs_zvol_mgmt_thread(void *arg)
 	}
 
 	if (target_addr == NULL) {
-		if (get_controller_ip_address(buf, sizeof (buf)) != 0) {
+		if (get_controller_ip_address(ip_buf, sizeof (ip_buf)) != 0) {
 			printf("parsing IP address did not work\n");
 			goto exit;
 		}
-		target_addr = buf;
+		target_addr = ip_buf;
 	}
 
 	printf("Controller IP address is: %s\n", target_addr);
@@ -537,11 +590,10 @@ retry:
 	}
 
 	while (1) {
-		bzero(&hdr, sizeof (hdr));
-		count = read(sfd, (char *)&hdr, sizeof (hdr));
-		if (count <= 0) {
-			ZREPL_ERRLOG("Replica-iSCSI Tgt connection got "
-			    "disconnected with err:%d\n", errno);
+		rc = uzfs_zvol_read_header(sfd, &hdr);
+		if (rc < 0) {
+close_conn:
+			ZREPL_ERRLOG("Management connection disconnected\n");
 			/*
 			 * Error has occurred on this socket
 			 * close it and open a new socket after
@@ -551,9 +603,8 @@ retry:
 			printf("Retrying ....\n");
 			sleep(5);
 			sfd = create_and_bind(mgmt_port, false);
-			if (sfd == -1) {
+			if (sfd == -1)
 				goto exit;
-			}
 
 retry1:
 			rc = connect(sfd, (struct sockaddr *)&istgt_addr,
@@ -572,28 +623,39 @@ retry1:
 				    "is successful\n");
 			}
 			continue;
+		} else if (rc > 0) {
+			/* Send to target the correct version */
+			hdr.version = REPLICA_VERSION;
+			hdr.status = ZVOL_OP_STATUS_VERSION_MISMATCH;
+			hdr.opcode = ZVOL_OPCODE_HANDSHAKE;
+			hdr.len = 0;
+			(void) uzfs_zvol_socket_write(sfd, (char *)&hdr,
+			    sizeof (hdr));
+			goto close_conn;
 		}
 
-		if (hdr.opcode == ZVOL_OPCODE_HANDSHAKE) {
-			name = kmem_alloc(
-			    hdr.len * sizeof (char), KM_SLEEP);
-			count = read(sfd, name, sizeof (char) * hdr.len);
-			if (count == -1) {
-				ZREPL_ERRLOG("Read from socket failed"
-				    " with err:%d\n", errno);
-				goto exit;
-			}
+		buf = kmem_alloc(hdr.len * sizeof (char), KM_SLEEP);
+		rc = uzfs_zvol_socket_read(sfd, buf, hdr.len);
+		if (rc != 0)
+			goto close_conn;
 
-			rc = uzfs_zvol_mgmt_do_handshake(&hdr, sfd, name);
-			free(name);
-			if (rc == -1) {
-				ZREPL_ERRLOG("handshake failed with"
-				    " errno:%d\n", errno);
-				goto exit;
+		switch (hdr.opcode) {
+		case ZVOL_OPCODE_HANDSHAKE:
+			rc = uzfs_zvol_mgmt_do_handshake(&hdr, sfd, buf);
+			if (rc != 0) {
+				ZREPL_ERRLOG("Handshake failed\n");
 			}
+			break;
+		/* More management commands will come here in future */
+		default:
+			break;
 		}
+
+		free(buf);
 	}
 exit:
+	if (sfd < 0)
+		close(sfd);
 	printf("uzfs_zvol_mgmt_thread thread exiting\n");
 	zk_thread_exit();
 }
