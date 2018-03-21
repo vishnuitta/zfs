@@ -59,7 +59,6 @@ typedef struct worker_args {
 	int *threads_done;
 	uint64_t io_block_size;
 	uint64_t active_size;
-	uint64_t io_num;
 } worker_args_t;
 
 typedef struct uzfs_test_info {
