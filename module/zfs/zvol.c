@@ -687,7 +687,7 @@ zvol_replay_write(zvol_state_t *zv, lr_write_t *lr, boolean_t byteswap)
 #if !defined(_KERNEL)
 	if (lr->lr_version == VERSION_1) {
 		get_metaobj_block_details(&metablk, zv, offset, length);
-		metadatasize = sizeof (blk_metadata_t);
+		metadatasize = zv->zv_volmetadatasize;
 		tmdata = mdata = kmem_alloc(metablk.m_len, KM_SLEEP);
 		tmdataend = mdata + metablk.m_len;
 		while (tmdata < tmdataend) {
