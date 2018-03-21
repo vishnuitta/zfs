@@ -686,15 +686,15 @@ run_uzfs_test()
 {
 	log_must_not $UZFS_TEST
 
-	log_must $UZFS_TEST -t 30 -c -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -T 6
-	#log_must $UZFS_TEST -t 30 -c -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -s -T 6
-	log_must $UZFS_TEST -t 30 -c -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -l -T 6
-	#log_must $UZFS_TEST -t 30 -c -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -s -l -T 6
+	log_must $UZFS_TEST -t 30 -c -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -T 8
+	#log_must $UZFS_TEST -t 30 -c -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -s -T 8
+	log_must $UZFS_TEST -t 30 -c -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -l -T 8
+	#log_must $UZFS_TEST -t 30 -c -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -s -l -T 8
 
-	log_must $UZFS_TEST -t 30 -c -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -i 8192 -b 65536 -T 6
-	#log_must $UZFS_TEST -t 30 -c -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -s -i 8192 -b 65536 -T 6
-	log_must $UZFS_TEST -t 30 -c -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -l -i 8192 -b 65536 -T 6
-	#log_must $UZFS_TEST -t 30 -c -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -s -l -i 8192 -b 65536 -T 6
+	log_must $UZFS_TEST -t 30 -c -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -i 8192 -b 65536 -T 8
+	#log_must $UZFS_TEST -t 30 -c -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -s -i 8192 -b 65536 -T 8
+	log_must $UZFS_TEST -t 30 -c -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -l -i 8192 -b 65536 -T 8
+	#log_must $UZFS_TEST -t 30 -c -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -s -l -i 8192 -b 65536 -T 8
 
 	log_must truncate -s 2G "$TMPDIR/uztest.1a"
 	log_must truncate -s 2G "$TMPDIR/uztest.log"
@@ -754,7 +754,7 @@ run_uzfs_test()
 	log_must setup_uzfs_test log 65536 standard
 	log_must $UZFS_TEST -t 30 -v $UZFS_TEST_VOLSIZE_IN_NUM -a $UZFS_TEST_VOLSIZE_IN_NUM -l -i 8192 -b 65536 -T 2
 
-
+	log_must $UZFS_TEST -T 7
 
 	K=1024
 	M=$(( 1024 * 1024 ))

@@ -297,7 +297,7 @@ writer_thread(void *arg)
 			printf("WIO error at offset: %lu len: %lu\n", offset,
 			    (idx + 1) * block_size);
 
-		if (uzfs_test_id == 6) {
+		if (uzfs_test_id == 8) {
 			memcpy(&data[offset], buf[idx], (idx + 1)*block_size);
 			for (i = 0; i < (idx+1); i++) {
 				iodata[blk_offset+i] = io_num;
@@ -583,7 +583,7 @@ static void process_options(int argc, char **argv)
 	if (active_size > vol_size)
 		vol_size = active_size << 1;
 
-	if (uzfs_test_id == 6) {
+	if (uzfs_test_id == 8) {
 		data = kmem_zalloc(vol_size, KM_SLEEP);
 		vol_blocks = (vol_size) / io_block_size;
 		iodata = kmem_zalloc(vol_blocks*sizeof (uint64_t), KM_SLEEP);
@@ -695,7 +695,7 @@ unit_test_fn(void *arg)
 		cv_wait(&cv, &mtx);
 	mutex_exit(&mtx);
 
-	if (uzfs_test_id == 6)
+	if (uzfs_test_id == 8)
 		verify_vol_data(zv, io_block_size, active_size);
 
 	if (silent == 0)
