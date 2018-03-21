@@ -187,6 +187,7 @@ writer_thread(void *arg)
 	io = kmem_alloc((sizeof (struct data_io) +
 	    warg->io_block_size), KM_SLEEP);
 
+	io->hdr.version = REPLICA_VERSION;
 	io->hdr.opcode = ZVOL_OPCODE_HANDSHAKE;
 	io->hdr.len    = strlen(ds) + 1;
 	strncpy(io->buf, ds, io->hdr.len);
@@ -209,6 +210,7 @@ writer_thread(void *arg)
 	printf("Start writing ........\n");
 	/* Write data */
 	while (i < warg->max_iops) {
+		io->hdr.version = REPLICA_VERSION;
 		io->hdr.opcode = ZVOL_OPCODE_WRITE;
 		io->hdr.io_seq = i;
 		io->hdr.len    = warg->io_block_size;
@@ -236,6 +238,7 @@ writer_thread(void *arg)
 	nbytes = 0;
 	bzero(io, sizeof (struct data_io));
 	while (i < warg->max_iops) {
+		io->hdr.version = REPLICA_VERSION;
 		io->hdr.opcode = ZVOL_OPCODE_READ;
 		io->hdr.io_seq = i;
 		io->hdr.len    = warg->io_block_size;
@@ -323,6 +326,7 @@ zrepl_utest(void *arg)
 	}
 	printf("Connection accepted from replica successful\n");
 
+	hdr.version = REPLICA_VERSION;
 	hdr.opcode = ZVOL_OPCODE_HANDSHAKE;
 	hdr.len = strlen(ds)+1;
 	printf("Op code sent %d with len:%ld\n", hdr.opcode, hdr.len);
