@@ -12,8 +12,8 @@
 #include <sys/zfs_context.h>
 #include <uzfs_test.h>
 #include <uzfs_mgmt.h>
+#include <zrepl_mgmt.h>
 
-char *accpt_port = "3232";
 char *tgt_port = "6060";
 
 struct data_io {
@@ -21,52 +21,9 @@ struct data_io {
 	char buf[0];
 };
 
-static int
-create_and_bind(char *port)
-{
-	int s, sfd;
-	struct addrinfo hints = {0, };
-	struct addrinfo *result, *rp;
-
-	hints.ai_family = AF_INET;
-	hints.ai_socktype = SOCK_STREAM;
-	hints.ai_flags = AI_PASSIVE;
-
-	s = getaddrinfo(NULL, port, &hints, &result);
-	if (s != 0) {
-		printf("getaddrinfo failed with error\n");
-		return (-1);
-	}
-
-	for (rp = result; rp != NULL; rp = rp->ai_next) {
-		sfd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
-		if (sfd == -1) {
-			continue;
-		}
-
-		s = bind(sfd, rp->ai_addr, rp->ai_addrlen);
-		if (s == 0) {
-			/* We managed to bind successfully! */
-			printf("bind is successful\n");
-			break;
-		}
-
-		close(sfd);
-	}
-
-	if (rp == NULL) {
-		printf("bind failed with err\n");
-		return (-1);
-	}
-
-	freeaddrinfo(result);
-	return (sfd);
-}
-
 void
 populate(char *p, int size)
 {
-
 	int i;
 
 	for (i = 0; i < size; i++) {
@@ -272,6 +229,7 @@ zrepl_utest(void *arg)
 	int  io_sfd, new_fd;
 	int threads_done = 0;
 	int num_threads = 0;
+	int wrong_message = 1;
 	kthread_t *reader;
 	kthread_t *writer;
 	socklen_t in_len;
@@ -306,7 +264,7 @@ zrepl_utest(void *arg)
 	reader_args.max_iops = max_iops;
 
 
-	sfd = create_and_bind(tgt_port);
+	sfd = create_and_bind(tgt_port, B_TRUE);
 	if (sfd == -1) {
 		return;
 	}
@@ -316,8 +274,9 @@ zrepl_utest(void *arg)
 		printf("listen() failed with errno:%d\n", rc);
 		goto exit;
 	}
-
 	printf("Listen was successful\n");
+
+start:
 	in_len = sizeof (in_addr);
 	new_fd = accept(sfd, &in_addr, &in_len);
 	if (new_fd == -1) {
@@ -327,7 +286,12 @@ zrepl_utest(void *arg)
 	printf("Connection accepted from replica successful\n");
 
 	hdr.version = REPLICA_VERSION;
-	hdr.opcode = ZVOL_OPCODE_HANDSHAKE;
+	if (wrong_message) {
+		hdr.opcode = -1;
+		wrong_message = 0;
+	} else {
+		hdr.opcode = ZVOL_OPCODE_HANDSHAKE;
+	}
 	hdr.len = strlen(ds)+1;
 	printf("Op code sent %d with len:%ld\n", hdr.opcode, hdr.len);
 
@@ -352,6 +316,12 @@ zrepl_utest(void *arg)
 	}
 	printf("Header has read with count %d\n", count);
 
+	if (hdr.status == ZVOL_OP_STATUS_FAILED) {
+		close(new_fd);
+		printf("Header status is failed\n");
+		goto start;
+	}
+
 	count = read(new_fd, (void *)&mgmt_ack, sizeof (mgmt_ack));
 	if (count == -1) {
 		printf("During mgmt Read error\n");
@@ -367,17 +337,19 @@ zrepl_utest(void *arg)
 	replica_io_addr.sin_family = AF_INET;
 	replica_io_addr.sin_addr.s_addr = inet_addr(mgmt_ack.ip);
 	replica_io_addr.sin_port = htons(mgmt_ack.port);
-	io_sfd = create_and_bind("10315");
+retry:
+	io_sfd = create_and_bind("", B_FALSE);
 	if (io_sfd == -1) {
-		printf("IO connection Bind at port 10200 failed\n");
-		goto exit;
+		printf("Socket creation failed with errno:%d\n", errno);
+		goto start;
 	}
-
 	rc = connect(io_sfd, (struct sockaddr *)&replica_io_addr,
 	    sizeof (replica_io_addr));
 	if (rc == -1) {
-		printf("Failed to connect to istgt_controller with err\n");
-		goto exit;
+		printf("Failed to connect to replica-IO port"
+		    " with errno:%d\n", errno);
+		close(io_sfd);
+		goto retry;
 	}
 	printf("Connect to replica IO port is successfully\n");
 

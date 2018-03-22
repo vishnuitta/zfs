@@ -11,10 +11,8 @@
 #include <sys/types.h>
 #include <ifaddrs.h>
 
-
-#define	true 1
-#define	false 0
 #define	MAXEVENTS 64
+#define	ZAP_UPDATE_TIME_INTERVAL 600
 
 char *accpt_port = "3232";
 char *mgmt_port = "12000";
@@ -26,49 +24,6 @@ __thread char  tinfo[20] =  {0};
 
 static void uzfs_zvol_io_ack_sender(void *arg);
 static int get_controller_ip_address(char *buf, int len);
-
-static int
-create_and_bind(const char *port, int bind_needed)
-{
-	int s, sfd;
-	struct addrinfo hints = {0, };
-	struct addrinfo *rp, *result = NULL;
-
-	hints.ai_family = AF_INET;
-	hints.ai_socktype = SOCK_STREAM;
-	hints.ai_flags = AI_PASSIVE;
-
-	s = getaddrinfo(NULL, port, &hints, &result);
-	if (s != 0) {
-		ZREPL_ERRLOG("getaddrinfo failed with error: %d\n", errno);
-		return (-1);
-	}
-
-	for (rp = result; rp != NULL; rp = rp->ai_next) {
-		sfd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
-		if (sfd == -1) {
-			continue;
-		} else if (bind_needed == 0) {
-			break;
-		}
-
-		s = bind(sfd, rp->ai_addr, rp->ai_addrlen);
-		if (s == 0) {
-			/* We managed to bind successfully! */
-			ZREPL_LOG("bind is successful\n");
-			break;
-		}
-		close(sfd);
-	}
-
-	freeaddrinfo(result);
-	if (rp == NULL) {
-		ZREPL_ERRLOG("bind failed with err:%d\n", errno);
-		return (-1);
-	}
-
-	return (sfd);
-}
 
 static int
 make_socket_non_blocking(int sfd)
@@ -130,7 +85,7 @@ uzfs_zvol_get_ip(char *host)
 				if (strcmp(host, "127.0.0.1") == 0) {
 					continue;
 				}
-				printf("IP address: %s\n", host);
+				ZREPL_LOG("IP address: %s\n", host);
 				break;
 			}
 		}
@@ -177,7 +132,7 @@ zio_cmd_free(zvol_io_cmd_t **cmd)
 			}
 			break;
 		default:
-			ASSERT(!"Wrong Op code");
+			VERIFY(!"Should be a valid opcode");
 			break;
 	}
 
@@ -198,7 +153,7 @@ uzfs_zvol_socket_read(int fd, char *buf, uint64_t nbytes, int flags)
 			printf("EAGAIN ERROR\n");
 			continue;
 		} else if (count <= 0) {
-			printf("Read error\n");
+			ZREPL_ERRLOG("Read error:%d\n", errno);
 			return (-1);
 		}
 
@@ -210,14 +165,18 @@ uzfs_zvol_socket_read(int fd, char *buf, uint64_t nbytes, int flags)
 
 
 static inline int
-uzfs_zvol_socket_write(int fd, char *buf, int nbytes)
+uzfs_zvol_socket_write(int fd, char *buf, int nbytes, int flags)
 {
 	int count = 0;
 	char *p = buf;
 	while (nbytes) {
 		count = write(fd, (void *)p, nbytes);
-		if (count <= 0) {
-			printf("Write error\n");
+		if ((count <= 0) && (flags & O_NONBLOCK) &&
+		    ((errno == EAGAIN) || (errno == EWOULDBLOCK))) {
+			printf("EAGAIN ERROR\n");
+			continue;
+		} else if (count <= 0) {
+			ZREPL_ERRLOG("Write error:%d\n", errno);
 			return (-1);
 		}
 		p += count;
@@ -258,7 +217,8 @@ uzfs_zvol_worker(void *arg)
 			rc = uzfs_write_data(zinfo->zv,
 			    (char *)zio_cmd->buf,
 			    hdr->offset, hdr->len, NULL);
-			zinfo->ondisk_io_seq = zio_cmd->hdr.ondisk_io_seq;
+			zinfo->checkpointed_io_seq =
+			    zio_cmd->hdr.checkpointed_io_seq;
 			break;
 
 		case ZVOL_OPCODE_SYNC:
@@ -273,6 +233,8 @@ uzfs_zvol_worker(void *arg)
 		ZREPL_ERRLOG("Zvol op_code :%d failed with "
 		    "error: %d\n", hdr->opcode, errno);
 		hdr->status = ZVOL_OP_STATUS_FAILED;
+	} else {
+		hdr->status = ZVOL_OP_STATUS_OK;
 	}
 
 	(void) pthread_mutex_lock(&zinfo->complete_queue_mutex);
@@ -288,7 +250,7 @@ uzfs_zvol_worker(void *arg)
 	}
 
 	(void) pthread_mutex_unlock(&zinfo->complete_queue_mutex);
-	uzfs_zinfo_drop_refcnt(zinfo, false);
+	uzfs_zinfo_drop_refcnt(zinfo, B_FALSE);
 }
 
 /*
@@ -307,18 +269,19 @@ uzfs_zvol_read_header(int fd, zvol_io_hdr_t *hdr, int flags)
 	rc = uzfs_zvol_socket_read(fd, (char *)hdr,
 	    sizeof (hdr->version), flags);
 	if (rc != 0) {
-		printf("error reading from socket: %d\n", errno);
+		ZREPL_ERRLOG("error reading from socket: %d\n", errno);
 		return (-1);
 	}
 	if (hdr->version != REPLICA_VERSION) {
-		printf("invalid replica protocol version %d\n", hdr->version);
+		ZREPL_ERRLOG("invalid replica protocol version %d\n",
+		    hdr->version);
 		return (1);
 	}
 	rc = uzfs_zvol_socket_read(fd,
 	    ((char *)hdr) + sizeof (hdr->version),
 	    sizeof (*hdr) - sizeof (hdr->version), flags);
 	if (rc != 0) {
-		printf("error reading from socket: %d\n", errno);
+		ZREPL_ERRLOG("error reading from socket: %d\n", errno);
 		return (-1);
 	}
 
@@ -348,25 +311,27 @@ uzfs_zvol_io_receiver(void *arg)
 		 */
 		if (zinfo == NULL) {
 			if (uzfs_zvol_read_header(fd, &hdr, 0) != 0) {
-				printf("error reading header from socket\n");
+				ZREPL_ERRLOG("error reading header"
+				    " from socket\n");
 				goto exit;
 			}
 			if (hdr.opcode != ZVOL_OPCODE_HANDSHAKE) {
-				printf("Handshake yet to happen\n");
+				ZREPL_ERRLOG("Handshake yet to happen\n");
 				goto exit;
 			}
 		} else {
 			rc = uzfs_zvol_socket_read(fd, (char *)&hdr,
 			    sizeof (hdr), 0);
 			if (rc != 0) {
-				printf("error reading from socket: %d\n",
+				ZREPL_ERRLOG("error reading from socket: %d\n",
 				    errno);
 				goto exit;
 			}
 			if (hdr.opcode != ZVOL_OPCODE_WRITE &&
 			    hdr.opcode != ZVOL_OPCODE_READ &&
 			    hdr.opcode != ZVOL_OPCODE_SYNC) {
-				printf("Unexpected opcode %d\n", hdr.opcode);
+				ZREPL_ERRLOG("Unexpected opcode %d\n",
+				    hdr.opcode);
 				goto exit;
 			}
 		}
@@ -404,16 +369,16 @@ uzfs_zvol_io_receiver(void *arg)
 			if (zinfo == NULL) {
 				ZREPL_ERRLOG("Volume/LUN: %s not found",
 				    zinfo->name);
-				printf("Error in getting zinfo\n");
 				goto exit;
 			}
 
-			ASSERT(!zinfo->is_io_ack_sender_created);
 			if (zinfo->is_io_ack_sender_created) {
 				ZREPL_ERRLOG("Multiple handshake on IO port "
 				    "for volume: %s\n", zinfo->name);
-				uzfs_zinfo_drop_refcnt(zinfo, false);
-				continue;
+				uzfs_zinfo_drop_refcnt(zinfo, B_FALSE);
+				close(fd);
+				zinfo = NULL;
+				goto exit;
 			}
 
 			(void) pthread_mutex_lock(&zinfo->zinfo_mutex);
@@ -429,14 +394,14 @@ uzfs_zvol_io_receiver(void *arg)
 				    PTHREAD_CREATE_DETACHED);
 				VERIFY3P(thrd_info, !=, NULL);
 				zinfo->is_io_ack_sender_created = 1;
-				zinfo->conn_closed = false;
+				zinfo->conn_closed = B_FALSE;
 			}
 			(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
 			continue;
 		}
 
 		/* Take refcount for uzfs_zvol_worker to work on it */
-		uzfs_zinfo_take_refcnt(zinfo, false);
+		uzfs_zinfo_take_refcnt(zinfo, B_FALSE);
 		zio_cmd->zv = zinfo;
 		taskq_dispatch(zinfo->uzfs_zvol_taskq, uzfs_zvol_worker,
 		    zio_cmd, TQ_SLEEP);
@@ -445,7 +410,7 @@ exit:
 	if (zinfo != NULL) {
 
 		(void) pthread_mutex_lock(&zinfo->zinfo_mutex);
-		zinfo->conn_closed = true;
+		zinfo->conn_closed = B_TRUE;
 		zinfo->is_io_ack_sender_created = 0;
 		(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
 		/*
@@ -457,10 +422,10 @@ exit:
 			rc = pthread_cond_signal(&zinfo->io_ack_cond);
 		}
 		(void) pthread_mutex_unlock(&zinfo->complete_queue_mutex);
-		uzfs_zinfo_drop_refcnt(zinfo, false);
+		uzfs_zinfo_drop_refcnt(zinfo, B_FALSE);
 	}
 
-	printf("uzfs_zvol_io_receiver thread exiting\n");
+	ZREPL_LOG("uzfs_zvol_io_receiver thread exiting\n");
 	zk_thread_exit();
 }
 
@@ -501,11 +466,12 @@ uzfs_zvol_mgmt_do_handshake(zvol_io_hdr_t *hdr, int sfd, char *name)
 		hdr->len = sizeof (mgmt_ack_t);
 	}
 
-	uzfs_zvol_get_last_committed_io_no(zinfo, &hdr->ondisk_io_seq);
+	uzfs_zvol_get_last_committed_io_no(zinfo, &hdr->checkpointed_io_seq);
 	if (zinfo != NULL)
-		uzfs_zinfo_drop_refcnt(zinfo, false);
+		uzfs_zinfo_drop_refcnt(zinfo, B_FALSE);
 
-	rc = uzfs_zvol_socket_write(sfd, (char *)hdr, sizeof (*hdr));
+	rc = uzfs_zvol_socket_write(sfd, (char *)hdr, sizeof (*hdr),
+	    O_NONBLOCK);
 	if (rc != 0) {
 		ZREPL_ERRLOG("Write to socket failed with err: %d\n", errno);
 		return (-1);
@@ -514,7 +480,8 @@ uzfs_zvol_mgmt_do_handshake(zvol_io_hdr_t *hdr, int sfd, char *name)
 		return (-1);
 	}
 
-	rc = uzfs_zvol_socket_write(sfd, (char *)&mgmt_ack, sizeof (mgmt_ack));
+	rc = uzfs_zvol_socket_write(sfd, (char *)&mgmt_ack, sizeof (mgmt_ack),
+	    O_NONBLOCK);
 	if (rc != 0) {
 		ZREPL_ERRLOG("Write to socket failed with err: %d\n", errno);
 		rc = -1;
@@ -532,14 +499,14 @@ uzfs_zvol_connect_to_tgt_controller(void *arg)
 
 	if (target_addr == NULL) {
 		if (get_controller_ip_address(ip_buf, sizeof (ip_buf)) != 0) {
-			printf("parsing IP address did not work\n");
+			ZREPL_ERRLOG("parsing IP address did not work\n");
 			return (-1);
 		}
 		target_addr = ip_buf;
 	}
 
-	printf("Controller IP address is: %s\n", target_addr);
-	sfd = create_and_bind(mgmt_port, false);
+	ZREPL_LOG("iSCSI controller IP address is: %s\n", target_addr);
+	sfd = create_and_bind(mgmt_port, B_FALSE);
 	if (sfd == -1) {
 		return (-1);
 	}
@@ -555,24 +522,27 @@ uzfs_zvol_connect_to_tgt_controller(void *arg)
 	istgt_addr.sin_port = htons(TARGET_PORT);
 retry:
 	rc = connect(sfd, (struct sockaddr *)&istgt_addr, sizeof (istgt_addr));
-	if ((rc == -1) && ((errno == EINTR) || (errno == ECONNREFUSED) ||
-	    (errno == ETIMEDOUT) || (errno == EINPROGRESS))) {
-		ZREPL_ERRLOG("Failed to connect to istgt_controller"
-		    " with err:%d\n", errno);
-		sleep(2);
-		printf("Retrying ....\n");
-		goto retry;
+	if (rc == -1) {
+		if ((errno == EINTR) || (errno == ECONNREFUSED) ||
+		    (errno == ETIMEDOUT) || (errno == EINPROGRESS)) {
+			ZREPL_ERRLOG("Failed to connect to iSCSI controller"
+			    " with err:%d\n", errno);
+			sleep(2);
+			printf("Retrying ....\n");
+			goto retry;
+		} else {
+			close(sfd);
+			return (-1);
+		}
 	} else {
-		printf("Connection to TGT controller successful\n");
-		ZREPL_LOG("Connection to TGT controller iss successful\n");
+		ZREPL_LOG("Connection to iSCSI controller is successful\n");
 	}
 	return (sfd);
 }
 
 /*
- * TODO: IMHO, this should be a through away API.
- * Side Car has to find a more smart way to pass
- * ISCSI Controller IP address.
+ * TODO: This is throw away API. Side Car has to find
+ * a better way to pass iSCSI Controller IP address.
  */
 static int
 get_controller_ip_address(char *buf, int len)
@@ -637,13 +607,7 @@ uzfs_zvol_mgmt_thread(void *arg)
 
 	while (1) {
 		int i, n = 0;
-		n = epoll_wait(efd, events, MAXEVENTS, 1000);
-		if (n  == 0) {
-			printf("Event triggered by timer\n");
-			printf("Value of n is %d\n", n);
-			uzfs_zinfo_update_io_seq_for_all_volumes();
-			continue;
-		}
+		n = epoll_wait(efd, events, MAXEVENTS, -1);
 
 		for (i = 0; i < n; i++) {
 			if ((events[i].events & EPOLLRDHUP) ||
@@ -685,15 +649,17 @@ close_conn:
 				hdr.opcode = ZVOL_OPCODE_HANDSHAKE;
 				hdr.len = 0;
 				(void) uzfs_zvol_socket_write(events[i].data.fd,
-				    (char *)&hdr, sizeof (hdr));
+				    (char *)&hdr, sizeof (hdr), O_NONBLOCK);
 				goto close_conn;
 			}
 
 			buf = kmem_alloc(hdr.len * sizeof (char), KM_SLEEP);
 			rc = uzfs_zvol_socket_read(events[i].data.fd, buf,
 			    hdr.len, O_NONBLOCK);
-			if (rc != 0)
+			if (rc != 0) {
+				free(buf);
 				goto close_conn;
+			}
 
 			switch (hdr.opcode) {
 			case ZVOL_OPCODE_HANDSHAKE:
@@ -705,7 +671,14 @@ close_conn:
 				break;
 			/* More management commands will come here in future */
 			default:
-				break;
+				/* Command yet to be implemented */
+				hdr.status = ZVOL_OP_STATUS_FAILED;
+				hdr.len = 0;
+				(void) uzfs_zvol_socket_write(events[i].data.fd,
+				    (char *)&hdr, sizeof (hdr), O_NONBLOCK);
+				free(buf);
+				goto close_conn;
+				break; /* Should not be reached */
 			}
 			free(buf);
 		}
@@ -716,7 +689,7 @@ exit:
 
 	if (events != NULL)
 		free(events);
-	printf("uzfs_zvol_mgmt_thread thread exiting\n");
+	ZREPL_LOG("uzfs_zvol_mgmt_thread thread exiting\n");
 	zk_thread_exit();
 }
 
@@ -728,19 +701,21 @@ exit:
 static void
 uzfs_zvol_io_conn_acceptor(void)
 {
-	int rc, sfd, efd;
+	int			sfd, efd;
+	int			new_fd;
+	int			rc, i, n;
+	int			*thread_fd;
 #ifdef DEBUG
-	char *hbuf;
-	char *sbuf;
+	char			*hbuf;
+	char			*sbuf;
 #endif
-	int new_fd;
-	socklen_t in_len;
-	struct sockaddr in_addr;
-	struct epoll_event event;
-	struct epoll_event *events = NULL;
+	socklen_t		in_len;
+	struct sockaddr		in_addr;
+	struct epoll_event	event;
+	struct epoll_event	*events = NULL;
 
 	sfd = efd = -1;
-	sfd = create_and_bind(accpt_port, true);
+	sfd = create_and_bind(accpt_port, B_TRUE);
 	if (sfd == -1) {
 		goto exit;
 	}
@@ -775,7 +750,6 @@ uzfs_zvol_io_conn_acceptor(void)
 
 	/* The event loop */
 	while (1) {
-		int i, n = 0;
 		kthread_t *thrd_info;
 		n = epoll_wait(efd, events, MAXEVENTS, -1);
 		/*
@@ -809,56 +783,33 @@ uzfs_zvol_io_conn_acceptor(void)
 			 * socket, which means one or more incoming
 			 * connections.
 			 */
-#if 0
-			while (1) {
-#endif
-				in_len = sizeof (in_addr);
-				new_fd = accept(events[i].data.fd,
-				    &in_addr, &in_len);
-#if 0
-				if ((errno == EAGAIN) ||
-				    (errno == EWOULDBLOCK)) {
-					break;
-				}
-#endif
-				if (new_fd == -1) {
-					ZREPL_ERRLOG("accept err() :%d\n",
-					    errno);
-					goto exit;
-				}
-#ifdef DEBUG
-				hbuf = kmem_alloc(
-				    sizeof (NI_MAXHOST), KM_SLEEP);
-				sbuf = kmem_alloc(
-				    sizeof (NI_MAXSERV), KM_SLEEP);
-				rc = getnameinfo(&in_addr, in_len, hbuf,
-				    sizeof (hbuf), sbuf, sizeof (sbuf),
-				    NI_NUMERICHOST | NI_NUMERICSERV);
-				if (rc == 0) {
-					ZREPL_LOG("Accepted connection on "
-					    "descriptor %d "
-					    "(host=%s, port=%s)\n",
-					    new_fd, hbuf, sbuf);
-					printf("Accepted IO conn on "
-					    "descriptor %d "
-					    "(host=%s, port=%s)\n",
-					    new_fd, hbuf, sbuf);
-				}
-
-				free(hbuf);
-				free(sbuf);
-#endif
-				int *thread_fd = kmem_alloc(
-				    sizeof (int), KM_SLEEP);
-				*thread_fd = new_fd;
-				thrd_info = zk_thread_create(NULL, 0,
-				    (thread_func_t)uzfs_zvol_io_receiver,
-				    (void *)thread_fd, 0, NULL, TS_RUN, 0,
-				    PTHREAD_CREATE_DETACHED);
-				VERIFY3P(thrd_info, !=, NULL);
-#if 0
+			in_len = sizeof (in_addr);
+			new_fd = accept(events[i].data.fd, &in_addr, &in_len);
+			if (new_fd == -1) {
+				ZREPL_ERRLOG("accept err() :%d\n", errno);
+				goto exit;
 			}
+#ifdef DEBUG
+			hbuf = kmem_alloc(sizeof (NI_MAXHOST), KM_SLEEP);
+			sbuf = kmem_alloc(sizeof (NI_MAXSERV), KM_SLEEP);
+			rc = getnameinfo(&in_addr, in_len, hbuf, sizeof (hbuf),
+			    sbuf, sizeof (sbuf), NI_NUMERICHOST |
+			    NI_NUMERICSERV);
+			if (rc == 0) {
+				ZREPL_LOG("Accepted connection on fd %d "
+				"(host=%s, port=%s)\n", new_fd, hbuf, sbuf);
+			}
+
+			free(hbuf);
+			free(sbuf);
 #endif
+			thread_fd = kmem_alloc(sizeof (int), KM_SLEEP);
+			*thread_fd = new_fd;
+			thrd_info = zk_thread_create(NULL, 0,
+			    (thread_func_t)uzfs_zvol_io_receiver,
+			    (void *)thread_fd, 0, NULL, TS_RUN, 0,
+			    PTHREAD_CREATE_DETACHED);
+			VERIFY3P(thrd_info, !=, NULL);
 		}
 	}
 exit:
@@ -874,9 +825,18 @@ exit:
 		close(efd);
 	}
 
-	printf("uzfs_zvol_io_conn_acceptor thread exiting\n");
 	ZREPL_ERRLOG("uzfs_zvol_io_conn_acceptor thread exiting\n");
 	zk_thread_exit();
+}
+
+static void
+uzfs_zvol_timer_thread(void)
+{
+	while (1) {
+		sleep(ZAP_UPDATE_TIME_INTERVAL);
+		printf("Event triggered by timer\n");
+		uzfs_zinfo_update_io_seq_for_all_volumes();
+	}
 }
 
 /*
@@ -907,7 +867,7 @@ uzfs_zvol_io_ack_sender(void *arg)
 
 				zinfo->io_ack_waiting = 0;
 				if ((zinfo->state == ZVOL_INFO_STATE_OFFLINE) ||
-				    (zinfo->conn_closed == true)) {
+				    (zinfo->conn_closed == B_TRUE)) {
 					(void) pthread_mutex_unlock(
 					    &zinfo->complete_queue_mutex);
 					goto exit;
@@ -924,7 +884,7 @@ uzfs_zvol_io_ack_sender(void *arg)
 		    zio_cmd->hdr.opcode, zio_cmd->hdr.io_seq);
 
 		rc = uzfs_zvol_socket_write(zio_cmd->conn,
-		    (char *)&zio_cmd->hdr, sizeof (zio_cmd->hdr));
+		    (char *)&zio_cmd->hdr, sizeof (zio_cmd->hdr), 0);
 		if (rc == -1) {
 			ZREPL_ERRLOG("socket write err :%d\n", errno);
 			zio_cmd_free(&zio_cmd);
@@ -942,7 +902,7 @@ uzfs_zvol_io_ack_sender(void *arg)
 				/* Send data read from disk */
 				rc = uzfs_zvol_socket_write(zio_cmd->conn,
 				    zio_cmd->buf,
-				    (sizeof (char) * zio_cmd->hdr.len));
+				    (sizeof (char) * zio_cmd->hdr.len), 0);
 				if (rc == -1) {
 					ZREPL_ERRLOG("socket write err :%d\n",
 					    errno);
@@ -965,9 +925,9 @@ exit:
 		STAILQ_REMOVE_HEAD(&zinfo->complete_queue, cmd_link);
 		zio_cmd_free(&zio_cmd);
 	}
-	uzfs_zinfo_drop_refcnt(zinfo, false);
+	uzfs_zinfo_drop_refcnt(zinfo, B_FALSE);
 
-	printf("uzfs_zvol_io_ack_sender thread exiting\n");
+	ZREPL_LOG("uzfs_zvol_io_ack_sender thread exiting\n");
 	zk_thread_exit();
 }
 
@@ -1010,6 +970,7 @@ main(int argc, char **argv)
 	int 		rc;
 	kthread_t	*conn_accpt_thrd;
 	kthread_t	*uzfs_mgmt_thread;
+	kthread_t	*uzfs_timer_thread;
 	char		*target_addr = NULL;
 
 	pthread_t slf = pthread_self();
@@ -1019,7 +980,7 @@ main(int argc, char **argv)
 	rc = uzfs_init();
 	uzfs_zrepl_open_log();
 	if (rc != 0) {
-		printf("initialization errored.. %d\n", rc);
+		ZREPL_ERRLOG("initialization errored.. %d\n", rc);
 		return (-1);
 	}
 
@@ -1036,8 +997,6 @@ main(int argc, char **argv)
 	signal(SIGPIPE, SIG_IGN);
 	if (libuzfs_ioctl_init() < 0) {
 		ZREPL_ERRLOG("Failed to initialize libuzfs ioctl\n");
-		(void) fprintf(stderr, "%s",
-		    "failed to initialize libuzfs ioctl\n");
 		goto initialize_error;
 	}
 
@@ -1055,6 +1014,12 @@ main(int argc, char **argv)
 	    target_addr, 0, NULL, TS_RUN, 0,
 	    PTHREAD_CREATE_DETACHED);
 	VERIFY3P(uzfs_mgmt_thread, !=, NULL);
+
+	uzfs_timer_thread = zk_thread_create(NULL, 0,
+	    (thread_func_t)uzfs_zvol_timer_thread,
+	    NULL, 0, NULL, TS_RUN, 0,
+	    PTHREAD_CREATE_DETACHED);
+	VERIFY3P(uzfs_timer_thread, !=, NULL);
 
 	while (1) {
 		sleep(5);

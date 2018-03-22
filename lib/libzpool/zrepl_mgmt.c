@@ -1,3 +1,5 @@
+#include <arpa/inet.h>
+#include <netdb.h>
 #include <syslog.h>
 #include <sys/zil.h>
 #include <sys/zfs_rlock.h>
@@ -17,6 +19,51 @@ SLIST_HEAD(, zvol_info_s) zvol_list;
 SLIST_HEAD(, zvol_info_s) stale_zv_list;
 
 static int uzfs_zinfo_free(zvol_info_t *zinfo);
+
+int
+create_and_bind(char *port, int bind_needed)
+{
+	int s, sfd;
+	struct addrinfo hints = {0, };
+	struct addrinfo *result, *rp;
+
+	hints.ai_family = AF_INET;
+	hints.ai_socktype = SOCK_STREAM;
+	hints.ai_flags = AI_PASSIVE;
+
+	s = getaddrinfo(NULL, port, &hints, &result);
+	if (s != 0) {
+		printf("getaddrinfo failed with error\n");
+		return (-1);
+	}
+
+	for (rp = result; rp != NULL; rp = rp->ai_next) {
+		sfd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+		if (sfd == -1) {
+			continue;
+		}
+
+		if (bind_needed == 0) {
+			break;
+		}
+		s = bind(sfd, rp->ai_addr, rp->ai_addrlen);
+		if (s == 0) {
+			/* We managed to bind successfully! */
+			printf("bind is successful\n");
+			break;
+		}
+
+		close(sfd);
+	}
+
+	if (rp == NULL) {
+		printf("bind failed with err\n");
+		return (-1);
+	}
+
+	freeaddrinfo(result);
+	return (sfd);
+}
 
 /*
  * API to drop refcnt on zinfo. If refcnt
@@ -237,7 +284,7 @@ uzfs_zinfo_update_io_seq_for_all_volumes(void)
 			/* Take refcount */
 			uzfs_zinfo_take_refcnt(zinfo, B_TRUE);
 			uzfs_zvol_store_last_committed_io_no(zinfo->zv,
-			    zinfo->ondisk_io_seq);
+			    zinfo->checkpointed_io_seq);
 			uzfs_zinfo_drop_refcnt(zinfo, B_TRUE);
 		}
 	}

@@ -655,12 +655,7 @@ run_zrepl_uzfs_test()
 	log_must $ZFS create -V $UZFS_TEST_VOLSIZE \
 	    $UZFS_TEST_POOL/$UZFS_TEST_VOL -b $2
 
-	if [ "$3" == "sync" ]; then
-		log_must $ZFS set sync=always $UZFS_TEST_POOL/$UZFS_TEST_VOL
-	else
-		log_must $ZFS set sync=standard $UZFS_TEST_POOL/$UZFS_TEST_VOL
-	fi
-
+	log_must $ZFS set sync=$3 $UZFS_TEST_POOL/$UZFS_TEST_VOL
 
 	log_must_not $UZFS_TEST
 	log_must $UZFS_TEST -T 5
@@ -790,8 +785,12 @@ else
 fi
 
 close_test
-log_must run_zrepl_uzfs_test nolog 4096 nosync
- 
+log_must run_zrepl_uzfs_test log 4096 disabled
+
+#log_must run_zrepl_uzfs_test log 4096 always
+
+#log_must run_zrepl_uzfs_test log 4096 standard
+
 log_must run_uzfs_test
 
 log_must run_dmu_test
