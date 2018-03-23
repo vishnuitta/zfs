@@ -59,6 +59,7 @@ typedef struct zvol_info_s {
 	void 		*zv;
 	int 		refcnt;
 	int		is_io_ack_sender_created;
+	uint64_t	checkpointed_io_seq;
 	taskq_t		*uzfs_zvol_taskq;	/* Taskq for minor management */
 
 	/* Thread sync related */
@@ -103,6 +104,10 @@ extern void uzfs_zinfo_drop_refcnt(zvol_info_t *zinfo, int locked);
 extern void uzfs_zinfo_take_refcnt(zvol_info_t *zinfo, int locked);
 extern void uzfs_zinfo_replay_zil_all(void);
 extern int uzfs_zinfo_destroy(const char *ds_name);
+extern void uzfs_zinfo_update_io_seq_for_all_volumes(void);
+extern void uzfs_zvol_get_last_committed_io_no(zvol_info_t *z,
+    uint64_t *io_seq);
+extern int create_and_bind(const char *port, int bind_needed);
 
 #define	ZREPL_LOG(fmt, ...)  syslog(LOG_NOTICE,				\
 		"%-18.18s:%4d: %-20.20s: " fmt, __func__, __LINE__,	\

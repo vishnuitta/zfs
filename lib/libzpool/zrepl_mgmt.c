@@ -1,3 +1,6 @@
+
+#include <arpa/inet.h>
+#include <netdb.h>
 #include <syslog.h>
 #include <sys/zil.h>
 #include <sys/zfs_rlock.h>
@@ -5,9 +8,8 @@
 #include <sys/dnode.h>
 #include <zrepl_mgmt.h>
 #include <uzfs_mgmt.h>
-
-#define	true 1
-#define	false 0
+#include <uzfs_zap.h>
+#include <uzfs_io.h>
 
 #define	ZVOL_THREAD_STACKSIZE (2 * 1024 * 1024)
 
@@ -19,6 +21,51 @@ SLIST_HEAD(, zvol_info_s) zvol_list;
 SLIST_HEAD(, zvol_info_s) stale_zv_list;
 
 static int uzfs_zinfo_free(zvol_info_t *zinfo);
+
+int
+create_and_bind(const char *port, int bind_needed)
+{
+	int s, sfd;
+	struct addrinfo hints = {0, };
+	struct addrinfo *result, *rp;
+
+	hints.ai_family = AF_INET;
+	hints.ai_socktype = SOCK_STREAM;
+	hints.ai_flags = AI_PASSIVE;
+
+	s = getaddrinfo(NULL, port, &hints, &result);
+	if (s != 0) {
+		printf("getaddrinfo failed with error\n");
+		return (-1);
+	}
+
+	for (rp = result; rp != NULL; rp = rp->ai_next) {
+		sfd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+		if (sfd == -1) {
+			continue;
+		}
+
+		if (bind_needed == 0) {
+			break;
+		}
+		s = bind(sfd, rp->ai_addr, rp->ai_addrlen);
+		if (s == 0) {
+			/* We managed to bind successfully! */
+			printf("bind is successful\n");
+			break;
+		}
+
+		close(sfd);
+	}
+
+	if (rp == NULL) {
+		printf("bind failed with err\n");
+		return (-1);
+	}
+
+	freeaddrinfo(result);
+	return (sfd);
+}
 
 /*
  * API to drop refcnt on zinfo. If refcnt
@@ -62,7 +109,7 @@ uzfs_insert_zinfo_list(zvol_info_t *zinfo)
 
 	/* Base refcount is taken here */
 	(void) pthread_mutex_lock(&zvol_list_mutex);
-	uzfs_zinfo_take_refcnt(zinfo, true);
+	uzfs_zinfo_take_refcnt(zinfo, B_TRUE);
 	SLIST_INSERT_HEAD(&zvol_list, zinfo, zinfo_next);
 	(void) pthread_mutex_unlock(&zvol_list_mutex);
 }
@@ -80,7 +127,7 @@ uzfs_remove_zinfo_list(zvol_info_t *zinfo)
 	}
 	(void) pthread_mutex_unlock(&zinfo->complete_queue_mutex);
 	/* Base refcount is droped here */
-	uzfs_zinfo_drop_refcnt(zinfo, true);
+	uzfs_zinfo_drop_refcnt(zinfo, B_TRUE);
 }
 
 zvol_info_t *
@@ -114,7 +161,7 @@ uzfs_zinfo_lookup(const char *name)
 	}
 	if (zv != NULL) {
 		/* Take refcount */
-		uzfs_zinfo_take_refcnt(zv, true);
+		uzfs_zinfo_take_refcnt(zv, B_TRUE);
 	}
 	(void) pthread_mutex_unlock(&zvol_list_mutex);
 
@@ -201,4 +248,44 @@ uzfs_zinfo_free(zvol_info_t *zinfo)
 
 	free(zinfo);
 	return (0);
+}
+
+void
+uzfs_zvol_get_last_committed_io_no(zvol_info_t *zinfo, uint64_t *io_seq)
+{
+	uzfs_zap_kv_t zap;
+	zap.key = "io_seq";
+	zap.value = 0;
+	zap.size = sizeof (*io_seq);
+
+	uzfs_read_zap_entry(zinfo->zv, &zap);
+	*io_seq = zap.value;
+}
+
+void
+uzfs_zvol_store_last_committed_io_no(zvol_state_t *zv, uint64_t io_seq)
+{
+	uzfs_zap_kv_t *kv_array[0];
+	uzfs_zap_kv_t zap;
+	zap.key = "io_seq";
+	zap.value = io_seq;
+	zap.size = sizeof (io_seq);
+
+	kv_array[0] = &zap;
+	VERIFY0(uzfs_update_zap_entries(zv,
+	    (const uzfs_zap_kv_t **) kv_array, 1));
+}
+
+void
+uzfs_zinfo_update_io_seq_for_all_volumes(void)
+{
+	zvol_info_t *zinfo;
+	(void) pthread_mutex_lock(&zvol_list_mutex);
+	SLIST_FOREACH(zinfo, &zvol_list, zinfo_next) {
+		if (uzfs_zvol_get_status(zinfo->zv) == ZVOL_STATUS_HEALTHY) {
+			uzfs_zvol_store_last_committed_io_no(zinfo->zv,
+			    zinfo->checkpointed_io_seq);
+		}
+	}
+	(void) pthread_mutex_unlock(&zvol_list_mutex);
 }

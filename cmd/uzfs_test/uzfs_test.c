@@ -38,6 +38,7 @@ uint32_t uzfs_test_id = 0;
 uint32_t create = 0;
 char *pool = "testp";
 char *ds = "ds0";
+int max_iops = 0;
 
 uzfs_test_info_t uzfs_tests[] = {
 	{ uzfs_zvol_zap_operation, "uzfs zap operation test" },
@@ -47,6 +48,7 @@ uzfs_test_info_t uzfs_tests[] = {
 	    "test to verify modified blocks between two txg for zvol" },
 	{ uzfs_txg_diff_tree_test, "txg_diff_tree functionality test" },
 	{ uzfs_rebuild_test, "uzfs rebuild pool test"},
+	{ zrepl_utest, "ZFS replication test" },
 };
 
 uint64_t metaverify = 0;
