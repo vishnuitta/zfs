@@ -9,6 +9,7 @@
 #include <zrepl_mgmt.h>
 #include <uzfs_mgmt.h>
 #include <uzfs_zap.h>
+#include <uzfs_io.h>
 
 #define	ZVOL_THREAD_STACKSIZE (2 * 1024 * 1024)
 
@@ -281,8 +282,10 @@ uzfs_zinfo_update_io_seq_for_all_volumes(void)
 	zvol_info_t *zinfo;
 	(void) pthread_mutex_lock(&zvol_list_mutex);
 	SLIST_FOREACH(zinfo, &zvol_list, zinfo_next) {
-		uzfs_zvol_store_last_committed_io_no(zinfo->zv,
-		    zinfo->checkpointed_io_seq);
+		if (uzfs_zvol_get_status(zinfo->zv) == ZVOL_STATUS_HEALTHY) {
+			uzfs_zvol_store_last_committed_io_no(zinfo->zv,
+			    zinfo->checkpointed_io_seq);
+		}
 	}
 	(void) pthread_mutex_unlock(&zvol_list_mutex);
 }

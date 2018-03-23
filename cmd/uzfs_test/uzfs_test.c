@@ -47,10 +47,8 @@ uzfs_test_info_t uzfs_tests[] = {
 	{ uzfs_txg_diff_verifcation_test,
 	    "test to verify modified blocks between two txg for zvol" },
 	{ uzfs_txg_diff_tree_test, "txg_diff_tree functionality test" },
-	{ zrepl_utest, "ZFS replication test" },
-
 	{ uzfs_rebuild_test, "uzfs rebuild pool test"},
-
+	{ zrepl_utest, "ZFS replication test" },
 };
 
 uint64_t metaverify = 0;

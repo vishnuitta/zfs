@@ -666,7 +666,7 @@ run_zrepl_uzfs_test()
 	log_must $ZFS set sync=$3 $UZFS_TEST_POOL/$UZFS_TEST_VOL
 
 	log_must_not $UZFS_TEST
-	log_must $UZFS_TEST -T 5
+	log_must $UZFS_TEST -T 6
 	sleep 5
 	log_must kill -SIGKILL $TGT_PID2
 
