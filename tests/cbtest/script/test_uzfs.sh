@@ -792,7 +792,7 @@ test_type :
 	- rebuild_test (zvol rebuild related tests)
 	- txg_diff_test (txg diff API test)
 	- fio_test
-  - zrepl_test
+	- zrepl_test
 EOF
 }
 

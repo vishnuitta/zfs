@@ -16,7 +16,7 @@ uzfs_test_SOURCES = \
 	uzfs_test_sync.c \
 	uzfs_zvol_zap.c \
 	uzfs_txg_diff.c \
-  repl_utest.c \
+	zrepl_utest.c \
 	uzfs_rebuilding.c
 
 

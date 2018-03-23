@@ -76,49 +76,6 @@ help(void)
 
 }
 
-static int
-create_and_bind(const char *port, int bind_needed)
-{
-	int s, sfd;
-	struct addrinfo hints = {0, };
-	struct addrinfo *rp, *result = NULL;
-
-	hints.ai_family = AF_INET;
-	hints.ai_socktype = SOCK_STREAM;
-	hints.ai_flags = AI_PASSIVE;
-
-	s = getaddrinfo(NULL, port, &hints, &result);
-	if (s != 0) {
-		ZREPL_ERRLOG("getaddrinfo failed with error: %d\n", errno);
-		return (-1);
-	}
-
-	for (rp = result; rp != NULL; rp = rp->ai_next) {
-		sfd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
-		if (sfd == -1) {
-			continue;
-		} else if (bind_needed == 0) {
-			break;
-		}
-
-		s = bind(sfd, rp->ai_addr, rp->ai_addrlen);
-		if (s == 0) {
-			/* We managed to bind successfully! */
-			ZREPL_LOG("bind is successful\n");
-			break;
-		}
-		close(sfd);
-	}
-
-	freeaddrinfo(result);
-	if (rp == NULL) {
-		ZREPL_ERRLOG("bind failed with err:%d\n", errno);
-		return (-1);
-	}
-
-	return (sfd);
-}
-
 
 static int
 make_socket_non_blocking(int sfd)
@@ -302,8 +259,8 @@ uzfs_zvol_worker(void *arg)
 			write = 1;
 			rc = uzfs_write_data(zinfo->zv,
 			    (char *)zio_cmd->buf,
-  		    hdr->offset, hdr->len, NULL, B_FALSE);
-  zinfo->checkpointed_io_seq =
+			    hdr->offset, hdr->len, NULL, B_FALSE);
+			zinfo->checkpointed_io_seq =
 			    zio_cmd->hdr.checkpointed_io_seq;
 			break;
 
@@ -619,7 +576,6 @@ retry:
 }
 
 /*
-
  * TODO: This is throw away API. Side Car has to find
  * a better way to pass iSCSI Controller IP address.
  */
@@ -1089,11 +1045,10 @@ zrepl_svc_run(void)
 	    (thread_func_t)uzfs_zvol_mgmt_thread, target_addr, 0, NULL,
 	    TS_RUN, 0, PTHREAD_CREATE_DETACHED);
 	VERIFY3P(uzfs_mgmt_thread, !=, NULL);
-  
-  uzfs_timer_thread = zk_thread_create(NULL, 0,
-	    (thread_func_t)uzfs_zvol_timer_thread,
-	    NULL, 0, NULL, TS_RUN, 0,
-	    PTHREAD_CREATE_DETACHED);
+
+	uzfs_timer_thread = zk_thread_create(NULL, 0,
+	    (thread_func_t)uzfs_zvol_timer_thread, NULL, 0, NULL, TS_RUN,
+	    0, PTHREAD_CREATE_DETACHED);
 	VERIFY3P(uzfs_timer_thread, !=, NULL);
 }
 
