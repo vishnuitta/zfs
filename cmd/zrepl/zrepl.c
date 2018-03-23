@@ -1,4 +1,3 @@
-
 #include <arpa/inet.h>
 #include <netdb.h>
 
@@ -509,9 +508,11 @@ uzfs_zvol_mgmt_do_handshake(zvol_io_hdr_t *hdr, int sfd, char *name)
 		hdr->len = sizeof (mgmt_ack_t);
 	}
 
-	uzfs_zvol_get_last_committed_io_no(zinfo, &hdr->checkpointed_io_seq);
-	if (zinfo != NULL)
+	if (zinfo != NULL) {
+		uzfs_zvol_get_last_committed_io_no(zinfo,
+		    &hdr->checkpointed_io_seq);
 		uzfs_zinfo_drop_refcnt(zinfo, B_FALSE);
+	}
 
 	rc = uzfs_zvol_socket_write(sfd, (char *)hdr, sizeof (*hdr));
 	if (rc != 0) {
@@ -547,28 +548,22 @@ uzfs_zvol_connect_to_tgt_controller(void *arg)
 	}
 
 	ZREPL_LOG("iSCSI controller IP address is: %s\n", target_addr);
-	sfd = create_and_bind(mgmt_port, B_FALSE);
-	if (sfd == -1) {
-		return (-1);
-	}
 	bzero((char *)&istgt_addr, sizeof (istgt_addr));
 	istgt_addr.sin_family = AF_INET;
 	istgt_addr.sin_addr.s_addr = inet_addr(target_addr);
 	istgt_addr.sin_port = htons(TARGET_PORT);
 retry:
+	sfd = create_and_bind(mgmt_port, B_FALSE);
+	if (sfd == -1) {
+		return (-1);
+	}
+
 	rc = connect(sfd, (struct sockaddr *)&istgt_addr, sizeof (istgt_addr));
 	if (rc == -1) {
-		if ((errno == EINTR) || (errno == ECONNREFUSED) ||
-		    (errno == ETIMEDOUT) || (errno == EINPROGRESS)) {
-			ZREPL_ERRLOG("Failed to connect to iSCSI controller"
-			    " with err:%d\n", errno);
-			sleep(2);
-			printf("Retrying ....\n");
-			goto retry;
-		} else {
-			close(sfd);
-			return (-1);
-		}
+		close(sfd);
+		sleep(2);
+		printf("Retrying ....\n");
+		goto retry;
 	} else {
 		ZREPL_LOG("Connection to iSCSI controller is successful\n");
 	}
