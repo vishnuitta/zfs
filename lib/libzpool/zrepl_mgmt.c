@@ -1,3 +1,4 @@
+
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <syslog.h>
@@ -21,7 +22,7 @@ SLIST_HEAD(, zvol_info_s) stale_zv_list;
 static int uzfs_zinfo_free(zvol_info_t *zinfo);
 
 int
-create_and_bind(char *port, int bind_needed)
+create_and_bind(const char *port, int bind_needed)
 {
 	int s, sfd;
 	struct addrinfo hints = {0, };
@@ -280,13 +281,8 @@ uzfs_zinfo_update_io_seq_for_all_volumes(void)
 	zvol_info_t *zinfo;
 	(void) pthread_mutex_lock(&zvol_list_mutex);
 	SLIST_FOREACH(zinfo, &zvol_list, zinfo_next) {
-		if (zinfo != NULL) {
-			/* Take refcount */
-			uzfs_zinfo_take_refcnt(zinfo, B_TRUE);
-			uzfs_zvol_store_last_committed_io_no(zinfo->zv,
-			    zinfo->checkpointed_io_seq);
-			uzfs_zinfo_drop_refcnt(zinfo, B_TRUE);
-		}
+		uzfs_zvol_store_last_committed_io_no(zinfo->zv,
+		    zinfo->checkpointed_io_seq);
 	}
 	(void) pthread_mutex_unlock(&zvol_list_mutex);
 }

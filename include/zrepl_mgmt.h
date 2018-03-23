@@ -107,7 +107,8 @@ extern int uzfs_zinfo_destroy(const char *ds_name);
 extern void uzfs_zinfo_update_io_seq_for_all_volumes(void);
 extern void uzfs_zvol_get_last_committed_io_no(zvol_info_t *z,
     uint64_t *io_seq);
-extern int create_and_bind(char *port, int bind_needed);
+extern int create_and_bind(const char *port, int bind_needed);
+
 #define	ZREPL_LOG(fmt, ...)  syslog(LOG_NOTICE,				\
 		"%-18.18s:%4d: %-20.20s: " fmt, __func__, __LINE__,	\
     tinfo, ##__VA_ARGS__)
