@@ -76,10 +76,12 @@ typedef enum zvol_op_status zvol_op_status_t;
 struct zvol_io_hdr {
 	uint16_t	version;
 	zvol_op_code_t	opcode;
-	zvol_op_status_t status;
 	uint64_t	io_seq;
 	uint64_t	offset;
 	uint64_t	len;
+	uint64_t	checkpointed_io_seq;
+	uint8_t 	flags;
+	zvol_op_status_t status;
 } __attribute__((packed));
 
 typedef struct zvol_io_hdr zvol_io_hdr_t;
