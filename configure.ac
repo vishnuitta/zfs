@@ -105,7 +105,6 @@ AC_CONFIG_FILES([
 	cmd/zdb/Makefile
 	cmd/zhack/Makefile
 	cmd/zfs/Makefile
-	cmd/tgt/Makefile
 	cmd/zinject/Makefile
 	cmd/zpool/Makefile
 	cmd/zstreamdump/Makefile
