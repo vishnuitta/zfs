@@ -224,6 +224,8 @@ static int read_from_socket(int fd, void *buf, size_t nbytes)
 		rc = recv(fd, ((char *)buf) + n, nbytes - n, 0);
 		if (rc < 0)
 			return (errno);
+		if (rc == 0)
+			return (ESRCH);
 		n += rc;
 	}
 	return (0);
@@ -569,7 +571,7 @@ static int fio_repl_queue(struct thread_data *td, struct io_u *io_u)
 	zvol_io_hdr_t hdr;
 	io_list_entry_t *io_ent;
 
-	io_ent = malloc(sizeof (io_ent));
+	io_ent = malloc(sizeof (*io_ent));
 	if (io_ent == NULL) {
 		io_u->error = ENOMEM;
 		goto end;
@@ -585,6 +587,8 @@ static int fio_repl_queue(struct thread_data *td, struct io_u *io_u)
 	hdr.offset = io_u->offset;
 	hdr.len = io_u->xfer_buflen;
 	hdr.status = 0;
+	hdr.flags = 0;
+	hdr.checkpointed_io_seq = 0;
 
 	if (io_u->ddir == DDIR_WRITE) {
 		hdr.opcode = ZVOL_OPCODE_WRITE;
@@ -626,9 +630,7 @@ end:
 		td_verror(td, io_u->error, "xfer");
 		return (-1);
 	}
-	if (nd->io_inprog != NULL) {
-		io_ent->io_next = nd->io_inprog;
-	}
+	io_ent->io_next = nd->io_inprog;
 	nd->io_inprog = io_ent;
 
 	return (FIO_Q_QUEUED);
