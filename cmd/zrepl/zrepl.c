@@ -932,12 +932,7 @@ uzfs_send_reads(int fd, zvol_io_cmd_t *zio_cmd)
 	}
 
 end:
-	md = zio_cmd->metadata_desc;
-	while (md != NULL) {
-		metadata_desc_t *md_tmp = md->next;
-		kmem_free(md, sizeof (*md));
-		md = md_tmp;
-	}
+	FREE_METADATA_LIST(zio_cmd->metadata_desc);
 	zio_cmd->metadata_desc = NULL;
 
 	return (rc);
