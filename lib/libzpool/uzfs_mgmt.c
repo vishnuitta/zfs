@@ -496,14 +496,13 @@ uzfs_spa_init(spa_t *spa)
 		us = (uzfs_spa_t *)kmem_zalloc(sizeof (uzfs_spa_t), KM_SLEEP);
 		mutex_init(&us->mtx, NULL, MUTEX_DEFAULT, NULL);
 		cv_init(&us->cv, NULL, CV_DEFAULT, NULL);
+		spa->spa_us = us;
 		mutex_enter(&us->mtx);
 		us->update_txg_tid = zk_thread_create(NULL, 0,
 		    (thread_func_t)uzfs_update_txg_zap_thread, spa, 0, NULL,
 		    TS_RUN, 0, PTHREAD_CREATE_DETACHED);
 		mutex_exit(&us->mtx);
 	}
-
-	spa->spa_us = us;
 }
 
 void
@@ -515,10 +514,14 @@ uzfs_spa_fini(spa_t *spa)
 
 	uzfs_spa_t *us = spa->spa_us;
 
+	if (us->close_pool)
+		return;
+
 	mutex_enter(&us->mtx);
 	us->close_pool = 1;
 	cv_signal(&us->cv);
 	mutex_exit(&us->mtx);
+	mutex_exit(&spa_namespace_lock);
 
 	ts.tv_sec = 0;
 	ts.tv_nsec = 100000000;
@@ -526,6 +529,7 @@ uzfs_spa_fini(spa_t *spa)
 	while (us->update_txg_tid != NULL)
 		nanosleep(&ts, NULL);
 
+	mutex_enter(&spa_namespace_lock);
 	mutex_destroy(&us->mtx);
 	cv_destroy(&us->cv);
 	spa->spa_us = NULL;

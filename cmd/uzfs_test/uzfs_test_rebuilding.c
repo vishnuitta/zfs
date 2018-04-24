@@ -28,13 +28,14 @@
 #include <uzfs_zap.h>
 #include <uzfs_rebuilding.h>
 #include <uzfs_test.h>
+#include <string.h>
 
 extern void make_vdev(char *path);
 extern void populate_string(char *buf, uint64_t size);
+extern void uzfs_test_import_pool(char *pool_name);
 
 spa_t *spa1, *spa2;
 zvol_state_t *zvol1, *zvol2;
-uint32_t f_index = 0;
 
 #define	POOL_NAME	"testpool"
 #define	ZVOL_NAME	"testzvol"
@@ -68,7 +69,7 @@ struct replica_read_data {
 	uint64_t len;
 };
 
-uint64_t
+static uint64_t
 verify_replica_data(char *buf1, char *buf2, uint64_t len)
 {
 	uint64_t i = 0;
@@ -88,7 +89,7 @@ verify_replica_data(char *buf1, char *buf2, uint64_t len)
 	return (count);
 }
 
-void
+static void
 replica_reader_thread(void *arg)
 {
 	worker_args_t *warg = (worker_args_t *)arg;
@@ -130,14 +131,18 @@ replica_reader_thread(void *arg)
 			len = end - offset;
 
 		err = uzfs_read_data(zvol1, buf1[idx], offset, len, NULL);
-		if (err != 0)
-			printf("IO error at offset: %lu len: %lu\n", offset,
-			    len);
+		if (err != 0) {
+			printf("IO error at offset: %lu len: %lu in read"
+			    " err(%d)\n", offset, len, err);
+			exit(1);
+		}
 
 		err = uzfs_read_data(zvol2, buf2[idx], offset, len, NULL);
-		if (err != 0)
-			printf("IO error at offset: %lu len: %lu\n", offset,
-			    len);
+		if (err != 0) {
+			printf("IO error at offset: %lu len: %lu in read"
+			    " err(%d)\n", offset, len, err);
+			exit(1);
+		}
 
 		uint64_t mismatch;
 		mismatch = verify_replica_data(buf1[idx], buf2[idx], len);
@@ -187,6 +192,8 @@ uzfs_test_meta_diff_traverse_cb(off_t offset, size_t len,
 
 	err = uzfs_read_data(snap_zv, io->buf, offset, len, NULL);
 	if (err) {
+		printf("Failed to read data from snapshot(%s) err(%d)\n",
+		    snap_zv->zv_name, err);
 		umem_free(io, sizeof (*io));
 		umem_free(io->buf, len);
 		goto done;
@@ -200,7 +207,7 @@ done:
 	return (err);
 }
 
-void
+static void
 check_snapshot(zvol_state_t *zv, blk_metadata_t *md, boolean_t err)
 {
 	objset_t *s_obj;
@@ -223,7 +230,7 @@ check_snapshot(zvol_state_t *zv, blk_metadata_t *md, boolean_t err)
 		dmu_objset_disown(s_obj, zv);
 }
 
-void
+static void
 fetch_modified_data(void *arg)
 {
 	struct rebuilding_data *repl_data = arg;
@@ -273,7 +280,7 @@ fetch_modified_data(void *arg)
 	zk_thread_exit();
 }
 
-void
+static void
 rebuild_replica_thread(void *arg)
 {
 	struct rebuilding_info *r_info = arg;
@@ -336,8 +343,8 @@ rebuild_replica_thread(void *arg)
 		err = uzfs_write_data(to_zvol, node->buf, node->offset,
 		    node->len, &temp_metadata, B_TRUE);
 		if (err) {
-			printf("IO error during rebuilding offset:%lu,"
-			    "len:%lu\n", node->offset, node->len);
+			printf("IO error at offset: %lu len: %lu in rebuild"
+			    " err(%d)\n", node->offset, node->len, err);
 			exit(2);
 		}
 		diff_data += node->len;
@@ -371,7 +378,7 @@ rebuild_replica_thread(void *arg)
 	zk_thread_exit();
 }
 
-void
+static void
 replica_writer_thread(void *arg)
 {
 	worker_args_t *warg = (worker_args_t *)arg;
@@ -435,9 +442,11 @@ replica_writer_thread(void *arg)
 
 		err = uzfs_write_data(zvol1, buf[idx], offset,
 		    (idx + 1) * block_size, (blk_metadata_t *)&io_num, B_FALSE);
-		if (err != 0)
-			printf("IO error at offset: %lu len: %lu\n", offset,
-			    (idx + 1) * block_size);
+		if (err != 0) {
+			printf("IO error at offset: %lu len: %lu in write"
+			    " err(%d)\n", offset, (idx + 1) * block_size, err);
+			exit(1);
+		}
 
 		/*
 		 * update ZAP entries for io_number frequently.
@@ -453,15 +462,15 @@ replica_writer_thread(void *arg)
 			err = uzfs_write_data(zvol2, buf[idx], offset,
 			    (idx + 1) * block_size, (blk_metadata_t *)&io_num,
 			    B_FALSE);
-			if (err != 0)
-				printf("IO error at offset: %lu len: %lu\n",
-				    offset, (idx + 1) * block_size);
+			if (err != 0) {
+				printf("IO error at offset: %lu len: %lu"
+				    " in write err(%d)\n", offset,
+				    (idx + 1) * block_size, err);
+				exit(1);
+			}
 		} else {
 			mismatch_count += (idx + 1) * block_size;
 		}
-
-		if (err)
-			exit(2);
 
 		iops += (idx + 1);
 		now = gethrtime();
@@ -524,43 +533,36 @@ replica_writer_thread(void *arg)
 	zk_thread_exit();
 }
 
-void
-create_and_init_pool(spa_t **spa, zvol_state_t **zvol)
+static void
+open_pool_and_dataset(spa_t **spa, zvol_info_t **zinfo, char *pool_name,
+    char *ds_name)
 {
 	int err;
-	char *pool_name, *file_name, *zvol_name;
-	uint32_t index;
-	spa_t *t_spa;
-	zvol_state_t *t_zvol;
 
-	index = atomic_inc_32_nv(&f_index);
-	pool_name = kmem_asprintf("%s%d", POOL_NAME, index);
-	file_name = kmem_asprintf("%s%d", FILE_PATH, index);
-	zvol_name = kmem_asprintf("%s%d", ZVOL_NAME, index);
-
-	unlink(file_name);
-	make_vdev(file_name);
-
-	err = uzfs_create_pool(pool_name, file_name, &t_spa);
-	if (t_spa == NULL || err != 0) {
-		printf("shouldn't create pool(%s) with non existing"
-		    " disk..err(%d)\n", pool_name, err);
+	uzfs_test_import_pool(pool_name);
+	err = uzfs_open_pool(pool_name, spa);
+	if (err != 0) {
+		printf("pool(%s) open errored.. %d\n", pool_name, err);
 		exit(1);
 	}
 
-	err = uzfs_create_dataset(t_spa, zvol_name, vol_size,
-	    block_size, &t_zvol);
-	if (t_zvol == NULL || err != 0) {
-		printf("creating ds(%s) errored %d..\n", zvol_name, err);
+	*zinfo = uzfs_zinfo_lookup(ds_name);
+	if (*zinfo == NULL) {
+		uzfs_close_pool(*spa);
+		printf("failed to lookup dataset(%s)\n", ds_name);
 		exit(1);
 	}
+}
 
-	*spa = t_spa;
-	*zvol = t_zvol;
+static void
+close_pool_and_dataset(spa_t *spa, zvol_info_t *zinfo)
+{
+	char name[MAXNAMELEN];
 
-	strfree(pool_name);
-	strfree(file_name);
-	strfree(zvol_name);
+	strlcpy(name, zinfo->name, MAXNAMELEN);
+	uzfs_zinfo_drop_refcnt(zinfo, 0);
+	uzfs_zinfo_destroy(name, NULL);
+	uzfs_close_pool(spa);
 }
 
 void
@@ -574,13 +576,26 @@ uzfs_rebuild_test(void *arg)
 	worker_args_t writer_args, **reader_args;
 	int reader_count;
 	int n = 0;
-
+	char *pooldup = strdup(pool);
+	char *dsdup = strdup(ds);
+	char *pool1, *pool2, *ds1, *ds2;
+	zvol_info_t *zinfo1, *zinfo2;
 	printf("starting %s\n", test_info->name);
 
-	while (n++ < test_iterations) {
-		create_and_init_pool(&spa1, &zvol1);
-		create_and_init_pool(&spa2, &zvol2);
+	pool1 = strtok(pooldup, ",");
+	pool2 = strtok(NULL, ",");
+	ds1 = strtok(dsdup, ",");
+	ds2 = strtok(NULL, ",");
+	if (!ds2)
+		ds2 = ds1;
 
+	open_pool_and_dataset(&spa1, &zinfo1, pool1, ds1);
+	open_pool_and_dataset(&spa2, &zinfo2, pool2, ds2);
+
+	zvol1 = zinfo1->zv;
+	zvol2 = zinfo2->zv;
+
+	while (n++ < test_iterations) {
 		mutex_init(&mtx, NULL, MUTEX_DEFAULT, NULL);
 		cv_init(&cv, NULL, CV_DEFAULT, NULL);
 
@@ -618,8 +633,8 @@ uzfs_rebuild_test(void *arg)
 			r_arg = umem_alloc(sizeof (*r_arg), UMEM_NOFAIL);
 			r_data = umem_alloc(sizeof (*r_data), UMEM_NOFAIL);
 
-			r_data->offset = i * ((vol_size) / reader_count);
-			r_data->len = (vol_size) / reader_count;
+			r_data->offset = i * ((active_size) / reader_count);
+			r_data->len = (active_size) / reader_count;
 			r_arg->zv = r_data;
 			r_arg->threads_done = &threads_done;
 			r_arg->mtx = &mtx;
@@ -653,10 +668,11 @@ uzfs_rebuild_test(void *arg)
 		cv_destroy(&cv);
 		mutex_destroy(&mtx);
 
-		uzfs_close_dataset(zvol1);
-		uzfs_close_dataset(zvol2);
-		uzfs_close_pool(spa1);
-		uzfs_close_pool(spa2);
 		printf("%s pass:%d\n", test_info->name, n);
 	}
+
+	close_pool_and_dataset(spa1, zinfo1);
+	close_pool_and_dataset(spa2, zinfo2);
+	free(pooldup);
+	free(dsdup);
 }

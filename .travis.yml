@@ -1,5 +1,8 @@
 language: c
 sudo: required
+branches:
+  only:
+    - zfs-0.7-release
 env:
   global:
     # Travis limits maximum log size, we have to cut tests output 
@@ -8,18 +11,6 @@ env:
   matrix:
     # tags are mainly in ascending order
     - ZFS_BUILD_TAGS=0
-    - ZFS_TEST_TAGS=pool_test
-      ZFS_BUILD_TAGS=0
-    - ZFS_TEST_TAGS=zvol_test
-      ZFS_BUILD_TAGS=0
-    - ZFS_TEST_TAGS=rebuild_test
-      ZFS_BUILD_TAGS=0
-    - ZFS_TEST_TAGS=fio_test
-      ZFS_BUILD_TAGS=0
-    - ZFS_TEST_TAGS=zrepl_test
-      ZFS_BUILD_TAGS=0
-    - ZFS_TEST_TAGS=zrepl_rebuild_test
-      ZFS_BUILD_TAGS=0
     - ZFS_BUILD_TAGS=1
 before_install:
     - sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
@@ -38,7 +29,7 @@ install:
     - pushd .
     - cd /usr/src/gtest
     - sudo cmake CMakeLists.txt
-    - sudo make
+    - sudo make -j4
     - sudo cp *.a /usr/lib
     - popd
     - cd ..
@@ -48,7 +39,7 @@ install:
     # TODO: replace commit hash by version tag in future
     - git checkout 2e4ef4fbd69eb6d4c07f2f362463e3f3df2e808c
     - ./configure
-    - make
+    - make -j4
     - cd ..
     - git clone https://github.com/openebs/spl
     - cd spl
@@ -56,7 +47,7 @@ install:
     - sh autogen.sh
     - ./configure
     - if [ $ZFS_BUILD_TAGS = 0 ]; then
-        make;
+        make -j4;
       else
         make --no-print-directory -s pkg-utils pkg-kmod;
         sudo dpkg -i *.deb;
@@ -65,7 +56,7 @@ install:
     - sh autogen.sh
     - if [ $ZFS_BUILD_TAGS = 0 ]; then
         ./configure --enable-code-coverage=yes --enable-debug --enable-uzfs=yes --with-jemalloc --with-fio=$PWD/../fio || travis_terminate 1;
-        make;
+        make -j4;
       else
         ./configure --enable-code-coverage=yes --enable-debug || travis_terminate 1;
         make --no-print-directory -s pkg-utils pkg-kmod || travis_terminate 1;
@@ -79,10 +70,10 @@ script:
     - if [ $ZFS_BUILD_TAGS = 0 ]; then
         sudo mkdir /etc/zfs;
         export FIO_SRCDIR=$PWD/../fio;
-        travis_wait 60 sudo bash ./tests/cbtest/script/test_uzfs.sh -T $ZFS_TEST_TAGS || travis_terminate 1;
+        travis_wait 60 sudo bash ./tests/cbtest/script/test_uzfs.sh -T all || travis_terminate 1;
       else
         sudo /sbin/modprobe zfs;
-        true || travis_wait 10 /sbin/ztest || travis_terminate 1;
+        travis_wait 10 /sbin/ztest || travis_terminate 1;
       fi
 after_failure:
     - find /var/tmp/test_results/current/log -type f -name '*' -printf "%f\n" -exec cut -c -$ZFS_TEST_TRAVIS_LOG_MAX_LENGTH {} \;
