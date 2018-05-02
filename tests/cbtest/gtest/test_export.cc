@@ -95,6 +95,7 @@ public:
 
 		zi = uzfs_zinfo_lookup(zv_name.c_str());
 		ASSERT_FALSE(zi == NULL);
+		uzfs_hold_dataset(zi->zv);
 		zi->refcnt--;
 		ASSERT_EQ(zi->refcnt, 1);
 
@@ -110,6 +111,7 @@ public:
 		zi = uzfs_zinfo_lookup(zv_name.c_str());
 		ASSERT_FALSE(zi == NULL);
 		ASSERT_EQ(strcmp(zi->name, zv_name.c_str()), 0);
+		uzfs_hold_dataset(zi->zv);
 		zi->refcnt--;
 		ASSERT_EQ(zi->refcnt, 1);
 

@@ -62,23 +62,24 @@ typedef struct zvol_rebuild_info {
  * The in-core state of each volume.
  */
 struct zvol_state {
-	char zv_name[MAXNAMELEN];	/* name */
-	uint64_t zv_volsize;		/* advertised space */
-	uint64_t zv_volblocksize;	/* volume block size */
-	objset_t *zv_objset;		/* objset handle */
-	zilog_t *zv_zilog;		/* ZIL handle */
-	dnode_t *zv_dn;			/* dnode hold */
-	zfs_rlock_t zv_range_lock;	/* range lock */
-	spa_t *zv_spa;			/* spa */
-	uint64_t zv_volmetablocksize;	/* meta block size */
-	uint64_t zv_volmetadatasize;	/* volume meta data size */
+	char zv_name[MAXNAMELEN];		/* name */
+	uint64_t zv_volsize;			/* advertised space */
+	uint64_t zv_volblocksize;		/* volume block size */
+	objset_t *zv_objset;			/* objset handle */
+	zilog_t *zv_zilog;			/* ZIL handle */
+	dnode_t *zv_dn;				/* dnode hold */
+	zfs_rlock_t zv_range_lock;		/* range lock */
+	spa_t *zv_spa;				/* spa */
+	char zv_target_host[MAXNAMELEN];	/* target address */
+	uint64_t zv_volmetablocksize;		/* meta block size */
+	uint64_t zv_volmetadatasize;		/* volume meta data size */
 
 	/*
 	 * block size at which metadata is calculated.
 	 * This should not be greater than volblocksize
 	 */
 	uint64_t zv_metavolblocksize;
-	zvol_status_t zv_status;	/* zvol status */
+	zvol_status_t zv_status;		/* zvol status */
 	zvol_rebuild_info_t rebuild_info;
 };
 

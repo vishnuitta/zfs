@@ -89,7 +89,7 @@ public:
 		m_pid = fork();
 		if (m_pid == 0) {
 			execl(zrepl_path.c_str(), zrepl_path.c_str(),
-				"start", "-t", "127.0.0.1", NULL);
+				"start", NULL);
 		}
 		/* wait for zrepl to come up - is there a better way? */
 		while (i < 10) {
@@ -241,6 +241,12 @@ public:
 			    "Cannot truncate vdev file");
 		execCmd("zpool", std::string("create ") + m_name + " " +
 		    m_path);
+	}
+
+	void import() {
+		execCmd("zpool",
+		    std::string("import ") +
+		    m_name + " -d /tmp");
 	}
 
 	void createZvol(std::string name, std::string arg = "") {
@@ -732,6 +738,8 @@ TEST(TargetIPTest, CreateAndDestroy) {
 	ASSERT_GE(rc, 0);
 
 	zrepl.start();
+	sleep(10);
+	pool.import();
 
 	// two new connections (one for each target)
 	fdImpl = targetImpl.accept(5);

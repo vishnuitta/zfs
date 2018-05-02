@@ -23,7 +23,7 @@ fi
 ZPOOL="$SRC_PATH/cmd/zpool/zpool"
 ZFS="$SRC_PATH/cmd/zfs/zfs"
 ZDB="$SRC_PATH/cmd/zdb/zdb"
-ZREPL="$SRC_PATH/cmd/zrepl/zrepl start -t 127.0.0.1"
+ZREPL="$SRC_PATH/cmd/zrepl/zrepl start"
 GTEST_UZFS="$SRC_PATH/tests/cbtest/gtest/test_uzfs"
 GTEST_ZREPL_PROT="$SRC_PATH/tests/cbtest/gtest/test_zrepl_prot"
 GTEST_EXPORT="$SRC_PATH/tests/cbtest/gtest/test_export"
@@ -1124,8 +1124,7 @@ run_zvol_test()
 {
 	local ztest_pid
 
-	log_must $ZTEST &
-	ztest_pid=$!
+	log_must $ZTEST
 
 	run_uzfs_test
 	run_dmu_test
@@ -1135,8 +1134,6 @@ run_zvol_test()
 	log_must $GTEST_EXPORT
 	log_must $GTEST_ZREPL_PROT
 	start_zrepl
-
-	wait $ztest_pid
 }
 
 run_rebuild_test()

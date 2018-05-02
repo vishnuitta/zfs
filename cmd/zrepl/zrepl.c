@@ -28,49 +28,6 @@ static void uzfs_zvol_io_ack_sender(void *arg);
 kthread_t	*conn_accpt_thread;
 kthread_t	*uzfs_timer_thread;
 kthread_t	*mgmt_conn_thread;
-char 		*pool_name = NULL;
-struct 		in_addr addr = {0};
-int zrepl_import(int argc, char **argv);
-int zrepl_start(int argc, char **argv);
-
-typedef struct zrepl_command {
-	const char *cmd_name;
-	int (*func)(int, char **);
-} zrepl_cmd_t;
-
-static zrepl_cmd_t cmd_table[] = {
-	{"import",	zrepl_import},
-	{"start",	zrepl_start},
-	{NULL},
-};
-
-#define	NCMDS   (sizeof (cmd_table) / sizeof (zrepl_cmd_t))
-
-int
-find_command(const char *cmd_name, int *index)
-{
-	for (int i = 0; i < NCMDS; i++) {
-		if (cmd_table[i].cmd_name == NULL)
-			continue;
-		if (strcmp(cmd_name, cmd_table[i].cmd_name) == 0) {
-			*index = i;
-			return (0);
-		}
-	}
-	return (1);
-}
-
-void
-help(void)
-{
-	/*
-	 * XXX need to do better here
-	 */
-
-	printf("zrepl command args ... \nwhere 'command' is one of:\n\n");
-	printf("\t import <pool_name> [-t ip address)]\n");
-	printf("\t start [-t ip address)]\n");
-}
 
 /*
  * Read header message from socket in safe manner, which is: first we read a
@@ -760,114 +717,11 @@ uzfs_zrepl_close_log(void)
 	closelog();
 }
 
-int
-zrepl_import(int argc, char **argv)
-{
-	int c;
-	nvlist_t	*config = NULL;
-	importargs_t	importargs = {0};
-	int		error;
-	spa_t		*spa;
-	nvlist_t	*props = NULL;
-
-	argc -= optind;
-	argv += optind;
-
-	if (argc < 1) {
-		help();
-		return (1);
-	}
-
-	pool_name = argv[1];
-
-	while ((c = getopt(argc, argv, "t:")) != -1) {
-		switch (c) {
-		case 't':
-			if (inet_aton(optarg, &addr) == 0) {
-				fprintf(stderr,
-				    "Invalid target address\n");
-				help();
-				return (1);
-			}
-			target_addr = optarg;
-			break;
-		default:
-			help();
-			return (1);
-		}
-	}
-
-	if (target_addr == NULL) {
-		help();
-		return (1);
-	}
-
-	fprintf(stdout, "import pool %s default target addr %s\n", pool_name,
-	    target_addr);
-	libzfs_handle_t *hdl = libzfs_init();
-
-	importargs.scan = B_TRUE;
-	importargs.cachefile = NULL;
-
-	if ((error = zpool_tryimport(hdl, pool_name, &config, &importargs))
-	    != 0) {
-		fprintf(stderr, "cannot import pool:%s, %s\n", pool_name,
-		    libzfs_error_description(hdl));
-		libzfs_fini(hdl);
-		return (1);
-	}
-
-	if ((error = spa_import(pool_name, config, props, ZFS_IMPORT_NORMAL))
-	    != 0) {
-		fprintf(stderr, "failed import %s\n", strerror(error));
-		return (1);
-	}
-
-	libzfs_fini(hdl);
-
-	if ((error = uzfs_open_pool(pool_name, &spa)) != 0) {
-		fprintf(stderr, "spa open failed %s\n ", strerror(error));
-		return (1);
-	}
-
-	return (0);
-}
-
-int
-zrepl_start(int argc, char **argv)
-{
-
-	int c;
-
-	while ((c = getopt(argc, argv, "t:")) != -1) {
-		switch (c) {
-		case 't':
-			if (inet_aton(optarg, &addr) == 0) {
-				fprintf(stderr, "Invalid target address\n");
-				help();
-				return (1);
-			}
-			target_addr = optarg;
-			break;
-		default:
-			help();
-			return (1);
-		}
-	}
-
-	if (target_addr == NULL) {
-		help();
-		return (1);
-	}
-
-	return (0);
-}
-
 void
 zrepl_svc_run(void)
 {
 	mgmt_conn_thread = zk_thread_create(NULL, 0,
-	    (thread_func_t)uzfs_zvol_mgmt_thread, target_addr, 0, NULL,
+	    (thread_func_t)uzfs_zvol_mgmt_thread, NULL, 0, NULL,
 	    TS_RUN, 0, PTHREAD_CREATE_DETACHED);
 	VERIFY3P(mgmt_conn_thread, !=, NULL);
 
@@ -890,20 +744,6 @@ main(int argc, char **argv)
 {
 
 	int	rc;
-	int	i = 0;
-	const char *cmd_name = NULL;
-
-	if (argc < 2) {
-		help();
-		return (1);
-	}
-
-	cmd_name = argv[1];
-
-	if ((rc = find_command(cmd_name, &i)) != 0) {
-		help();
-		return (1);
-	}
 
 	if (getenv("CONFIG_LOAD_DISABLE") != NULL) {
 		printf("disabled auto import (reading of zpool.cache)\n");
@@ -922,7 +762,6 @@ main(int argc, char **argv)
 		return (-1);
 	}
 
-
 	/* Ignore SIGPIPE signal */
 	signal(SIGPIPE, SIG_IGN);
 	if (libuzfs_ioctl_init() < 0) {
@@ -930,8 +769,6 @@ main(int argc, char **argv)
 		goto initialize_error;
 	}
 
-	if ((rc = cmd_table[i].func(argc, argv)) != 0)
-		goto initialize_error;
 	zrepl_svc_run();
 	while (1) {
 		sleep(5);
