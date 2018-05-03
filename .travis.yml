@@ -68,7 +68,6 @@ script:
     # run ztest and test supported zio backends
     # XXX enable the ztest when ticket #152 is fixed
     - if [ $ZFS_BUILD_TAGS = 0 ]; then
-    #    sudo mkdir /etc/zfs;
         export FIO_SRCDIR=$PWD/../fio;
         travis_wait 60 sudo bash ./tests/cbtest/script/test_uzfs.sh -T all || travis_terminate 1;
       else
