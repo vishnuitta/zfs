@@ -509,7 +509,7 @@ uzfs_zvol_create_cb(const char *ds_name, void *arg)
 
 	/* if zvol is being created the zvol property does not exist yet */
 	if (nvprops != NULL &&
-	    nvlist_lookup_string(nvprops , ZFS_PROP_TARGET_IP, &ip) == 0) {
+	    nvlist_lookup_string(nvprops, ZFS_PROP_TARGET_IP, &ip) == 0) {
 		strncpy(zv->zv_target_host, ip, sizeof (zv->zv_target_host));
 	}
 
