@@ -494,6 +494,7 @@ uzfs_zvol_create_cb(const char *ds_name, void *arg)
 	zvol_state_t	*zv = NULL;
 	int 		error = -1;
 	nvlist_t	*nvprops = arg;
+	char		*ip;
 
 	if (strrchr(ds_name, '@') != NULL) {
 		printf("no owning dataset for snapshots: %s\n", ds_name);
@@ -504,6 +505,12 @@ uzfs_zvol_create_cb(const char *ds_name, void *arg)
 	if (error) {
 		printf("Failed to open dataset: %s\n", ds_name);
 		return (error);
+	}
+
+	/* if zvol is being created the zvol property does not exist yet */
+	if (nvprops != NULL &&
+	    nvlist_lookup_string(nvprops , ZFS_PROP_TARGET_IP, &ip) == 0) {
+		strncpy(zv->zv_target_host, ip, sizeof (zv->zv_target_host));
 	}
 
 	if (uzfs_zinfo_init(zv, ds_name, nvprops) != 0) {
@@ -521,16 +528,23 @@ uzfs_zvol_create_minors_impl(void *n)
 
 	dmu_objset_find((char *)name, uzfs_zvol_create_cb, NULL,
 	    DS_FIND_CHILDREN);
+
+	kmem_free(n, MAXNAMELEN);
 }
 
 void
 uzfs_zvol_create_minors(spa_t *spa, const char *name, boolean_t async)
 {
 	taskqid_t id;
+	char *pool_name;
+
+	pool_name = (char *)kmem_zalloc(sizeof (char) * MAXNAMELEN, KM_SLEEP);
+
+	strncpy(pool_name, name, MAXNAMELEN);
 
 	if (strrchr(name, '@') == NULL) {
 		id = taskq_dispatch(spa->spa_zvol_taskq,
-		    uzfs_zvol_create_minors_impl, (void *)name, TQ_SLEEP);
+		    uzfs_zvol_create_minors_impl, (void *)pool_name, TQ_SLEEP);
 		if ((async == B_FALSE) && (id != TASKQID_INVALID))
 			taskq_wait_id(spa->spa_zvol_taskq, id);
 	}

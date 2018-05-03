@@ -742,9 +742,9 @@ TEST(TargetIPTest, CreateAndDestroy) {
 	pool.import();
 
 	// two new connections (one for each target)
-	fdImpl = targetImpl.accept(5);
+	fdImpl = targetImpl.accept(50);
 	ASSERT_GE(fdImpl, 0);
-	fdExpl = targetExpl.accept(5);
+	fdExpl = targetExpl.accept(50);
 	ASSERT_GE(fdExpl, 0);
 
 	pool.createZvol("implicit2");
