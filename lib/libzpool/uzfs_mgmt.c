@@ -520,7 +520,8 @@ uzfs_zvol_create_cb(const char *ds_name, void *arg)
 			strncpy(zv->zv_target_host, ip,
 			    sizeof (zv->zv_target_host));
 		else {
-			printf("target IP address is not set for %s\n", ds_name);
+			printf("target IP address is not set for %s\n",
+			    ds_name);
 			uzfs_close_dataset(zv);
 			return (error);
 		}
