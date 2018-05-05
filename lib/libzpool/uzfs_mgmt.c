@@ -325,11 +325,14 @@ get_controller_ip(objset_t *os, char *buf, int len)
 	dsl_pool_config_exit(dp, FTAG);
 	if (error != 0)
 		return (error);
-	if (nvlist_lookup_nvlist(props, ZFS_PROP_TARGET_IP, &propval) != 0)
+	if (nvlist_lookup_nvlist(props, ZFS_PROP_TARGET_IP, &propval) != 0) {
+		nvlist_free(props);
 		return (ENOENT);
-	if (nvlist_lookup_string(propval, ZPROP_VALUE, &ip) != 0)
+	}
+	if (nvlist_lookup_string(propval, ZPROP_VALUE, &ip) != 0) {
+		nvlist_free(props);
 		return (EINVAL);
-
+	}
 	strncpy(buf, ip, len);
 	nvlist_free(props);
 	return (0);
@@ -516,11 +519,15 @@ uzfs_zvol_create_cb(const char *ds_name, void *arg)
 		if (error == 0)
 			strncpy(zv->zv_target_host, ip,
 			    sizeof (zv->zv_target_host));
-		else
+		else {
+			printf("target IP address is not set for %s\n", ds_name);
+			uzfs_close_dataset(zv);
 			return (error);
+		}
 	} else {
 		if (zv->zv_target_host[0] == '\0') {
 			printf("target IP address is NULL for %s\n", ds_name);
+			uzfs_close_dataset(zv);
 			return (EINVAL);
 		}
 	}
