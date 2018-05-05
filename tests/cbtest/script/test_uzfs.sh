@@ -26,7 +26,6 @@ ZDB="$SRC_PATH/cmd/zdb/zdb"
 ZREPL="$SRC_PATH/cmd/zrepl/zrepl"
 GTEST_UZFS="$SRC_PATH/tests/cbtest/gtest/test_uzfs"
 GTEST_ZREPL_PROT="$SRC_PATH/tests/cbtest/gtest/test_zrepl_prot"
-GTEST_EXPORT="$SRC_PATH/tests/cbtest/gtest/test_export"
 ZTEST="$SRC_PATH/cmd/ztest/ztest"
 UZFS_TEST="$SRC_PATH/cmd/uzfs_test/uzfs_test"
 UZFS_TEST_SYNC_SH="$SRC_PATH/cmd/uzfs_test/uzfs_test_sync.sh"
@@ -725,8 +724,8 @@ run_fio_test()
 	log_must $ZPOOL create -f $fio_pool \
 	    -o cachefile="$TMPDIR/zpool_$fio_pool.cache" \
 	    "$TMPDIR/fio_disk1.img"
-	log_must $ZFS create -sV $VOLSIZE -o volblocksize=4k $fio_pool/vol1
-	log_must $ZFS create -sV $VOLSIZE -o volblocksize=4k $fio_pool/vol2
+	log_must $ZFS create -sV $VOLSIZE -o volblocksize=4k -o io.openebs:targetip=127.0.0.1:6060 $fio_pool/vol1
+	log_must $ZFS create -sV $VOLSIZE -o volblocksize=4k -o io.openebs:targetip=127.0.0.1:6060 $fio_pool/vol2
 	cat >$TMPDIR/test.fio <<EOF
 [global]
 ioengine=replica.so
@@ -1150,7 +1149,6 @@ run_zvol_test()
 
 	stop_zrepl
 	log_must $GTEST_UZFS
-	log_must $GTEST_EXPORT
 	log_must $GTEST_ZREPL_PROT
 	start_zrepl
 }
