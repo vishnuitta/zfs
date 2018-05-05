@@ -38,7 +38,7 @@ extern "C" {
 
 #define	uZFS_ZVOL_WORKERS_MAX 128
 #define	uZFS_ZVOL_WORKERS_DEFAULT 6
-#define	ZFS_PROP_TARGET_IP	"com.cloudbyte:targetip"
+#define	ZFS_PROP_TARGET_IP	"io.openebs:targetip"
 
 #define	REBUILD_IO_SERVER_PORT	"3233"
 #define	IO_SERVER_PORT	"3232"

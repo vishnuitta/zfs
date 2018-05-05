@@ -488,8 +488,13 @@ uzfs_zvol_mgmt_do_handshake(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp,
 	    REBUILD_IO_SERVER_PORT : IO_SERVER_PORT);
 	mgmt_ack.pool_guid = spa_guid(zv->zv_spa);
 
+	/*
+	 * hold dataset during handshake if objset is NULL
+	 * no critical section here as rebuild & handshake won't come at a time
+	 */
 	if (zv->zv_objset == NULL)
 		uzfs_hold_dataset(zv);
+
 	/*
 	 * We don't use fsid_guid because that one is not guaranteed
 	 * to stay the same (it is changed in case of conflicts).
@@ -621,8 +626,9 @@ process_message(uzfs_mgmt_conn_t *conn)
 		strncpy(zvol_name, payload, payload_size);
 		zvol_name[payload_size] = '\0';
 
-		if ((zinfo = uzfs_zinfo_lookup(zvol_name)) == NULL) {
-			fprintf(stderr, "Unknown zvol: %s\n", zvol_name);
+		if (((zinfo = uzfs_zinfo_lookup(zvol_name)) == NULL) ||
+		    (zinfo->mgmt_conn != conn)) {
+			ZREPL_ERRLOG("Unknown zvol: %s\n", zvol_name);
 			rc = reply_error(conn, ZVOL_OP_STATUS_FAILED,
 			    hdrp->opcode, hdrp->io_seq, CS_INIT);
 			break;

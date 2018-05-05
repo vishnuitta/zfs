@@ -90,7 +90,8 @@ get_snapshot_zv(zvol_state_t *zv, char *snap_name, zvol_state_t **snap_zv)
 		}
 
 		ret = uzfs_open_dataset(zv->zv_spa, dataset, snap_zv);
-		uzfs_hold_dataset(*snap_zv);
+		if (ret == 0)
+			ret = uzfs_hold_dataset(*snap_zv);
 	}
 
 	if (ret != 0) {

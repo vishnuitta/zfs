@@ -281,6 +281,9 @@ uzfs_objset_create_cb(objset_t *new_os, void *arg, cred_t *cr, dmu_tx_t *tx)
 	VERIFY(error == 0);
 }
 
+/*
+ * own the dataset, hold node, open zilog
+ */
 int
 uzfs_hold_dataset(zvol_state_t *zv)
 {
@@ -507,12 +510,20 @@ uzfs_zvol_create_cb(const char *ds_name, void *arg)
 		return (error);
 	}
 
-	/* if zvol is being created the zvol property does not exist yet */
-	if (nvprops != NULL &&
-	    nvlist_lookup_string(nvprops, ZFS_PROP_TARGET_IP, &ip) == 0) {
-		strncpy(zv->zv_target_host, ip, sizeof (zv->zv_target_host));
+	/* if zvol is being created, read target address from nvlist */
+	if (nvprops != NULL) {
+		error = nvlist_lookup_string(nvprops, ZFS_PROP_TARGET_IP, &ip);
+		if (error == 0)
+			strncpy(zv->zv_target_host, ip,
+			    sizeof (zv->zv_target_host));
+		else
+			return (error);
+	} else {
+		if (zv->zv_target_host[0] == '\0') {
+			printf("target IP address is NULL for %s\n", ds_name);
+			return (EINVAL);
+		}
 	}
-
 	if (uzfs_zinfo_init(zv, ds_name, nvprops) != 0) {
 		printf("Failed in uzfs_zinfo_init\n");
 		return (error);
@@ -532,6 +543,11 @@ uzfs_zvol_create_minors_impl(void *n)
 	kmem_free(n, MAXNAMELEN);
 }
 
+/*
+ * similar to zvol_create_minors which does
+ * - own dataset, zil replay, disown dataset
+ * for all children
+ */
 void
 uzfs_zvol_create_minors(spa_t *spa, const char *name, boolean_t async)
 {

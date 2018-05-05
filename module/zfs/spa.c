@@ -3508,7 +3508,6 @@ spa_open_common(const char *pool, spa_t **spapp, void *tag, nvlist_t *nvpolicy,
 	}
 
 	if (firstopen) {
-/* This code gets executed for zdb. For zdb, we don't need to create minors */
 #ifdef _KERNEL
 		zvol_create_minors(spa, spa_name(spa), B_TRUE);
 #endif
