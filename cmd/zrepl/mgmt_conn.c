@@ -547,9 +547,9 @@ uzfs_zvol_rebuild_dw_replica_start(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp,
 		    mack->volname, mack->ip, mack->port);
 		if (zinfo == NULL) {
 			zinfo = uzfs_zinfo_lookup(mack->dw_volname);
-			if (zinfo == NULL) {
-				printf("Replica %s not found\n",
-				    mack->dw_volname);
+			if ((zinfo == NULL) || (zinfo->mgmt_conn != conn)) {
+				printf("Replica %s not found or not matching "
+				    "conn\n", mack->dw_volname);
 				return (reply_error(conn, ZVOL_OP_STATUS_FAILED,
 				    hdrp->opcode, hdrp->io_seq, CS_INIT));
 			}
@@ -572,6 +572,13 @@ uzfs_zvol_rebuild_dw_replica_start(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp,
 				break;
 			}
 		} else {
+			if (strncmp(zinfo->name, mack->dw_volname, MAXNAMELEN)
+			    != 0) {
+				printf("Replica %s not matching with zinfo"
+				    " %s\n", mack->dw_volname, zinfo->name);
+				return (reply_error(conn, ZVOL_OP_STATUS_FAILED,
+				    hdrp->opcode, hdrp->io_seq, CS_INIT));
+			}
 			uzfs_zinfo_take_refcnt(zinfo, B_FALSE);
 		}
 
