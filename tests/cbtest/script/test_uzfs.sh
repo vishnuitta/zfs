@@ -877,7 +877,7 @@ run_zrepl_rebuild_uzfs_test()
 	fi
 
 	log_must $ZFS create -V $UZFS_TEST_VOLSIZE \
-	    $UZFS_TEST_POOL/$UZFS_REBUILD_VOL -b $2
+	    -o io.openebs:targetip=127.0.0.1:6060 $UZFS_TEST_POOL/$UZFS_REBUILD_VOL -b $2
 	log_must $ZFS set sync=$3 $UZFS_TEST_POOL/$UZFS_REBUILD_VOL
 
 	log_must $UZFS_TEST -T 7
