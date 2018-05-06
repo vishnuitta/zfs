@@ -1201,6 +1201,9 @@ run_zrepl_rebuild_test()
 	log_must run_zrepl_rebuild_uzfs_test log 4096 disabled
 }
 
+echo "ulimit -c unlimited" >> ~/.bash_rc
+sysctl -p
+
 start_zrepl
 if [ $test_type == "all" ]; then
 	START=$(date +%s.%N)
@@ -1219,3 +1222,6 @@ else
 	execute_test $test_type
 fi
 stop_zrepl
+
+ls -ltr
+
