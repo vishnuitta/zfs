@@ -15,6 +15,7 @@
 #include <zrepl_mgmt.h>
 
 char *tgt_port = "6060";
+char *tgt_port1 = "99159";
 char *ds1 = "ds1";
 static uint64_t last_io_seq_sent;
 
@@ -471,8 +472,8 @@ zrepl_rebuild_test(void *arg)
 {
 	kmutex_t mtx;
 	kcondvar_t cv;
-	int count, sfd, rc;
-	int  io_sfd, io_sfd1, new_fd;
+	int count, sfd, rc, sfd1;
+	int  io_sfd, io_sfd1, new_fd, new_fd1;
 	int threads_done = 0;
 	int num_threads = 0;
 	int wrong_message = 1;
@@ -480,7 +481,7 @@ zrepl_rebuild_test(void *arg)
 	kthread_t *writer;
 	socklen_t in_len;
 	zvol_io_hdr_t hdr;
-	mgmt_ack_t *mgmt_ack = NULL;
+	mgmt_ack_t *mgmt_ack = NULL, *mgmt_ack1 = NULL;
 	struct sockaddr in_addr;
 	zrepl_status_ack_t status_ack;
 	struct sockaddr_in replica_io_addr;
@@ -493,7 +494,7 @@ zrepl_rebuild_test(void *arg)
 	ds = "ds0";
 	ds1 = "ds1";
 
-	io_sfd = io_sfd1 = new_fd = sfd = -1;
+	io_sfd = io_sfd1 = new_fd = sfd = sfd1 = new_fd1 = -1;
 	mutex_init(&mtx, NULL, MUTEX_DEFAULT, NULL);
 	cv_init(&cv, NULL, CV_DEFAULT, NULL);
 
@@ -531,7 +532,27 @@ zrepl_rebuild_test(void *arg)
 		printf("listen() failed with errno:%d\n", rc);
 		goto exit;
 	}
+
+	sfd1 = create_and_bind(tgt_port1, B_TRUE, B_FALSE);
+	if (sfd1 == -1) {
+		return;
+	}
+
+	rc = listen(sfd1, 10);
+	if (rc == -1) {
+		printf("listen() failed with errno:%d\n", rc);
+		goto exit;
+	}
+
 	printf("Listen was successful\n");
+
+	new_fd1 = accept(sfd1, &in_addr, &in_len);
+	if (new_fd1 == -1) {
+		printf("Unable to accept\n");
+		goto exit;
+	}
+
+	printf("Connection accepted from replica successful\n");
 
 start:
 	in_len = sizeof (in_addr);
@@ -540,7 +561,6 @@ start:
 		printf("Unable to accept\n");
 		goto exit;
 	}
-	printf("Connection accepted from replica successful\n");
 
 	hdr.version = REPLICA_VERSION;
 	if (wrong_message) {
@@ -590,6 +610,15 @@ start:
 	printf("Vol name: %s\n", mgmt_ack->volname);
 	printf("IP address: %s\n", mgmt_ack->ip);
 	printf("Port: %d\n", mgmt_ack->port);
+
+	hdr.version = REPLICA_VERSION;
+	hdr.opcode = ZVOL_OPCODE_HANDSHAKE;
+	hdr.len = strlen(ds1)+1;
+	count = write(new_fd1, (void *)&hdr, sizeof (zvol_io_hdr_t));
+	count = write(new_fd1, ds1, hdr.len);
+	count = read(new_fd1, (void *)&hdr, sizeof (zvol_io_hdr_t));
+	mgmt_ack1 = umem_alloc(sizeof (mgmt_ack_t), UMEM_NOFAIL);
+	count = read(new_fd1, (void *)mgmt_ack1, hdr.len);
 
 	bzero((char *)&replica_io_addr, sizeof (replica_io_addr));
 
@@ -699,13 +728,13 @@ retry:
 	hdr.version = REPLICA_VERSION;
 	hdr.opcode = ZVOL_OPCODE_START_REBUILD;
 	hdr.len = sizeof (mgmt_ack_t);
-	count = write(new_fd, (void *)&hdr, sizeof (zvol_io_hdr_t));
+	count = write(new_fd1, (void *)&hdr, sizeof (zvol_io_hdr_t));
 	if (count == -1) {
 		printf("Start_rebuild: sending hdr failed\n");
 		goto exit;
 	}
 
-	count = write(new_fd, (char *)mgmt_ack, hdr.len);
+	count = write(new_fd1, (char *)mgmt_ack, hdr.len);
 	if (count == -1) {
 		printf("start_rebuild: sending volname failed\n");
 		goto exit;
@@ -719,19 +748,19 @@ status_check:
 	hdr.version = REPLICA_VERSION;
 	hdr.opcode = ZVOL_OPCODE_REPLICA_STATUS;
 	hdr.len = strlen(ds1) + 1;
-	count = write(new_fd, (void *)&hdr, sizeof (zvol_io_hdr_t));
+	count = write(new_fd1, (void *)&hdr, sizeof (zvol_io_hdr_t));
 	if (count == -1) {
 		printf("Rebuild_status: sending hdr failed\n");
 		goto exit;
 	}
 
-	count = write(new_fd, ds1, hdr.len);
+	count = write(new_fd1, ds1, hdr.len);
 	if (count == -1) {
 		printf("Rebuild_status: sending volname failed\n");
 		goto exit;
 	}
 
-	count = read(new_fd, (void *)&hdr, sizeof (zvol_io_hdr_t));
+	count = read(new_fd1, (void *)&hdr, sizeof (zvol_io_hdr_t));
 	if (count == -1) {
 		printf("Rebuild_status: error in hdr read\n");
 		goto exit;
@@ -742,7 +771,7 @@ status_check:
 		goto exit;
 	}
 
-	count = read(new_fd, (void *)&status_ack, hdr.len);
+	count = read(new_fd1, (void *)&status_ack, hdr.len);
 	if (count == -1) {
 		printf("Rebuild_status: error in mgmt_ack read\n");
 		goto exit;

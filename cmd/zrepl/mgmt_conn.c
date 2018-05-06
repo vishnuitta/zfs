@@ -585,6 +585,8 @@ uzfs_zvol_rebuild_dw_replica_start(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp,
 		thrd_arg = kmem_alloc(sizeof (rebuild_thread_arg_t), KM_SLEEP);
 		thrd_arg->zinfo = zinfo;
 		thrd_arg->fd = io_sfd;
+		thrd_arg->port = mack->port;
+		strlcpy(thrd_arg->ip, mack->ip, MAX_IP_LEN);
 		strlcpy(thrd_arg->zvol_name, mack->volname, MAXNAMELEN);
 		thrd_info = zk_thread_create(NULL, 0,
 		    uzfs_zvol_rebuild_dw_replica, thrd_arg, 0, NULL, TS_RUN, 0,
