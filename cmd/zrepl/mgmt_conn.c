@@ -33,7 +33,6 @@
 #include <sys/prctl.h>
 
 #include <sys/dsl_dataset.h>
-#include <sys/dsl_prop.h>
 #include <sys/dmu_objset.h>
 #include <zrepl_prot.h>
 #include <uzfs_mgmt.h>
@@ -637,7 +636,7 @@ process_message(uzfs_mgmt_conn_t *conn)
 
 		if (((zinfo = uzfs_zinfo_lookup(zvol_name)) == NULL) ||
 		    (zinfo->mgmt_conn != conn)) {
-			ZREPL_ERRLOG("Unknown zvol: %s\n", zvol_name);
+			fprintf(stderr, "Unknown zvol: %s\n", zvol_name);
 			rc = reply_error(conn, ZVOL_OP_STATUS_FAILED,
 			    hdrp->opcode, hdrp->io_seq, CS_INIT);
 			break;

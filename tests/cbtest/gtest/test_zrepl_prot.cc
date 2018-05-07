@@ -61,6 +61,249 @@ static int ready_for_read(int fd, int timeout) {
 }
 
 /*
+ * This fn does handshake for given volname, and fills host/IP
+ * res is the expected status of handshake
+ */
+static void do_handshake(std::string zvol_name, std::string &host,
+    uint16_t &port, int control_fd, int res) {
+	zvol_io_hdr_t hdr_out, hdr_in;
+	int rc;
+	mgmt_ack_t mgmt_ack;
+	hdr_out.version = REPLICA_VERSION;
+	hdr_out.opcode = ZVOL_OPCODE_HANDSHAKE;
+	hdr_out.status = ZVOL_OP_STATUS_OK;
+	hdr_out.io_seq = 0;
+	hdr_out.offset = 0;
+	hdr_out.len = zvol_name.length() + 1;
+
+	rc = write(control_fd, &hdr_out, sizeof (hdr_out));
+	ASSERT_EQ(rc, sizeof (hdr_out));
+	rc = write(control_fd, zvol_name.c_str(), hdr_out.len);
+	ASSERT_EQ(rc, hdr_out.len);
+
+	rc = read(control_fd, &hdr_in, sizeof (hdr_in));
+	ASSERT_EQ(rc, sizeof (hdr_in));
+	EXPECT_EQ(hdr_in.version, REPLICA_VERSION);
+	EXPECT_EQ(hdr_in.opcode, ZVOL_OPCODE_HANDSHAKE);
+	EXPECT_EQ(hdr_in.status, res);
+	EXPECT_EQ(hdr_in.io_seq, 0);
+	if (res == ZVOL_OP_STATUS_FAILED)
+		return;
+	ASSERT_EQ(hdr_in.len, sizeof (mgmt_ack));
+	rc = read(control_fd, &mgmt_ack, sizeof (mgmt_ack));
+	ASSERT_EQ(rc, sizeof (mgmt_ack));
+	EXPECT_STREQ(mgmt_ack.volname, zvol_name.c_str());
+	host = std::string(mgmt_ack.ip);
+	port = mgmt_ack.port;
+}
+
+/*
+ * This fn does data conn for a host:ip and volume, and fills data fd
+ */
+void do_data_connection(int &data_fd, std::string host, uint16_t port,
+    std::string zvol_name) {
+	struct sockaddr_in addr;
+	zvol_io_hdr_t hdr_out;
+	int rc;
+
+	data_fd = socket(AF_INET, SOCK_STREAM, 0);
+	ASSERT_TRUE(data_fd >= 0);
+	memset(&addr, 0, sizeof (addr));
+	addr.sin_family = AF_INET;
+	addr.sin_port = htons(port);
+	rc = inet_pton(AF_INET, host.c_str(), &addr.sin_addr);
+	ASSERT_TRUE(rc > 0);
+	rc = connect(data_fd, (struct sockaddr *)&addr, sizeof (addr));
+	if (rc != 0) {
+		perror("connect");
+		ASSERT_EQ(errno, 0);
+	}
+
+	hdr_out.version = REPLICA_VERSION;
+	hdr_out.opcode = ZVOL_OPCODE_HANDSHAKE;
+	hdr_out.status = ZVOL_OP_STATUS_OK;
+	hdr_out.io_seq = 0;
+	hdr_out.offset = 0;
+	hdr_out.len = zvol_name.length() + 1;
+
+	rc = write(data_fd, &hdr_out, sizeof (hdr_out));
+	ASSERT_EQ(rc, sizeof (hdr_out));
+	rc = write(data_fd, zvol_name.c_str(), hdr_out.len);
+	ASSERT_EQ(rc, hdr_out.len);
+}
+
+/*
+ * Send header for data write. Leave write of actual data to the caller.
+ * len is real length - including metadata headers.
+ */
+void write_data_start(int data_fd, int &ioseq, size_t offset, int len) {
+	zvol_io_hdr_t hdr_out;
+	int rc;
+
+	hdr_out.version = REPLICA_VERSION;
+	hdr_out.opcode = ZVOL_OPCODE_WRITE;
+	hdr_out.status = ZVOL_OP_STATUS_OK;
+	hdr_out.io_seq = ++ioseq;
+	hdr_out.offset = offset;
+	hdr_out.len = len;
+	hdr_out.flags = 0;
+
+	rc = write(data_fd, &hdr_out, sizeof (hdr_out));
+	ASSERT_EQ(rc, sizeof (hdr_out));
+}
+
+/*
+ * Send command to read data and read reply header. Reading payload is
+ * left to the caller.
+ */
+void read_data_start(int data_fd, int &ioseq, size_t offset, int len,
+    zvol_io_hdr_t *hdr_inp) {
+	zvol_io_hdr_t hdr_out;
+	int rc;
+
+	hdr_out.version = REPLICA_VERSION;
+	hdr_out.opcode = ZVOL_OPCODE_READ;
+	hdr_out.status = ZVOL_OP_STATUS_OK;
+	hdr_out.io_seq = ++ioseq;
+	hdr_out.offset = offset;
+	hdr_out.len = len;
+
+	rc = write(data_fd, &hdr_out, sizeof (hdr_out));
+	ASSERT_EQ(rc, sizeof (hdr_out));
+	rc = read(data_fd, hdr_inp, sizeof (*hdr_inp));
+	ASSERT_EQ(rc, sizeof (*hdr_inp));
+	ASSERT_EQ(hdr_inp->opcode, ZVOL_OPCODE_READ);
+	ASSERT_EQ(hdr_inp->status, ZVOL_OP_STATUS_OK);
+	ASSERT_EQ(hdr_inp->io_seq, ioseq);
+	ASSERT_EQ(hdr_inp->offset, offset);
+}
+
+/*
+ * Read 3 blocks of 4096 size at offset 0
+ * Compares the io_num with expected value (hardcoded) and data
+ */
+void read_data_and_verify_resp(int data_fd, int &ioseq) {
+	zvol_io_hdr_t hdr_in;
+	struct zvol_io_rw_hdr read_hdr;
+	int rc;
+	struct zvol_io_rw_hdr write_hdr;
+	char buf[4096];
+	int len = 4096;
+
+	/* read all blocks at once and check IO nums */
+	read_data_start(data_fd, ioseq, 0, 3 * sizeof (buf), &hdr_in);
+	ASSERT_EQ(hdr_in.len, 2 * sizeof (read_hdr) + 3 * sizeof (buf));
+
+	rc = read(data_fd, &read_hdr, sizeof (read_hdr));
+	ASSERT_ERRNO("read", rc >= 0);
+	ASSERT_EQ(rc, sizeof (read_hdr));
+	ASSERT_EQ(read_hdr.io_num, 123);
+	ASSERT_EQ(read_hdr.len, 2 * sizeof (buf));
+	rc = read(data_fd, buf, sizeof (buf));
+	ASSERT_ERRNO("read", rc >= 0);
+	ASSERT_EQ(rc, sizeof (buf));
+	rc = verify_buf(buf, sizeof (buf), "cStor-data");
+	ASSERT_EQ(rc, 0);
+	rc = read(data_fd, buf, sizeof (buf));
+	ASSERT_ERRNO("read", rc >= 0);
+	ASSERT_EQ(rc, sizeof (buf));
+	rc = verify_buf(buf, sizeof (buf), "cStor-data");
+	ASSERT_EQ(rc, 0);
+
+	rc = read(data_fd, &read_hdr, sizeof (read_hdr));
+	ASSERT_ERRNO("read", rc >= 0);
+	ASSERT_EQ(rc, sizeof (read_hdr));
+	ASSERT_EQ(read_hdr.io_num, 124);
+	ASSERT_EQ(read_hdr.len, sizeof (buf));
+	rc = read(data_fd, buf, read_hdr.len);
+	ASSERT_ERRNO("read", rc >= 0);
+	ASSERT_EQ(rc, read_hdr.len);
+	rc = verify_buf(buf, sizeof (buf), "cStor-data");
+	ASSERT_EQ(rc, 0);
+}
+
+/*
+ * Writes two blocks of size 4096 with different io_num (hardcoded) at
+ * hardcoded offset
+ * Verifies the resp of write IO
+ */
+void write_two_chunks_and_verify_resp(int data_fd, int &ioseq,
+    size_t offset) {
+	zvol_io_hdr_t hdr_in;
+	struct zvol_io_rw_hdr read_hdr;
+	int rc;
+	struct zvol_io_rw_hdr write_hdr;
+	char buf[4096];
+	int len = 4096;
+	/* write 1th data block */
+	init_buf(buf, sizeof (buf), "cStor-data");
+
+	/* write two chunks with different IO nums in one request */
+	write_data_start(data_fd, ioseq, sizeof (buf),
+	    2 * (sizeof (write_hdr) + sizeof (buf)));
+
+	write_hdr.len = sizeof (buf);
+	write_hdr.io_num = 123;
+	rc = write(data_fd, &write_hdr, sizeof (write_hdr));
+	ASSERT_ERRNO("write", rc >= 0);
+	ASSERT_EQ(rc, sizeof (write_hdr));
+	rc = write(data_fd, buf, sizeof (buf));
+	ASSERT_ERRNO("write", rc >= 0);
+	ASSERT_EQ(rc, sizeof (buf));
+
+	write_hdr.len = sizeof (buf);
+	write_hdr.io_num = 124;
+	rc = write(data_fd, &write_hdr, sizeof (write_hdr));
+	ASSERT_ERRNO("write", rc >= 0);
+	ASSERT_EQ(rc, sizeof (write_hdr));
+	rc = write(data_fd, buf, sizeof (buf));
+	ASSERT_ERRNO("write", rc >= 0);
+	ASSERT_EQ(rc, sizeof (buf));
+
+	rc = read(data_fd, &hdr_in, sizeof (hdr_in));
+	ASSERT_ERRNO("write", rc >= 0);
+	ASSERT_EQ(rc, sizeof (hdr_in));
+	EXPECT_EQ(hdr_in.opcode, ZVOL_OPCODE_WRITE);
+	EXPECT_EQ(hdr_in.status, ZVOL_OP_STATUS_OK);
+	EXPECT_EQ(hdr_in.io_seq, ioseq);
+}
+
+/*
+ * Writes data block of size 4096 at given offset and io_num
+ * Updates io_seq of volume
+ */
+void write_data_and_verify_resp(int data_fd, int &ioseq, size_t offset,
+    uint64_t io_num) {
+	zvol_io_hdr_t hdr_in;
+	struct zvol_io_rw_hdr read_hdr;
+	int rc;
+	struct zvol_io_rw_hdr write_hdr;
+	char buf[4096];
+	int len = 4096;
+	/* write 1th data block */
+	init_buf(buf, sizeof (buf), "cStor-data");
+
+	write_data_start(data_fd, ioseq, offset,
+	    sizeof (write_hdr) + len);
+
+	write_hdr.len = len;
+	write_hdr.io_num = io_num;
+	rc = write(data_fd, &write_hdr, sizeof (write_hdr));
+	ASSERT_EQ(rc, sizeof (write_hdr));
+	rc = write(data_fd, buf, len);
+	ASSERT_EQ(rc, len);
+
+	rc = read(data_fd, &hdr_in, sizeof (hdr_in));
+	ASSERT_ERRNO("read", rc >= 0);
+	ASSERT_EQ(rc, sizeof (hdr_in));
+	EXPECT_EQ(hdr_in.opcode, ZVOL_OPCODE_WRITE);
+		EXPECT_EQ(hdr_in.status, ZVOL_OP_STATUS_OK);
+	EXPECT_EQ(hdr_in.io_seq, ioseq);
+	EXPECT_EQ(hdr_in.offset, 0);
+	ASSERT_EQ(hdr_in.len, sizeof (buf) + sizeof (write_hdr));
+}
+
+/*
  * zrepl program wrapper.
  *
  * The main benefits are:
@@ -358,43 +601,6 @@ protected:
 		    ZVOL_OP_STATUS_OK);
 	}
 
-	/*
-	 * This fn does handshake for given volname, and fills host/IP
-	 * res is the expected status of handshake
-	 */
-	static void do_handshake(std::string m_zvol_name, std::string &m_host,
-	    uint16_t &m_port, int m_control_fd, int res) {
-		zvol_io_hdr_t hdr_out, hdr_in;
-		int rc;
-		mgmt_ack_t mgmt_ack;
-		hdr_out.version = REPLICA_VERSION;
-		hdr_out.opcode = ZVOL_OPCODE_HANDSHAKE;
-		hdr_out.status = ZVOL_OP_STATUS_OK;
-		hdr_out.io_seq = 0;
-		hdr_out.offset = 0;
-		hdr_out.len = m_zvol_name.length() + 1;
-
-		rc = write(m_control_fd, &hdr_out, sizeof (hdr_out));
-		ASSERT_EQ(rc, sizeof (hdr_out));
-		rc = write(m_control_fd, m_zvol_name.c_str(), hdr_out.len);
-		ASSERT_EQ(rc, hdr_out.len);
-
-		rc = read(m_control_fd, &hdr_in, sizeof (hdr_in));
-		ASSERT_EQ(rc, sizeof (hdr_in));
-		EXPECT_EQ(hdr_in.version, REPLICA_VERSION);
-		EXPECT_EQ(hdr_in.opcode, ZVOL_OPCODE_HANDSHAKE);
-		EXPECT_EQ(hdr_in.status, res);
-		EXPECT_EQ(hdr_in.io_seq, 0);
-		if (res == ZVOL_OP_STATUS_FAILED)
-			return;
-		ASSERT_EQ(hdr_in.len, sizeof (mgmt_ack));
-		rc = read(m_control_fd, &mgmt_ack, sizeof (mgmt_ack));
-		ASSERT_EQ(rc, sizeof (mgmt_ack));
-		EXPECT_STREQ(mgmt_ack.volname, m_zvol_name.c_str());
-		m_host = std::string(mgmt_ack.ip);
-		m_port = mgmt_ack.port;
-	}
-
 	static void TearDownTestCase() {
 		m_pool1->destroyZvol("vol1");
 		m_pool2->destroyZvol("vol1");
@@ -422,41 +628,6 @@ protected:
 		do_data_connection(m_data_fd2, m_host2, m_port2, m_zvol_name2);
 	}
 
-	/*
-	 * This fn does data conn for a host:ip and volume, and fills data fd
-	 */
-	void do_data_connection(int &m_data_fd, std::string m_host, uint16_t m_port,
-	    std::string m_zvol_name) {
-		struct sockaddr_in addr;
-		zvol_io_hdr_t hdr_out;
-		int rc;
-
-		m_data_fd = socket(AF_INET, SOCK_STREAM, 0);
-		ASSERT_TRUE(m_data_fd >= 0);
-		memset(&addr, 0, sizeof (addr));
-		addr.sin_family = AF_INET;
-		addr.sin_port = htons(m_port);
-		rc = inet_pton(AF_INET, m_host.c_str(), &addr.sin_addr);
-		ASSERT_TRUE(rc > 0);
-		rc = connect(m_data_fd, (struct sockaddr *)&addr, sizeof (addr));
-		if (rc != 0) {
-			perror("connect");
-			ASSERT_EQ(errno, 0);
-		}
-
-		hdr_out.version = REPLICA_VERSION;
-		hdr_out.opcode = ZVOL_OPCODE_HANDSHAKE;
-		hdr_out.status = ZVOL_OP_STATUS_OK;
-		hdr_out.io_seq = 0;
-		hdr_out.offset = 0;
-		hdr_out.len = m_zvol_name.length() + 1;
-
-		rc = write(m_data_fd, &hdr_out, sizeof (hdr_out));
-		ASSERT_EQ(rc, sizeof (hdr_out));
-		rc = write(m_data_fd, m_zvol_name.c_str(), hdr_out.len);
-		ASSERT_EQ(rc, hdr_out.len);
-	}
-
 	virtual void TearDown() override {
 		int rc, val;
 
@@ -479,178 +650,6 @@ protected:
 			close(m_data_fd2);
 		}
 
-	}
-
-	/*
-	 * Send header for data write. Leave write of actual data to the caller.
-	 * len is real length - including metadata headers.
-	 */
-	void write_data_start(int m_data_fd, int &m_ioseq, size_t offset, int len) {
-		zvol_io_hdr_t hdr_out;
-		int rc;
-
-		hdr_out.version = REPLICA_VERSION;
-		hdr_out.opcode = ZVOL_OPCODE_WRITE;
-		hdr_out.status = ZVOL_OP_STATUS_OK;
-		hdr_out.io_seq = ++m_ioseq;
-		hdr_out.offset = offset;
-		hdr_out.len = len;
-		hdr_out.flags = 0;
-
-		rc = write(m_data_fd, &hdr_out, sizeof (hdr_out));
-		ASSERT_EQ(rc, sizeof (hdr_out));
-	}
-
-	/*
-	 * Read 3 blocks of 4096 size at offset 0
-	 * Compares the io_num with expected value (hardcoded) and data
-	 */
-	void read_data_and_verify_resp(int m_data_fd, int &m_ioseq) {
-		zvol_io_hdr_t hdr_in;
-		struct zvol_io_rw_hdr read_hdr;
-		int rc;
-		struct zvol_io_rw_hdr write_hdr;
-		char buf[4096];
-		int len = 4096;
-
-		/* read all blocks at once and check IO nums */
-		read_data_start(m_data_fd, m_ioseq, 0, 3 * sizeof (buf), &hdr_in);
-		ASSERT_EQ(hdr_in.len, 2 * sizeof (read_hdr) + 3 * sizeof (buf));
-
-		rc = read(m_data_fd, &read_hdr, sizeof (read_hdr));
-		ASSERT_ERRNO("read", rc >= 0);
-		ASSERT_EQ(rc, sizeof (read_hdr));
-		ASSERT_EQ(read_hdr.io_num, 123);
-		ASSERT_EQ(read_hdr.len, 2 * sizeof (buf));
-		rc = read(m_data_fd, buf, sizeof (buf));
-		ASSERT_ERRNO("read", rc >= 0);
-		ASSERT_EQ(rc, sizeof (buf));
-		rc = verify_buf(buf, sizeof (buf), "cStor-data");
-		ASSERT_EQ(rc, 0);
-		rc = read(m_data_fd, buf, sizeof (buf));
-		ASSERT_ERRNO("read", rc >= 0);
-		ASSERT_EQ(rc, sizeof (buf));
-		rc = verify_buf(buf, sizeof (buf), "cStor-data");
-		ASSERT_EQ(rc, 0);
-
-		rc = read(m_data_fd, &read_hdr, sizeof (read_hdr));
-		ASSERT_ERRNO("read", rc >= 0);
-		ASSERT_EQ(rc, sizeof (read_hdr));
-		ASSERT_EQ(read_hdr.io_num, 124);
-		ASSERT_EQ(read_hdr.len, sizeof (buf));
-		rc = read(m_data_fd, buf, read_hdr.len);
-		ASSERT_ERRNO("read", rc >= 0);
-		ASSERT_EQ(rc, read_hdr.len);
-		rc = verify_buf(buf, sizeof (buf), "cStor-data");
-		ASSERT_EQ(rc, 0);
-	}
-
-	/*
-	 * Writes two blocks of size 4096 with different io_num (hardcoded) at
-	 * hardcoded offset
-	 * Verifies the resp of write IO
-	 */
-	void write_two_chunks_and_verify_resp(int m_data_fd, int &m_ioseq,
-	    size_t offset) {
-		zvol_io_hdr_t hdr_in;
-		struct zvol_io_rw_hdr read_hdr;
-		int rc;
-		struct zvol_io_rw_hdr write_hdr;
-		char buf[4096];
-		int len = 4096;
-		/* write 1th data block */
-		init_buf(buf, sizeof (buf), "cStor-data");
-
-		/* write two chunks with different IO nums in one request */
-		write_data_start(m_data_fd, m_ioseq, sizeof (buf),
-		    2 * (sizeof (write_hdr) + sizeof (buf)));
-
-		write_hdr.len = sizeof (buf);
-		write_hdr.io_num = 123;
-		rc = write(m_data_fd, &write_hdr, sizeof (write_hdr));
-		ASSERT_ERRNO("write", rc >= 0);
-		ASSERT_EQ(rc, sizeof (write_hdr));
-		rc = write(m_data_fd, buf, sizeof (buf));
-		ASSERT_ERRNO("write", rc >= 0);
-		ASSERT_EQ(rc, sizeof (buf));
-
-		write_hdr.len = sizeof (buf);
-		write_hdr.io_num = 124;
-		rc = write(m_data_fd, &write_hdr, sizeof (write_hdr));
-		ASSERT_ERRNO("write", rc >= 0);
-		ASSERT_EQ(rc, sizeof (write_hdr));
-		rc = write(m_data_fd, buf, sizeof (buf));
-		ASSERT_ERRNO("write", rc >= 0);
-		ASSERT_EQ(rc, sizeof (buf));
-
-		rc = read(m_data_fd, &hdr_in, sizeof (hdr_in));
-		ASSERT_ERRNO("write", rc >= 0);
-		ASSERT_EQ(rc, sizeof (hdr_in));
-		EXPECT_EQ(hdr_in.opcode, ZVOL_OPCODE_WRITE);
-		EXPECT_EQ(hdr_in.status, ZVOL_OP_STATUS_OK);
-		EXPECT_EQ(hdr_in.io_seq, m_ioseq);
-	}
-
-	/*
-	 * Writes data block of size 4096 at given offset and io_num
-	 * Updates io_seq of volume
-	 */
-	void write_data_and_verify_resp(int m_data_fd, int &m_ioseq, size_t offset,
-	    uint64_t io_num) {
-		zvol_io_hdr_t hdr_in;
-		struct zvol_io_rw_hdr read_hdr;
-		int rc;
-		struct zvol_io_rw_hdr write_hdr;
-		char buf[4096];
-		int len = 4096;
-		/* write 1th data block */
-		init_buf(buf, sizeof (buf), "cStor-data");
-
-		write_data_start(m_data_fd, m_ioseq, offset,
-		    sizeof (write_hdr) + len);
-
-		write_hdr.len = len;
-		write_hdr.io_num = io_num;
-		rc = write(m_data_fd, &write_hdr, sizeof (write_hdr));
-		ASSERT_EQ(rc, sizeof (write_hdr));
-		rc = write(m_data_fd, buf, len);
-		ASSERT_EQ(rc, len);
-
-		rc = read(m_data_fd, &hdr_in, sizeof (hdr_in));
-		ASSERT_ERRNO("read", rc >= 0);
-		ASSERT_EQ(rc, sizeof (hdr_in));
-		EXPECT_EQ(hdr_in.opcode, ZVOL_OPCODE_WRITE);
-			EXPECT_EQ(hdr_in.status, ZVOL_OP_STATUS_OK);
-		EXPECT_EQ(hdr_in.io_seq, m_ioseq);
-		EXPECT_EQ(hdr_in.offset, 0);
-		ASSERT_EQ(hdr_in.len, sizeof (buf) + sizeof (write_hdr));
-	}
-
-	/*
-	 * Send command to read data and read reply header. Reading payload is
-	 * left to the caller.
-	 */
-	void read_data_start(int m_data_fd, int &m_ioseq, size_t offset, int len,
-	    zvol_io_hdr_t *hdr_inp)
-	{
-		zvol_io_hdr_t hdr_out;
-		int rc;
-
-		hdr_out.version = REPLICA_VERSION;
-		hdr_out.opcode = ZVOL_OPCODE_READ;
-		hdr_out.status = ZVOL_OP_STATUS_OK;
-		hdr_out.io_seq = ++m_ioseq;
-		hdr_out.offset = offset;
-		hdr_out.len = len;
-
-		rc = write(m_data_fd, &hdr_out, sizeof (hdr_out));
-		ASSERT_EQ(rc, sizeof (hdr_out));
-		rc = read(m_data_fd, hdr_inp, sizeof (*hdr_inp));
-		ASSERT_EQ(rc, sizeof (*hdr_inp));
-		ASSERT_EQ(hdr_inp->opcode, ZVOL_OPCODE_READ);
-		ASSERT_EQ(hdr_inp->status, ZVOL_OP_STATUS_OK);
-		ASSERT_EQ(hdr_inp->io_seq, m_ioseq);
-		ASSERT_EQ(hdr_inp->offset, offset);
 	}
 
 	static int	m_control_fd1;

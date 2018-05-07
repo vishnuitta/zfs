@@ -656,14 +656,12 @@ open_pool(spa_t **spa)
 void
 open_ds(spa_t *spa, char *ds, zvol_state_t **zv)
 {
-	char name[ZFS_MAX_DATASET_NAME_LEN];
 	int err;
 	err = uzfs_open_dataset(spa, ds, zv);
 	if (err != 0) {
 		printf("ds open errored.. %d\n", err);
 		exit(1);
 	}
-	(void) snprintf(name, sizeof (name), "%s/%s", spa_name(spa), ds);
 	uzfs_hold_dataset(*zv);
 }
 
