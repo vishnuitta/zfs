@@ -34,6 +34,8 @@ VOLSIZE="1G"
 UZFS_TEST_POOL="testp"
 UZFS_TEST_VOL="ds0"
 UZFS_REBUILD_VOL="ds1"
+UZFS_REBUILD_VOL1="ds2"
+UZFS_REBUILD_VOL2="ds3"
 UZFS_TEST_VOLSIZE="128M"
 UZFS_TEST_VOLSIZE_IN_NUM=134217728
 ZREPL_PID="-1"
@@ -904,6 +906,14 @@ run_zrepl_rebuild_uzfs_test()
 	log_must $ZFS create -V $UZFS_TEST_VOLSIZE \
 	    -o io.openebs:targetip=127.0.0.1:99159 $UZFS_TEST_POOL/$UZFS_REBUILD_VOL -b $2
 	log_must $ZFS set sync=$3 $UZFS_TEST_POOL/$UZFS_REBUILD_VOL
+	
+	log_must $ZFS create -V $UZFS_TEST_VOLSIZE \
+	    $UZFS_TEST_POOL/$UZFS_REBUILD_VOL1 -b $2
+	log_must $ZFS set sync=$3 $UZFS_TEST_POOL/$UZFS_REBUILD_VOL1
+
+	log_must $ZFS create -V $UZFS_TEST_VOLSIZE \
+	    $UZFS_TEST_POOL/$UZFS_REBUILD_VOL2 -b $2
+	log_must $ZFS set sync=$3 $UZFS_TEST_POOL/$UZFS_REBUILD_VOL2
 
 	log_must export_pool $UZFS_TEST_POOL
 	log_must import_pool $UZFS_TEST_POOL
