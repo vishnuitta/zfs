@@ -151,8 +151,6 @@ replay_fn(void *arg)
 {
 	spa_t *spa;
 	zvol_state_t *zv;
-	char name[MAXNAMELEN];
-	zvol_info_t *zinfo = NULL;
 
 	zfs_txg_timeout = 30;
 
@@ -163,20 +161,10 @@ replay_fn(void *arg)
 		}
 
 		open_pool(&spa);
-		if (create == 1)
-			open_ds(spa, &zv);
-		else {
-			zinfo = uzfs_zinfo_lookup(ds);
-			zv = zinfo->zv;
-		}
+		open_ds(spa, ds, &zv);
 	} else if (verify != 0) {
 		open_pool(&spa);
-		if (create == 1) {
-			open_ds(spa, &zv);
-		} else {
-			zinfo = uzfs_zinfo_lookup(ds);
-			zv = zinfo->zv;
-		}
+		open_ds(spa, ds, &zv);
 	} else {
 		printf("exiting program..\n");
 		uzfs_fini();
@@ -188,16 +176,8 @@ replay_fn(void *arg)
 	if (verify != 0)
 		if (silent == 0)
 			printf("verify error: %d\n", verify_err);
-	if (create == 1) {
-		uzfs_close_dataset(zv);
-		uzfs_close_pool(spa);
-	} else {
-		strlcpy(name, zinfo->name, MAXNAMELEN);
-		uzfs_zinfo_drop_refcnt(zinfo, 0);
-		uzfs_zinfo_destroy(name, NULL);
-		uzfs_close_pool(spa);
-	}
-
+	uzfs_close_dataset(zv);
+	uzfs_close_pool(spa);
 	if (verify_err)
 		exit(verify_err);
 }

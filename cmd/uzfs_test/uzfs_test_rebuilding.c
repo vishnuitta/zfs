@@ -534,8 +534,7 @@ replica_writer_thread(void *arg)
 }
 
 static void
-open_pool_and_dataset(spa_t **spa, zvol_info_t **zinfo, char *pool_name,
-    char *ds_name)
+open_pool_and_dataset(spa_t **spa, char *pool_name, char *ds_name)
 {
 	int err;
 
@@ -545,23 +544,12 @@ open_pool_and_dataset(spa_t **spa, zvol_info_t **zinfo, char *pool_name,
 		printf("pool(%s) open errored.. %d\n", pool_name, err);
 		exit(1);
 	}
-
-	*zinfo = uzfs_zinfo_lookup(ds_name);
-	if (*zinfo == NULL) {
-		uzfs_close_pool(*spa);
-		printf("failed to lookup dataset(%s)\n", ds_name);
-		exit(1);
-	}
 }
 
 static void
-close_pool_and_dataset(spa_t *spa, zvol_info_t *zinfo)
+close_pool_and_dataset(spa_t *spa, zvol_state_t *zvol)
 {
-	char name[MAXNAMELEN];
-
-	strlcpy(name, zinfo->name, MAXNAMELEN);
-	uzfs_zinfo_drop_refcnt(zinfo, 0);
-	uzfs_zinfo_destroy(name, NULL);
+	uzfs_close_dataset(zvol);
 	uzfs_close_pool(spa);
 }
 
@@ -579,7 +567,6 @@ uzfs_rebuild_test(void *arg)
 	char *pooldup = strdup(pool);
 	char *dsdup = strdup(ds);
 	char *pool1, *pool2, *ds1, *ds2;
-	zvol_info_t *zinfo1, *zinfo2;
 	printf("starting %s\n", test_info->name);
 
 	pool1 = strtok(pooldup, ",");
@@ -589,11 +576,11 @@ uzfs_rebuild_test(void *arg)
 	if (!ds2)
 		ds2 = ds1;
 
-	open_pool_and_dataset(&spa1, &zinfo1, pool1, ds1);
-	open_pool_and_dataset(&spa2, &zinfo2, pool2, ds2);
+	open_pool_and_dataset(&spa1, pool1, ds1);
+	open_pool_and_dataset(&spa2, pool2, ds2);
 
-	zvol1 = zinfo1->zv;
-	zvol2 = zinfo2->zv;
+	open_ds(spa1, ds1, &zvol1);
+	open_ds(spa2, ds2, &zvol2);
 
 	while (n++ < test_iterations) {
 		mutex_init(&mtx, NULL, MUTEX_DEFAULT, NULL);
@@ -671,8 +658,8 @@ uzfs_rebuild_test(void *arg)
 		printf("%s pass:%d\n", test_info->name, n);
 	}
 
-	close_pool_and_dataset(spa1, zinfo1);
-	close_pool_and_dataset(spa2, zinfo2);
+	close_pool_and_dataset(spa1, zvol1);
+	close_pool_and_dataset(spa2, zvol2);
 	free(pooldup);
 	free(dsdup);
 }

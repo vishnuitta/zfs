@@ -23,10 +23,9 @@ fi
 ZPOOL="$SRC_PATH/cmd/zpool/zpool"
 ZFS="$SRC_PATH/cmd/zfs/zfs"
 ZDB="$SRC_PATH/cmd/zdb/zdb"
-ZREPL="$SRC_PATH/cmd/zrepl/zrepl start -t 127.0.0.1"
+ZREPL="$SRC_PATH/cmd/zrepl/zrepl"
 GTEST_UZFS="$SRC_PATH/tests/cbtest/gtest/test_uzfs"
 GTEST_ZREPL_PROT="$SRC_PATH/tests/cbtest/gtest/test_zrepl_prot"
-GTEST_EXPORT="$SRC_PATH/tests/cbtest/gtest/test_export"
 ZTEST="$SRC_PATH/cmd/ztest/ztest"
 UZFS_TEST="$SRC_PATH/cmd/uzfs_test/uzfs_test"
 UZFS_TEST_SYNC_SH="$SRC_PATH/cmd/uzfs_test/uzfs_test_sync.sh"
@@ -114,6 +113,17 @@ stop_zrepl()
 	fi
 }
 
+wait_for_pids()
+{
+	for p in "$@"; do
+		wait $p
+		status=$?
+		if [ $status -ne 0 ] && [ $status -ne 127 ]; then
+			exit 1
+		fi
+	done
+}
+
 create_disk()
 {
 	for disk in "$@"; do
@@ -170,6 +180,8 @@ run_zvol_tests()
 	log_must datasetexists $src_pool/$src_vol
 	log_must check_prop $src_pool/$src_vol type volume
 
+	log_must $ZFS create -V $VOLSIZE -o io.openebs:targetip=127.0.0.1:6060 $src_pool/$src_vol"_1"
+
 	# test volume properties
 	log_must $ZFS get all $src_pool/$src_vol > /dev/null
 	log_must $ZFS list $src_pool/$src_vol > /dev/null
@@ -186,6 +198,8 @@ run_zvol_tests()
 
 	log_must $ZFS set sync=always $src_pool/$src_vol
 	log_must check_prop "$src_pool/$src_vol" sync always
+
+	log_must check_prop "$src_pool/$src_vol""_1" io.openebs:targetip 127.0.0.1:6060
 
 	# dump some data
 	#log_must dump_data
@@ -214,6 +228,7 @@ run_zvol_tests()
 	log_must $ZFS destroy -r $dst_pool/$dst_vol
 	log_must $ZFS list -t all $src_pool/$src_vol > /dev/null
 	log_must $ZFS destroy -r $src_pool/$src_vol
+	log_must $ZFS destroy -r $src_pool/$src_vol"_1"
 
 	# test snap destroy
 	log_must $ZFS create -s -V $VOLSIZE $src_pool/$src_vol
@@ -414,6 +429,26 @@ destroy_pool()
 }
 
 # $1 - pool name
+import_pool()
+{
+	pool=$1
+
+	if [ -z $pool ]; then
+		echo "No pool name given."
+		return 1
+	fi
+
+	if poolexists "$pool" ; then
+		echo "Pool already imported. ($pool)"
+		return 1
+	else
+		log_must $ZPOOL import $pool -d $TMPDIR
+	fi
+
+	return $?
+}
+
+# $1 - pool name
 export_pool()
 {
 	pool=$1
@@ -570,7 +605,6 @@ test_mirror_pool()
 	# test pool creation
 	create_disk $src_pool_disk_a $src_pool_disk_b
 	create_disk $dst_pool_disk_a $dst_pool_disk_b
-
 	# test pool creation
 	log_must $ZPOOL create -f $src_pool mirror \
 	    -o cachefile="$TMPDIR/zpool_$src_pool.cache" \
@@ -712,8 +746,8 @@ run_fio_test()
 	log_must $ZPOOL create -f $fio_pool \
 	    -o cachefile="$TMPDIR/zpool_$fio_pool.cache" \
 	    "$TMPDIR/fio_disk1.img"
-	log_must $ZFS create -sV $VOLSIZE -o volblocksize=4k $fio_pool/vol1
-	log_must $ZFS create -sV $VOLSIZE -o volblocksize=4k $fio_pool/vol2
+	log_must $ZFS create -sV $VOLSIZE -o volblocksize=4k -o io.openebs:targetip=127.0.0.1:6060 $fio_pool/vol1
+	log_must $ZFS create -sV $VOLSIZE -o volblocksize=4k -o io.openebs:targetip=127.0.0.1:6060 $fio_pool/vol2
 	cat >$TMPDIR/test.fio <<EOF
 [global]
 ioengine=replica.so
@@ -839,7 +873,10 @@ run_zrepl_uzfs_test()
 		log_must setup_uzfs_test nolog $2 $UZFS_TEST_VOLSIZE $3 $UZFS_TEST_POOL $UZFS_TEST_VOL uzfs_zrepl_vdev1
 	fi
 
-	log_must_not $UZFS_TEST
+	log_must $ZFS set io.openebs:targetip=127.0.0.1:6060 $UZFS_TEST_POOL/$UZFS_TEST_VOL
+	log_must export_pool $UZFS_TEST_POOL
+	log_must import_pool $UZFS_TEST_POOL
+
 	log_must $UZFS_TEST -T 4
 	sleep 5
 
@@ -864,17 +901,22 @@ run_zrepl_rebuild_uzfs_test()
 		    $UZFS_TEST_VOL uzfs_zrepl_rebuild_vdev1
 	fi
 
+	log_must $ZFS set io.openebs:targetip=127.0.0.1:6060 $UZFS_TEST_POOL/$UZFS_TEST_VOL
+
 	log_must $ZFS create -V $UZFS_TEST_VOLSIZE \
-	    $UZFS_TEST_POOL/$UZFS_REBUILD_VOL -b $2
+	    -o io.openebs:targetip=127.0.0.1:99159 $UZFS_TEST_POOL/$UZFS_REBUILD_VOL -b $2
 	log_must $ZFS set sync=$3 $UZFS_TEST_POOL/$UZFS_REBUILD_VOL
 	
 	log_must $ZFS create -V $UZFS_TEST_VOLSIZE \
-	    $UZFS_TEST_POOL/$UZFS_REBUILD_VOL1 -b $2
+	    -o io.openebs:targetip=127.0.0.1:99160 $UZFS_TEST_POOL/$UZFS_REBUILD_VOL1 -b $2
 	log_must $ZFS set sync=$3 $UZFS_TEST_POOL/$UZFS_REBUILD_VOL1
 
 	log_must $ZFS create -V $UZFS_TEST_VOLSIZE \
-	    $UZFS_TEST_POOL/$UZFS_REBUILD_VOL2 -b $2
+	    -o io.openebs:targetip=127.0.0.1:99161 $UZFS_TEST_POOL/$UZFS_REBUILD_VOL2 -b $2
 	log_must $ZFS set sync=$3 $UZFS_TEST_POOL/$UZFS_REBUILD_VOL2
+
+	log_must export_pool $UZFS_TEST_POOL
+	log_must import_pool $UZFS_TEST_POOL
 
 	log_must $UZFS_TEST -T 7
 	sleep 20
@@ -926,7 +968,7 @@ run_uzfs_test()
 	    -p uzfs_pool4 -d uzfs_vol4 -l -i 8192 -b 65536 -T 6 &
 	pid4=$!
 
-	wait $pid1 $pid2 $pid3 $pid4
+	wait_for_pids $pid1 $pid2 $pid3 $pid4
 	cleanup_uzfs_test uzfs_pool1 uzfs_test_vdev1
 	cleanup_uzfs_test uzfs_pool2 uzfs_test_vdev2
 	cleanup_uzfs_test uzfs_pool3 uzfs_test_vdev3
@@ -950,7 +992,7 @@ run_uzfs_test()
 	     -p uzfs_pool06 -d uzfs_vol06 -T 2 &
 	pid3=$!
 
-	wait $pid1 $pid2 $pid3
+	wait_for_pids $pid1 $pid2 $pid3
         [[ $? -ne 0 ]] && { echo "test failed.."; cat $TMPDIR/uzfs_test*.out; return 1; }
 
 	ios1=$(cat /tmp/uzfs_test1.out  | grep "Total write IOs" | awk '{print $4}')
@@ -979,7 +1021,7 @@ run_uzfs_test()
 	    -p uzfs_pool9 -d uzfs_vol9 -l -T 2 &
 	pid3=$!
 
-	wait $pid1 $pid2 $pid3
+	wait_for_pids $pid1 $pid2 $pid3
         [[ $? -ne 0 ]] && { echo "test failed.."; cat $TMPDIR/uzfs_test*.out; return 1; }
 
 	ios1=$(cat /tmp/uzfs_test1.out  | grep "Total write IOs" | awk '{print $4}')
@@ -1009,7 +1051,7 @@ run_uzfs_test()
 	    -p uzfs_pool12 -d uzfs_vol12 -i 8192 -b 65536 -T 2 &
 	pid3=$!
 
-	wait $pid1 $pid2 $pid3
+	wait_for_pids $pid1 $pid2 $pid3
         [[ $? -ne 0 ]] && { echo "test failed.."; cat $TMPDIR/uzfs_test*.out; return 1; }
 
 	ios1=$(cat /tmp/uzfs_test1.out  | grep "Total write IOs" | awk '{print $4}')
@@ -1037,7 +1079,7 @@ run_uzfs_test()
 	log_must $UZFS_TEST -t 10 -T 0 -n 10 -p uzfs_pool16 -d uzfs_vol16 &
 	pid3=$!
 
-	wait $pid1 $pid2 $pid3
+	wait_for_pids $pid1 $pid2 $pid3
         [[ $? -ne 0 ]] && { echo "test failed.."; cat $TMPDIR/uzfs_test*.out; return 1; }
 
 	ios1=$(cat /tmp/uzfs_test1.out  | grep "Total write IOs" | awk '{print $4}')
@@ -1054,7 +1096,7 @@ run_uzfs_test()
 	    -p uzfs_pool15 -d uzfs_vol15 -l -i 8192 -b 65536 -T 2 &
 	pid1=$!
 
-	wait $pid1 $sync_pid
+	wait_for_pids $pid1 $sync_pid
 	cleanup_uzfs_test uzfs_pool15 uzfs_test_vdev15 uzfs_test_log15
 
 	return 0
@@ -1126,9 +1168,7 @@ run_pool_test()
 	log_must test_raidz_pool pool_test_sr_pool/sr_vol pool_test_dr_pool/dr_vol &
 	raidz_pid=$!
 
-	wait $stripe_pid
-	wait $mirror_pid
-	wait $raidz_pid
+	wait_for_pids $stripe_pid $mirror_pid $raidz_pid
 }
 
 run_zrepl_test()
@@ -1147,7 +1187,6 @@ run_zvol_test()
 
 	stop_zrepl
 	log_must $GTEST_UZFS
-	log_must $GTEST_EXPORT
 	log_must $GTEST_ZREPL_PROT
 	start_zrepl
 }
@@ -1169,7 +1208,7 @@ run_rebuild_test()
 	log_must $UZFS_TEST -T 3 -t 60 -n 2 -p uzfs_rebuild_pool3,uzfs_rebuild_pool4 -d uzfs_vol1 -a 629145600 &
 	pid2=$!
 
-	wait $pid1 $pid2
+	wait_for_pids $pid1 $pid2
 
 	cleanup_uzfs_test uzfs_rebuild_pool2 uzfs_rebuild_vdev2
 	cleanup_uzfs_test uzfs_rebuild_pool3 uzfs_rebuild_vdev3
@@ -1200,6 +1239,9 @@ run_zrepl_rebuild_test()
 	log_must run_zrepl_rebuild_uzfs_test log 4096 disabled
 }
 
+echo "ulimit -c unlimited" >> ~/.bash_rc
+sysctl -p
+
 start_zrepl
 if [ $test_type == "all" ]; then
 	START=$(date +%s.%N)
@@ -1218,3 +1260,6 @@ else
 	execute_test $test_type
 fi
 stop_zrepl
+
+ls -ltr
+

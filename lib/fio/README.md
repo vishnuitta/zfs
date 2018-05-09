@@ -22,7 +22,7 @@ In another window start zfs replica and instruct it to connect to "fio
 target" which is listening on loopback interface:
 
 ```bash
-sudo /repos/zfs/cmd/zrepl/zrepl 127.0.0.1
+sudo /repos/zfs/cmd/zrepl/zrepl
 ```
 
 At most after 5 secs `zrepl` will connect to fio and IO will start flowing.

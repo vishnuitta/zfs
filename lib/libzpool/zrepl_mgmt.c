@@ -219,10 +219,11 @@ uzfs_zinfo_destroy(const char *name, spa_t *spa)
 	} else {
 
 		SLIST_FOREACH_SAFE(zinfo, &zvol_list, zinfo_next, zt) {
-			if (name == NULL || strcmp(zinfo->name, name) == 0 ||
-			    (strncmp(zinfo->name, name, namelen) == 0 &&
-			    (zinfo->name[namelen] == '/' ||
-			    zinfo->name[namelen] == '@'))) {
+			if (name == NULL || (strcmp(zinfo->name, name) == 0) ||
+			    ((strncmp(zinfo->name, name, namelen) == 0) &&
+			    zinfo->name[namelen] == '/' &&
+			    zinfo->name[namelen + 1] == '\0')) {
+				printf("destroying %s\n", zinfo->name);
 				zv = zinfo->zv;
 				uzfs_remove_zinfo_list(zinfo);
 				uzfs_close_dataset(zv);
