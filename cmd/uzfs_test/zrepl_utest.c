@@ -16,6 +16,8 @@
 
 char *tgt_port = "6060";
 char *tgt_port1 = "99159";
+char *tgt_port2 = "99160";
+char *tgt_port3 = "99161";
 char *ds1 = "ds1";
 char *ds2 = "ds2";
 char *ds3 = "ds3";
@@ -363,7 +365,6 @@ reader_thread(void *arg)
 static void
 writer_thread(void *arg)
 {
-
 	int i = 0;
 	int sfd, sfd1;
 	int count = 0;
@@ -745,6 +746,40 @@ exit:
 	}
 }
 
+int
+create_bind_listen_and_accept(const char *port, int bind_needed,
+    boolean_t nonblock)
+{
+	int sfd, rc, mgmt_fd;
+	socklen_t in_len;
+	struct sockaddr in_addr;
+
+	sfd = rc = mgmt_fd = -1;
+
+	sfd = create_and_bind(port, B_TRUE, B_FALSE);
+	if (sfd == -1) {
+		return (-1);
+	}
+
+	rc = listen(sfd, 10);
+	if (rc == -1) {
+		printf("listen() failed with errno:%d\n", rc);
+		goto exit;
+	}
+
+	in_len = sizeof (in_addr);
+	mgmt_fd = accept(sfd, &in_addr, &in_len);
+	if (mgmt_fd == -1) {
+		printf("Unable to accept\n");
+		goto exit;
+	}
+	return (mgmt_fd);
+exit:
+	if (sfd != -1)
+		close(sfd);
+	return (-1);
+}
+
 /*
  * Rebuilding downgraded replica test case. It covers following case:
  * =====Rebuild success case=====
@@ -779,30 +814,19 @@ zrepl_rebuild_test(void *arg)
 {
 	kmutex_t mtx;
 	kcondvar_t cv;
-// import_issue
-	int count, sfd, rc, sfd1;
-	int  io_sfd, io_sfd1, new_fd, new_fd1;
-//
-	int i, count, sfd, rc, mgmt_fd;
+	int i, count, rc;
+	int ds0_mgmt_fd, ds1_mgmt_fd, ds2_mgmt_fd, ds3_mgmt_fd;
 	int  ds0_io_sfd, ds1_io_sfd;
 	int  ds2_io_sfd, ds3_io_sfd;
-// zfs-0.7-release
 	int threads_done = 0;
 	int num_threads = 0;
 	kthread_t *reader[2];
 	kthread_t *writer;
-	socklen_t in_len;
-// import_issue
-	zvol_io_hdr_t hdr;
-	mgmt_ack_t *mgmt_ack = NULL, *mgmt_ack1 = NULL;
-//
 	mgmt_ack_t *p = NULL;
 	mgmt_ack_t *mgmt_ack = NULL;
 	mgmt_ack_t *mgmt_ack_ds1 = NULL;
 	mgmt_ack_t *mgmt_ack_ds2 = NULL;
 	mgmt_ack_t *mgmt_ack_ds3 = NULL;
-// zfs-0.7-release
-	struct sockaddr in_addr;
 	zrepl_status_ack_t status_ack;
 	worker_args_t writer_args, reader_args[2];
 
@@ -813,12 +837,10 @@ zrepl_rebuild_test(void *arg)
 	ds = "ds0";
 	ds1 = "ds1";
 
-// import_issue
-	io_sfd = io_sfd1 = new_fd = sfd = sfd1 = new_fd1 = -1;
-//
-	ds0_io_sfd = ds1_io_sfd = mgmt_fd = sfd = -1;
+	ds0_io_sfd = ds1_io_sfd = -1;
 	ds2_io_sfd = ds3_io_sfd = -1;
-// zfs-0.7-release
+	ds0_mgmt_fd = ds1_mgmt_fd = -1;
+	ds2_mgmt_fd = ds3_mgmt_fd = -1;
 	mutex_init(&mtx, NULL, MUTEX_DEFAULT, NULL);
 	cv_init(&cv, NULL, CV_DEFAULT, NULL);
 
@@ -846,56 +868,32 @@ zrepl_rebuild_test(void *arg)
 	reader_args[1].max_iops = max_iops / 2;
 	reader_args[1].rebuild_test = B_TRUE;
 
-	sfd = create_and_bind(tgt_port, B_TRUE, B_FALSE);
-	if (sfd == -1) {
+	ds0_mgmt_fd = create_bind_listen_and_accept(tgt_port, B_TRUE, B_FALSE);
+	if (ds0_mgmt_fd == -1) {
 		return;
 	}
 
-	rc = listen(sfd, 10);
-	if (rc == -1) {
-		printf("listen() failed with errno:%d\n", rc);
-		goto exit;
-	}
-
-	sfd1 = create_and_bind(tgt_port1, B_TRUE, B_FALSE);
-	if (sfd1 == -1) {
+	ds1_mgmt_fd = create_bind_listen_and_accept(tgt_port1, B_TRUE, B_FALSE);
+	if (ds1_mgmt_fd == -1) {
 		return;
 	}
 
-	rc = listen(sfd1, 10);
-	if (rc == -1) {
-		printf("listen() failed with errno:%d\n", rc);
-		goto exit;
+	ds2_mgmt_fd = create_bind_listen_and_accept(tgt_port2, B_TRUE, B_FALSE);
+	if (ds2_mgmt_fd == -1) {
+		return;
+	}
+
+	ds3_mgmt_fd = create_bind_listen_and_accept(tgt_port3, B_TRUE, B_FALSE);
+	if (ds3_mgmt_fd == -1) {
+		return;
 	}
 
 	printf("Listen was successful\n");
 
-// import_issue
-	new_fd1 = accept(sfd1, &in_addr, &in_len);
-	if (new_fd1 == -1) {
-		printf("Unable to accept\n");
-		goto exit;
-	}
-
-	printf("Connection accepted from replica successful\n");
-
-start:
-//
-
-// zfs-0.7-release
-	in_len = sizeof (in_addr);
-	mgmt_fd = accept(sfd, &in_addr, &in_len);
-	if (mgmt_fd == -1) {
-		printf("Unable to accept\n");
-		goto exit;
-	}
-// import_issue
-//
 	printf("Connection accepted from replica successfully\n");
-// zfs-0.7-release
 
 	/* Mgmt Handshake and IO-conn for replica ds0 */
-	ds0_io_sfd = zrepl_utest_mgmt_hs_io_conn(ds, mgmt_fd);
+	ds0_io_sfd = zrepl_utest_mgmt_hs_io_conn(ds, ds0_mgmt_fd);
 	if (ds0_io_sfd == -1) {
 		goto exit;
 	}
@@ -903,26 +901,26 @@ start:
 	writer_args.sfd[0] = reader_args[0].sfd[0] = ds0_io_sfd;
 
 	/* Mgmt Handshake and IO-conn for replica ds1 */
-	ds1_io_sfd = zrepl_utest_mgmt_hs_io_conn(ds1, mgmt_fd);
+	ds1_io_sfd = zrepl_utest_mgmt_hs_io_conn(ds1, ds1_mgmt_fd);
 	if (ds1_io_sfd == -1) {
 		goto exit;
 	}
 	writer_args.sfd[1] = reader_args[1].sfd[0] = ds1_io_sfd;
 
 	/* Mgmt Handshake and IO-conn for replica ds2 */
-	ds2_io_sfd = zrepl_utest_mgmt_hs_io_conn(ds2, mgmt_fd);
+	ds2_io_sfd = zrepl_utest_mgmt_hs_io_conn(ds2, ds2_mgmt_fd);
 	if (ds2_io_sfd == -1) {
 		goto exit;
 	}
 
 	/* Mgmt Handshake and IO-conn for replica ds3 */
-	ds3_io_sfd = zrepl_utest_mgmt_hs_io_conn(ds3, mgmt_fd);
+	ds3_io_sfd = zrepl_utest_mgmt_hs_io_conn(ds3, ds3_mgmt_fd);
 	if (ds3_io_sfd == -1) {
 		goto exit;
 	}
 
 	/* Check status of replica ds0 */
-	rc = zrepl_utest_get_replica_status(ds, mgmt_fd, &status_ack);
+	rc = zrepl_utest_get_replica_status(ds, ds0_mgmt_fd, &status_ack);
 	if (rc == -1) {
 		goto exit;
 	}
@@ -937,44 +935,15 @@ start:
 		strncpy(mgmt_ack->dw_volname, ds,
 		    sizeof (mgmt_ack->dw_volname));
 		strncpy(mgmt_ack->volname, "", sizeof (mgmt_ack->volname));
-		rc = zrepl_utest_replica_rebuild_start(mgmt_fd, mgmt_ack,
+		rc = zrepl_utest_replica_rebuild_start(ds0_mgmt_fd, mgmt_ack,
 		    sizeof (mgmt_ack_t));
 		if (rc == -1) {
 			goto exit;
 		}
 	}
 
-// import_issue
-	printf("Vol name: %s\n", mgmt_ack->volname);
-	printf("IP address: %s\n", mgmt_ack->ip);
-	printf("Port: %d\n", mgmt_ack->port);
-
-	hdr.version = REPLICA_VERSION;
-	hdr.opcode = ZVOL_OPCODE_HANDSHAKE;
-	hdr.len = strlen(ds1)+1;
-	count = write(new_fd1, (void *)&hdr, sizeof (zvol_io_hdr_t));
-	count = write(new_fd1, ds1, hdr.len);
-	count = read(new_fd1, (void *)&hdr, sizeof (zvol_io_hdr_t));
-	mgmt_ack1 = umem_alloc(sizeof (mgmt_ack_t), UMEM_NOFAIL);
-	count = read(new_fd1, (void *)mgmt_ack1, hdr.len);
-
-	bzero((char *)&replica_io_addr, sizeof (replica_io_addr));
-
-	replica_io_addr.sin_family = AF_INET;
-	replica_io_addr.sin_addr.s_addr = inet_addr(mgmt_ack->ip);
-	replica_io_addr.sin_port = htons(mgmt_ack->port);
-retry:
-	io_sfd = create_and_bind("", B_FALSE, B_FALSE);
-	if (io_sfd == -1) {
-		printf("Socket creation failed with errno:%d\n", errno);
-		goto start;
-	}
-	rc = connect(io_sfd, (struct sockaddr *)&replica_io_addr,
-	    sizeof (replica_io_addr));
-//
 check_status:
-	rc = zrepl_utest_get_replica_status(ds, mgmt_fd, &status_ack);
-// zfs-0.7-release
+	rc = zrepl_utest_get_replica_status(ds, ds0_mgmt_fd, &status_ack);
 	if (rc == -1) {
 		goto exit;
 	}
@@ -1014,7 +983,7 @@ check_status:
 	 * and ip from healthy replica ds0.
 	 */
 	mgmt_ack_ds1 = umem_alloc(sizeof (mgmt_ack_t), UMEM_NOFAIL);
-	count = zrepl_utest_prepare_for_rebuild(ds, ds1, mgmt_fd,
+	count = zrepl_utest_prepare_for_rebuild(ds, ds1, ds0_mgmt_fd,
 	    mgmt_ack_ds1);
 	if (count == -1) {
 		printf("Prepare_for_rebuild: sending hdr failed\n");
@@ -1025,7 +994,7 @@ check_status:
 	 * Start rebuild process on downgraded replica ds1
 	 * by sharing IP and rebuild_Port info with ds1.
 	 */
-	rc = zrepl_utest_replica_rebuild_start(mgmt_fd, mgmt_ack_ds1,
+	rc = zrepl_utest_replica_rebuild_start(ds1_mgmt_fd, mgmt_ack_ds1,
 	    sizeof (mgmt_ack_t));
 	if (rc == -1) {
 		goto exit;
@@ -1034,7 +1003,7 @@ check_status:
 	 * Check rebuild status of of downgrade replica ds1.
 	 */
 status_check:
-	count = zrepl_utest_get_replica_status(ds1, mgmt_fd, &status_ack);
+	count = zrepl_utest_get_replica_status(ds1, ds1_mgmt_fd, &status_ack);
 	if (count == -1) {
 		goto exit;
 	}
@@ -1067,13 +1036,13 @@ status_check:
 	 */
 	mgmt_ack_ds2 = umem_alloc(sizeof (mgmt_ack_t) * 2, UMEM_NOFAIL);
 	p = mgmt_ack_ds2;
-	count = zrepl_utest_prepare_for_rebuild(ds, ds2, mgmt_fd, p);
+	count = zrepl_utest_prepare_for_rebuild(ds, ds2, ds0_mgmt_fd, p);
 	if (count == -1) {
 		printf("Prepare_for_rebuild: sending hdr failed\n");
 		goto exit;
 	}
 	p++;
-	count = zrepl_utest_prepare_for_rebuild(ds1, ds2, mgmt_fd, p);
+	count = zrepl_utest_prepare_for_rebuild(ds1, ds2, ds1_mgmt_fd, p);
 	if (count == -1) {
 		printf("Prepare_for_rebuild: sending hdr failed\n");
 		goto exit;
@@ -1092,19 +1061,7 @@ status_check:
 	 * Start rebuild process on downgraded replica ds2
 	 * by sharing IP and rebuild_Port info with ds2.
 	 */
-// import_issue
-	hdr.version = REPLICA_VERSION;
-	hdr.opcode = ZVOL_OPCODE_START_REBUILD;
-	hdr.len = sizeof (mgmt_ack_t);
-	count = write(new_fd1, (void *)&hdr, sizeof (zvol_io_hdr_t));
-	if (count == -1) {
-		printf("Start_rebuild: sending hdr failed\n");
-		goto exit;
-	}
-
-	count = write(new_fd1, (char *)mgmt_ack, hdr.len);
-//
-	rc = zrepl_utest_replica_rebuild_start(mgmt_fd, mgmt_ack_ds2,
+	rc = zrepl_utest_replica_rebuild_start(ds2_mgmt_fd, mgmt_ack_ds2,
 	    sizeof (mgmt_ack_t) * 2);
 	if (rc == -1) {
 		goto exit;
@@ -1113,8 +1070,7 @@ status_check:
 	 * Check rebuild status of ds2.
 	 */
 status_check1:
-	count = zrepl_utest_get_replica_status(ds2, mgmt_fd, &status_ack);
-// zfs-0.7-release
+	count = zrepl_utest_get_replica_status(ds2, ds2_mgmt_fd, &status_ack);
 	if (count == -1) {
 		goto exit;
 	}
@@ -1133,41 +1089,23 @@ status_check1:
 	 * ZVOL_OPCODE_PREPARE_FOR_REBUILD op_code ds2.
 	 * Copy that too to mgmt_ack_ds3.
 	 */
-// import_issue
-status_check:
-	printf("Lets wait for healthy status of volume:%s\n", ds1);
-	hdr.version = REPLICA_VERSION;
-	hdr.opcode = ZVOL_OPCODE_REPLICA_STATUS;
-	hdr.len = strlen(ds1) + 1;
-	count = write(new_fd1, (void *)&hdr, sizeof (zvol_io_hdr_t));
-//
 	mgmt_ack_ds3 = umem_alloc(sizeof (mgmt_ack_t) * 3, UMEM_NOFAIL);
 
 	p = mgmt_ack_ds3;
-	count = zrepl_utest_prepare_for_rebuild(ds, ds3, mgmt_fd, p);
-// zfs-0.7-release
+	count = zrepl_utest_prepare_for_rebuild(ds, ds3, ds0_mgmt_fd, p);
 	if (count == -1) {
 		printf("Prepare_for_rebuild: sending hdr failed\n");
 		goto exit;
 	}
-// import_issue
 
-	count = write(new_fd1, ds1, hdr.len);
-//
 	p++;
-	count = zrepl_utest_prepare_for_rebuild(ds1, ds3, mgmt_fd, p);
-// zfs-0.7-release
+	count = zrepl_utest_prepare_for_rebuild(ds1, ds3, ds1_mgmt_fd, p);
 	if (count == -1) {
 		printf("Prepare_for_rebuild: sending hdr failed\n");
 		goto exit;
 	}
-// import_issue
-
-	count = read(new_fd1, (void *)&hdr, sizeof (zvol_io_hdr_t));
-//
 	p++;
-	count = zrepl_utest_prepare_for_rebuild(ds2, ds3, mgmt_fd, p);
-// zfs-0.7-release
+	count = zrepl_utest_prepare_for_rebuild(ds2, ds3, ds2_mgmt_fd, p);
 	if (count == -1) {
 		printf("Prepare_for_rebuild: sending hdr failed\n");
 		goto exit;
@@ -1192,7 +1130,7 @@ status_check:
 	 * Start rebuild process on downgraded replica ds3
 	 * by sharing IP and rebuild_Port info with ds3.
 	 */
-	rc = zrepl_utest_replica_rebuild_start(mgmt_fd, mgmt_ack_ds3,
+	rc = zrepl_utest_replica_rebuild_start(ds3_mgmt_fd, mgmt_ack_ds3,
 	    sizeof (mgmt_ack_t) * 3);
 	if (rc == -1) {
 		goto exit;
@@ -1201,14 +1139,11 @@ status_check:
 	 * Check rebuild status of ds3.
 	 */
 status_check2:
-	count = zrepl_utest_get_replica_status(ds3, mgmt_fd, &status_ack);
+	count = zrepl_utest_get_replica_status(ds3, ds3_mgmt_fd, &status_ack);
 	if (count == -1) {
 		goto exit;
 	}
 
-// import_issue
-	count = read(new_fd1, (void *)&status_ack, hdr.len);
-//
 	if (status_ack.rebuild_status != ZVOL_REBUILDING_FAILED) {
 		sleep(1);
 		goto status_check2;
@@ -1236,7 +1171,7 @@ status_check2:
 	 * Start rebuild process on downgraded replica ds3
 	 * by sharing IP and rebuild_Port info with ds3.
 	 */
-	rc = zrepl_utest_replica_rebuild_start(mgmt_fd, mgmt_ack_ds3,
+	rc = zrepl_utest_replica_rebuild_start(ds3_mgmt_fd, mgmt_ack_ds3,
 	    sizeof (mgmt_ack_t) * 3);
 	if (rc == -1) {
 		goto exit;
@@ -1245,8 +1180,7 @@ status_check2:
 	 * Check rebuild status of ds3.
 	 */
 status_check3:
-	count = zrepl_utest_get_replica_status(ds3, mgmt_fd, &status_ack);
-// zfs-0.7-release
+	count = zrepl_utest_get_replica_status(ds3, ds3_mgmt_fd, &status_ack);
 	if (count == -1) {
 		goto exit;
 	}
@@ -1258,11 +1192,17 @@ status_check3:
 
 	printf("Replica:%s is healthy now\n", ds3);
 exit:
-	if (sfd != -1)
-		close(sfd);
+	if (ds0_mgmt_fd != -1)
+		close(ds0_mgmt_fd);
 
-	if (mgmt_fd != -1)
-		close(mgmt_fd);
+	if (ds1_mgmt_fd != -1)
+		close(ds1_mgmt_fd);
+
+	if (ds2_mgmt_fd != -1)
+		close(ds2_mgmt_fd);
+
+	if (ds3_mgmt_fd != -1)
+		close(ds3_mgmt_fd);
 
 	if (ds0_io_sfd != -1)
 		close(ds0_io_sfd);
