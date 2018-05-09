@@ -50,7 +50,7 @@ extern void replay_fn(void *arg);
 extern void setup_unit_test(void);
 extern void unit_test_create_pool_ds(void);
 extern void open_pool(spa_t **);
-extern void open_ds(spa_t *, zvol_state_t **);
+extern void open_ds(spa_t *, char *, zvol_state_t **);
 
 typedef struct worker_args {
 	void *zv;

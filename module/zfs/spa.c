@@ -3531,10 +3531,6 @@ spa_open_common(const char *pool, spa_t **spapp, void *tag, nvlist_t *nvpolicy,
 	if (firstopen) {
 #ifdef _KERNEL
 		zvol_create_minors(spa, spa_name(spa), B_TRUE);
-#else
-		uzfs_spa_init(spa);
-		dmu_objset_find(spa_name(spa), uzfs_zvol_create_cb, NULL,
-		    DS_FIND_CHILDREN);
 #endif
 	}
 	*spapp = spa;
@@ -4452,8 +4448,11 @@ spa_import(char *pool, nvlist_t *config, nvlist_t *props, uint64_t flags)
 
 	spa_event_notify(spa, NULL, NULL, ESC_ZFS_POOL_IMPORT);
 
+#ifdef _KERNEL
 	zvol_create_minors(spa, pool, B_TRUE);
-
+#else
+	uzfs_zvol_create_minors(spa, pool, B_TRUE);
+#endif
 	mutex_exit(&spa_namespace_lock);
 
 	return (0);
@@ -4602,12 +4601,6 @@ spa_export_common(char *pool, int new_state, nvlist_t **oldconfig,
 #endif
 	mutex_enter(&spa_namespace_lock);
 
-#ifndef _KERNEL
-	if ((new_state == POOL_STATE_DESTROYED) ||
-	    (new_state == POOL_STATE_EXPORTED))
-		uzfs_spa_fini(spa);
-#endif
-
 	spa_close(spa, FTAG);
 
 	if (spa->spa_state == POOL_STATE_UNINITIALIZED)
@@ -4631,13 +4624,6 @@ spa_export_common(char *pool, int new_state, nvlist_t **oldconfig,
 	    (spa->spa_inject_ref != 0 &&
 	    new_state != POOL_STATE_UNINITIALIZED)) {
 		spa_async_resume(spa);
-
-#ifndef _KERNEL
-		if (((new_state == POOL_STATE_DESTROYED) ||
-		    (new_state == POOL_STATE_EXPORTED)) &&
-		    spa->spa_us == NULL)
-			uzfs_spa_init(spa);
-#endif
 		mutex_exit(&spa_namespace_lock);
 		return (SET_ERROR(EBUSY));
 	}
@@ -4652,13 +4638,6 @@ spa_export_common(char *pool, int new_state, nvlist_t **oldconfig,
 		if (!force && new_state == POOL_STATE_EXPORTED &&
 		    spa_has_active_shared_spare(spa)) {
 			spa_async_resume(spa);
-
-#ifndef _KERNEL
-			if (((new_state == POOL_STATE_DESTROYED) ||
-			    (new_state == POOL_STATE_EXPORTED)) &&
-			    spa->spa_us == NULL)
-				uzfs_spa_init(spa);
-#endif
 			mutex_exit(&spa_namespace_lock);
 			return (SET_ERROR(EXDEV));
 		}
@@ -7147,9 +7126,6 @@ spa_evict_all(void)
 
 		if (spa->spa_state != POOL_STATE_UNINITIALIZED) {
 			spa_unload(spa);
-#ifndef	_KERNEL
-			uzfs_spa_fini(spa);
-#endif
 			spa_deactivate(spa);
 		}
 		spa_remove(spa);

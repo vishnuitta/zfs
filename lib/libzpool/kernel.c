@@ -33,6 +33,7 @@
 #include <libgen.h>
 #include <sys/signal.h>
 #include <sys/spa.h>
+#include <sys/spa_impl.h>
 #include <sys/stat.h>
 #include <sys/processor.h>
 #include <sys/zfs_context.h>
@@ -1696,8 +1697,6 @@ __spl_pf_fstrans_check(void)
 {
 	return (0);
 }
-
-void *zvol_tag = "zvol_tag";
 
 void
 zvol_create_minors(spa_t *spa, const char *name, boolean_t async)

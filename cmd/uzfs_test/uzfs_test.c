@@ -654,7 +654,7 @@ open_pool(spa_t **spa)
 }
 
 void
-open_ds(spa_t *spa, zvol_state_t **zv)
+open_ds(spa_t *spa, char *ds, zvol_state_t **zv)
 {
 	int err;
 	err = uzfs_open_dataset(spa, ds, zv);
@@ -662,6 +662,7 @@ open_ds(spa_t *spa, zvol_state_t **zv)
 		printf("ds open errored.. %d\n", err);
 		exit(1);
 	}
+	uzfs_hold_dataset(*zv);
 }
 
 void
@@ -671,14 +672,12 @@ unit_test_fn(void *arg)
 	zvol_state_t *zv;
 	kthread_t *reader1;
 	kthread_t *writer[3];
-	char name[MAXNAMELEN];
 	int i;
 	kmutex_t mtx;
 	kcondvar_t cv;
 	int threads_done = 0;
 	int num_threads = 0;
 	uint64_t total_ios = 0;
-	zvol_info_t *zinfo = NULL;
 	worker_args_t reader1_args;
 	worker_args_t writer_args[3];
 
@@ -691,12 +690,7 @@ unit_test_fn(void *arg)
 	}
 
 	open_pool(&spa);
-	if (create == 1) {
-		open_ds(spa, &zv);
-	} else {
-		zinfo = uzfs_zinfo_lookup(ds);
-		zv = zinfo->zv;
-	}
+	open_ds(spa, ds, &zv);
 
 	if (uzfs_test_id == 2) {
 		reader1_args.zv = zv;
@@ -741,16 +735,8 @@ unit_test_fn(void *arg)
 
 	cv_destroy(&cv);
 	mutex_destroy(&mtx);
-
-	if (create == 1) {
-		uzfs_close_dataset(zv);
-		uzfs_close_pool(spa);
-	} else {
-		strlcpy(name, zinfo->name, MAXNAMELEN);
-		uzfs_zinfo_drop_refcnt(zinfo, 0);
-		uzfs_zinfo_destroy(name, NULL);
-		uzfs_close_pool(spa);
-	}
+	uzfs_close_dataset(zv);
+	uzfs_close_pool(spa);
 }
 
 void

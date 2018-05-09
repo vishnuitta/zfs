@@ -21,6 +21,7 @@
 
 #include <sys/dmu_objset.h>
 #include <sys/zap.h>
+#include <sys/dsl_prop.h>
 #include <sys/uzfs_zvol.h>
 #include <sys/stat.h>
 #include <uzfs.h>
@@ -280,6 +281,62 @@ uzfs_objset_create_cb(objset_t *new_os, void *arg, cred_t *cr, dmu_tx_t *tx)
 	VERIFY(error == 0);
 }
 
+/*
+ * own the dataset, hold node, open zilog
+ */
+int
+uzfs_hold_dataset(zvol_state_t *zv)
+{
+	int error = -1;
+	objset_t *os;
+	error = dmu_objset_own(zv->zv_name, DMU_OST_ZVOL, 1, zv, &os);
+	if (error)
+		goto free_ret;
+
+	zv->zv_objset = os;
+
+	error = dnode_hold(os, ZVOL_OBJ, zv, &zv->zv_dn);
+	if (error) {
+		dmu_objset_disown(zv->zv_objset, zv);
+free_ret:
+		zv->zv_objset = NULL;
+		zv->zv_dn = NULL;
+		goto ret;
+	}
+
+	zv->zv_zilog = zil_open(os, zvol_get_data);
+ret:
+	return (error);
+}
+
+/*
+ * Try to obtain controller address from zfs property.
+ */
+static int
+get_controller_ip(objset_t *os, char *buf, int len)
+{
+	nvlist_t *props, *propval;
+	char *ip;
+	int error;
+	dsl_pool_t *dp = spa_get_dsl(os->os_spa);
+
+	dsl_pool_config_enter(dp, FTAG);
+	error = dsl_prop_get_all(os, &props);
+	dsl_pool_config_exit(dp, FTAG);
+	if (error != 0)
+		return (error);
+	if (nvlist_lookup_nvlist(props, ZFS_PROP_TARGET_IP, &propval) != 0) {
+		nvlist_free(props);
+		return (ENOENT);
+	}
+	if (nvlist_lookup_string(propval, ZPROP_VALUE, &ip) != 0) {
+		nvlist_free(props);
+		return (EINVAL);
+	}
+	strncpy(buf, ip, len);
+	nvlist_free(props);
+	return (0);
+}
 
 /* owns objset with name 'ds_name' in pool 'spa' */
 static int
@@ -303,6 +360,7 @@ uzfs_own_dataset(const char *ds_name, zvol_state_t **z)
 	error = spa_open(ds_name, &spa, zv);
 	if (error != 0) {
 		kmem_free(zv, sizeof (zvol_state_t));
+		zv = NULL;
 		goto ret;
 	}
 
@@ -312,13 +370,23 @@ uzfs_own_dataset(const char *ds_name, zvol_state_t **z)
 	strlcpy(zv->zv_name, ds_name, MAXNAMELEN);
 
 	error = dmu_objset_own(ds_name, DMU_OST_ZVOL, 1, zv, &os);
-	if (error)
+	if (error != 0)
 		goto free_ret;
+
 	zv->zv_objset = os;
 
 	error = dmu_object_info(os, ZVOL_OBJ, &doi);
-	if (error)
-		goto disown_free;
+	if (error) {
+disown_free:
+		dmu_objset_disown(zv->zv_objset, zv);
+free_ret:
+		zfs_rlock_destroy(&zv->zv_range_lock);
+		spa_close(spa, zv);
+		kmem_free(zv, sizeof (zvol_state_t));
+		zv = NULL;
+		goto ret;
+	}
+
 	block_size = doi.doi_data_block_size;
 
 	error = zap_lookup(os, ZVOL_ZAP_OBJ, "size", 8, 1, &vol_size);
@@ -344,19 +412,12 @@ uzfs_own_dataset(const char *ds_name, zvol_state_t **z)
 	zv->zv_volmetadatasize = meta_data_size;
 	zv->zv_metavolblocksize = meta_vol_block_size;
 
-	error = dnode_hold(os, ZVOL_OBJ, zv, &zv->zv_dn);
-	if (error) {
-disown_free:
-		dmu_objset_disown(zv->zv_objset, zv);
-free_ret:
-		spa_close(spa, zv);
-		zfs_rlock_destroy(&zv->zv_range_lock);
-		kmem_free(zv, sizeof (zvol_state_t));
-		zv = NULL;
-		goto ret;
-	}
+	error = get_controller_ip(os, zv->zv_target_host,
+	    sizeof (zv->zv_target_host));
+	if (error != 0 && error != ENOENT)
+		goto disown_free;
 
-	zv->zv_zilog = zil_open(os, zvol_get_data);
+	error = 0;
 	zv->zv_volblocksize = block_size;
 	zv->zv_volsize = vol_size;
 
@@ -370,8 +431,12 @@ free_ret:
 			zil_replay(os, zv, zvol_replay_vector);
 	}
 
+	dmu_objset_disown(zv->zv_objset, zv);
+
+	zv->zv_objset = NULL;
 ret:
 	*z = zv;
+
 	return (error);
 }
 
@@ -432,12 +497,15 @@ ret:
 int
 uzfs_zvol_create_cb(const char *ds_name, void *arg)
 {
-
 	zvol_state_t	*zv = NULL;
 	int 		error = -1;
 	nvlist_t	*nvprops = arg;
+	char		*ip;
 
-	printf("ds_name %s\n", ds_name);
+	if (strrchr(ds_name, '@') != NULL) {
+		printf("no owning dataset for snapshots: %s\n", ds_name);
+		return (0);
+	}
 
 	error = uzfs_own_dataset(ds_name, &zv);
 	if (error) {
@@ -445,12 +513,65 @@ uzfs_zvol_create_cb(const char *ds_name, void *arg)
 		return (error);
 	}
 
+	/* if zvol is being created, read target address from nvlist */
+	if (nvprops != NULL) {
+		error = nvlist_lookup_string(nvprops, ZFS_PROP_TARGET_IP, &ip);
+		if (error == 0)
+			strncpy(zv->zv_target_host, ip,
+			    sizeof (zv->zv_target_host));
+		else {
+			printf("target IP address is not set for %s\n",
+			    ds_name);
+			uzfs_close_dataset(zv);
+			return (error);
+		}
+	} else {
+		if (zv->zv_target_host[0] == '\0') {
+			printf("target IP address is NULL for %s\n", ds_name);
+			uzfs_close_dataset(zv);
+			return (EINVAL);
+		}
+	}
 	if (uzfs_zinfo_init(zv, ds_name, nvprops) != 0) {
 		printf("Failed in uzfs_zinfo_init\n");
 		return (error);
 	}
 
 	return (0);
+}
+
+static void
+uzfs_zvol_create_minors_impl(void *n)
+{
+	const char *name = (char *)n;
+
+	dmu_objset_find((char *)name, uzfs_zvol_create_cb, NULL,
+	    DS_FIND_CHILDREN);
+
+	kmem_free(n, MAXNAMELEN);
+}
+
+/*
+ * similar to zvol_create_minors which does
+ * - own dataset, zil replay, disown dataset
+ * for all children
+ */
+void
+uzfs_zvol_create_minors(spa_t *spa, const char *name, boolean_t async)
+{
+	taskqid_t id;
+	char *pool_name;
+
+	pool_name = (char *)kmem_zalloc(sizeof (char) * MAXNAMELEN, KM_SLEEP);
+
+	strncpy(pool_name, name, MAXNAMELEN);
+
+	if (strrchr(name, '@') == NULL) {
+		id = taskq_dispatch(spa->spa_zvol_taskq,
+		    uzfs_zvol_create_minors_impl, (void *)pool_name, TQ_SLEEP);
+		if ((async == B_FALSE) && (id != TASKQID_INVALID))
+			taskq_wait_id(spa->spa_zvol_taskq, id);
+	}
 }
 
 /* uZFS Zvol destroy call back function */
@@ -469,9 +590,12 @@ uzfs_zvol_destroy_cb(const char *ds_name, void *arg)
 void
 uzfs_close_dataset(zvol_state_t *zv)
 {
-	zil_close(zv->zv_zilog);
-	dnode_rele(zv->zv_dn, zv);
-	dmu_objset_disown(zv->zv_objset, zv);
+	if (zv->zv_zilog != NULL)
+		zil_close(zv->zv_zilog);
+	if (zv->zv_dn != NULL)
+		dnode_rele(zv->zv_dn, zv);
+	if (zv->zv_objset != NULL)
+		dmu_objset_disown(zv->zv_objset, zv);
 	zfs_rlock_destroy(&zv->zv_range_lock);
 	spa_close(zv->zv_spa, zv);
 	kmem_free(zv, sizeof (zvol_state_t));

@@ -115,7 +115,6 @@ uzfs_zvol_zap_operation(void *arg)
 {
 	uzfs_test_info_t *test_info = (uzfs_test_info_t *)arg;
 	int i = 0;
-	char name[MAXNAMELEN];
 	hrtime_t end, now;
 	spa_t *spa;
 	zvol_state_t *zvol;
@@ -124,11 +123,9 @@ uzfs_zvol_zap_operation(void *arg)
 	uint64_t txg1, txg2, txg3, txg4;
 	struct timespec ts;
 	int err1, err2;
-	zvol_info_t *zinfo = NULL;
 
 	open_pool(&spa);
-	zinfo = uzfs_zinfo_lookup(ds);
-	zvol = zinfo->zv;
+	open_ds(spa, ds, &zvol);
 	if (!zvol) {
 		printf("couldn't find zvol\n");
 		uzfs_close_pool(spa);
@@ -227,8 +224,6 @@ uzfs_zvol_zap_operation(void *arg)
 			break;
 	}
 
-	strlcpy(name, zinfo->name, MAXNAMELEN);
-	uzfs_zinfo_drop_refcnt(zinfo, 0);
-	uzfs_zinfo_destroy(name, NULL);
+	uzfs_close_dataset(zvol);
 	uzfs_close_pool(spa);
 }

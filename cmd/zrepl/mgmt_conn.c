@@ -33,9 +33,9 @@
 #include <sys/prctl.h>
 
 #include <sys/dsl_dataset.h>
-#include <sys/dsl_prop.h>
 #include <sys/dmu_objset.h>
 #include <zrepl_prot.h>
+#include <uzfs_mgmt.h>
 
 #include "mgmt_conn.h"
 #include "data_conn.h"
@@ -239,39 +239,13 @@ scan_conn_list(void)
 }
 
 /*
- * Try to obtain controller address from zfs property.
- */
-static int
-get_controller_ip(objset_t *os, char *buf, int len)
-{
-	nvlist_t *props, *propval;
-	char *ip;
-	int error;
-	dsl_pool_t *dp = spa_get_dsl(os->os_spa);
-
-	dsl_pool_config_enter(dp, FTAG);
-	error = dsl_prop_get_all(os, &props);
-	dsl_pool_config_exit(dp, FTAG);
-	if (error != 0)
-		return (error);
-	if (nvlist_lookup_nvlist(props, ZFS_PROP_TARGET_IP, &propval) != 0)
-		return (ENOENT);
-	if (nvlist_lookup_string(propval, ZPROP_VALUE, &ip) != 0)
-		return (EINVAL);
-
-	strncpy(buf, ip, len);
-	nvlist_free(props);
-	return (0);
-}
-
-/*
  * This gets called whenever a new zinfo is created. We might need to create
  * a new mgmt connection to iscsi target in response to this event.
  */
 void
 zinfo_create_cb(zvol_info_t *zinfo, nvlist_t *create_props)
 {
-	char target_host[256];
+	char target_host[MAXNAMELEN];
 	uint16_t target_port;
 	uzfs_mgmt_conn_t *mgmt_conn, *new_mgmt_conn;
 	zvol_state_t *zv = zinfo->zv;
@@ -285,12 +259,13 @@ zinfo_create_cb(zvol_info_t *zinfo, nvlist_t *create_props)
 		strncpy(target_host, ip, sizeof (target_host));
 	} else {
 		/* get it from zvol properties */
-		if (get_controller_ip(zv->zv_objset, target_host,
-		    sizeof (target_host)) != 0) {
+		if (zv->zv_target_host[0] == 0) {
 			/* in case of missing property take the default IP */
-			strncpy(target_host, target_addr, sizeof (target_host));
+			strncpy(target_host, "127.0.0.1", sizeof ("127.0.0.1"));
 			target_port = TARGET_PORT;
 		}
+		else
+			strncpy(target_host, zv->zv_target_host, MAXNAMELEN);
 	}
 
 	delim = strchr(target_host, ':');
@@ -511,6 +486,14 @@ uzfs_zvol_mgmt_do_handshake(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp,
 	mgmt_ack.port = atoi((hdrp->opcode == ZVOL_OPCODE_PREPARE_FOR_REBUILD) ?
 	    REBUILD_IO_SERVER_PORT : IO_SERVER_PORT);
 	mgmt_ack.pool_guid = spa_guid(zv->zv_spa);
+
+	/*
+	 * hold dataset during handshake if objset is NULL
+	 * no critical section here as rebuild & handshake won't come at a time
+	 */
+	if (zv->zv_objset == NULL)
+		uzfs_hold_dataset(zv);
+
 	/*
 	 * We don't use fsid_guid because that one is not guaranteed
 	 * to stay the same (it is changed in case of conflicts).
@@ -565,9 +548,9 @@ uzfs_zvol_rebuild_dw_replica_start(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp,
 		}
 		if (zinfo == NULL) {
 			zinfo = uzfs_zinfo_lookup(mack->dw_volname);
-			if (zinfo == NULL) {
-				printf("Replica %s not found\n",
-				    mack->dw_volname);
+			if ((zinfo == NULL) || (zinfo->mgmt_conn != conn)) {
+				printf("Replica %s not found or not matching "
+				    "conn\n", mack->dw_volname);
 				return (reply_error(conn, ZVOL_OP_STATUS_FAILED,
 				    hdrp->opcode, hdrp->io_seq, CS_INIT));
 			}
@@ -593,6 +576,13 @@ uzfs_zvol_rebuild_dw_replica_start(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp,
 			uzfs_zvol_set_rebuild_status(zinfo->zv,
 			    ZVOL_REBUILDING_IN_PROGRESS);
 		} else {
+			if (strncmp(zinfo->name, mack->dw_volname, MAXNAMELEN)
+			    != 0) {
+				printf("Replica %s not matching with zinfo"
+				    " %s\n", mack->dw_volname, zinfo->name);
+				return (reply_error(conn, ZVOL_OP_STATUS_FAILED,
+				    hdrp->opcode, hdrp->io_seq, CS_INIT));
+			}
 			uzfs_zinfo_take_refcnt(zinfo, B_FALSE);
 		}
 
@@ -653,7 +643,8 @@ process_message(uzfs_mgmt_conn_t *conn)
 		strncpy(zvol_name, payload, payload_size);
 		zvol_name[payload_size] = '\0';
 
-		if ((zinfo = uzfs_zinfo_lookup(zvol_name)) == NULL) {
+		if (((zinfo = uzfs_zinfo_lookup(zvol_name)) == NULL) ||
+		    (zinfo->mgmt_conn != conn)) {
 			fprintf(stderr, "Unknown zvol: %s\n", zvol_name);
 			rc = reply_error(conn, ZVOL_OP_STATUS_FAILED,
 			    hdrp->opcode, hdrp->io_seq, CS_INIT);
