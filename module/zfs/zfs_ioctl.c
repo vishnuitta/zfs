@@ -2021,7 +2021,41 @@ zfs_ioc_vdev_remove(zfs_cmd_t *zc)
 	return (error);
 }
 
-#if defined(_KERNEL)
+static int
+zfs_ioc_vdev_attach(zfs_cmd_t *zc)
+{
+	spa_t *spa;
+	int replacing = zc->zc_cookie;
+	nvlist_t *config;
+	int error;
+
+	if ((error = spa_open(zc->zc_name, &spa, FTAG)) != 0)
+		return (error);
+
+	if ((error = get_nvlist(zc->zc_nvlist_conf, zc->zc_nvlist_conf_size,
+	    zc->zc_iflags, &config)) == 0) {
+		error = spa_vdev_attach(spa, zc->zc_guid, config, replacing);
+		nvlist_free(config);
+	}
+
+	spa_close(spa, FTAG);
+	return (error);
+}
+
+static int
+zfs_ioc_vdev_detach(zfs_cmd_t *zc)
+{
+	spa_t *spa;
+	int error;
+
+	if ((error = spa_open(zc->zc_name, &spa, FTAG)) != 0)
+		return (error);
+
+	error = spa_vdev_detach(spa, zc->zc_guid, 0, B_FALSE);
+
+	spa_close(spa, FTAG);
+	return (error);
+}
 
 static int
 zfs_ioc_vdev_set_state(zfs_cmd_t *zc)
@@ -2066,41 +2100,7 @@ zfs_ioc_vdev_set_state(zfs_cmd_t *zc)
 	return (error);
 }
 
-static int
-zfs_ioc_vdev_attach(zfs_cmd_t *zc)
-{
-	spa_t *spa;
-	int replacing = zc->zc_cookie;
-	nvlist_t *config;
-	int error;
-
-	if ((error = spa_open(zc->zc_name, &spa, FTAG)) != 0)
-		return (error);
-
-	if ((error = get_nvlist(zc->zc_nvlist_conf, zc->zc_nvlist_conf_size,
-	    zc->zc_iflags, &config)) == 0) {
-		error = spa_vdev_attach(spa, zc->zc_guid, config, replacing);
-		nvlist_free(config);
-	}
-
-	spa_close(spa, FTAG);
-	return (error);
-}
-
-static int
-zfs_ioc_vdev_detach(zfs_cmd_t *zc)
-{
-	spa_t *spa;
-	int error;
-
-	if ((error = spa_open(zc->zc_name, &spa, FTAG)) != 0)
-		return (error);
-
-	error = spa_vdev_detach(spa, zc->zc_guid, 0, B_FALSE);
-
-	spa_close(spa, FTAG);
-	return (error);
-}
+#if defined(_KERNEL)
 
 static int
 zfs_ioc_vdev_split(zfs_cmd_t *zc)
@@ -7285,6 +7285,12 @@ uzfs_handle_ioctl(const char *pool, zfs_cmd_t *zc, uzfs_info_t *ucmd_info)
 		return (zfs_ioc_vdev_add(zc));
 	case ZFS_IOC_VDEV_REMOVE:
 		return (zfs_ioc_vdev_remove(zc));
+	case ZFS_IOC_VDEV_ATTACH:
+		return (zfs_ioc_vdev_attach(zc));
+	case ZFS_IOC_VDEV_DETACH:
+		return (zfs_ioc_vdev_detach(zc));
+	case ZFS_IOC_VDEV_SET_STATE:
+		return (zfs_ioc_vdev_set_state(zc));
 	}
 	return (err);
 }
