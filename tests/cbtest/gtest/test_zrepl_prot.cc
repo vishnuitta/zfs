@@ -42,6 +42,7 @@
 #include <netinet/tcp.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <algorithm>
 
 #include <zrepl_prot.h>
 #include "gtest_utils.h"
@@ -420,6 +421,17 @@ static void graceful_close(int sockfd)
 	close(sockfd);
 }
 
+static std::string getPoolState(std::string pname)
+{
+	std::string s;
+
+	s = execCmd("zpool", std::string("list -Ho health ") + pname);
+	// Trim white space at the end of string
+	s.erase(std::find_if(s.rbegin(), s.rend(),
+	    std::not1(std::ptr_fun<int, int>(std::isspace))).base(), s.end());
+	return (s);
+}
+
 /*
  * zrepl program wrapper.
  *
@@ -566,23 +578,13 @@ public:
 	int m_listenfd;
 };
 
-/*
- * Class simplifying test zfs pool creation and creation of zvols on it.
- * Automatic pool destruction takes place when object goes out of scope.
- */
-class TestPool {
+class Vdev {
 public:
-	TestPool(std::string poolname) {
-		m_name = poolname;
-		m_path = std::string("/tmp/") + m_name;
+	Vdev(std::string name) {
+		m_path = std::string("/tmp/") + name;
 	}
 
-	~TestPool() {
-		//try {
-			execCmd("zpool", std::string("destroy -f ") + m_name);
-		//} catch (std::runtime_error re) {
-			//;
-		//}
+	~Vdev() {
 		unlink(m_path.c_str());
 	}
 
@@ -599,8 +601,35 @@ public:
 		if (rc != 0)
 			throw std::system_error(errno, std::system_category(),
 			    "Cannot truncate vdev file");
+	}
+
+	std::string m_path;
+};
+
+/*
+ * Class simplifying test zfs pool creation and creation of zvols on it.
+ * Automatic pool destruction takes place when object goes out of scope.
+ */
+class TestPool {
+public:
+	TestPool(std::string poolname) {
+		m_name = poolname;
+		m_vdev = new Vdev(std::string("disk-for-") + poolname);
+	}
+
+	~TestPool() {
+		//try {
+			execCmd("zpool", std::string("destroy -f ") + m_name);
+		//} catch (std::runtime_error re) {
+			//;
+		//}
+		delete m_vdev;
+	}
+
+	void create() {
+		m_vdev->create();
 		execCmd("zpool", std::string("create ") + m_name + " " +
-		    m_path);
+		    m_vdev->m_path);
 	}
 
 	void import() {
@@ -621,8 +650,8 @@ public:
 		return (m_name + "/" + name);
 	}
 
+	Vdev *m_vdev;
 	std::string m_name;
-	std::string m_path;
 };
 
 class ZreplHandshakeTest : public testing::Test {
@@ -1338,7 +1367,6 @@ class ZreplBlockSizeTest : public testing::Test {
 protected:
 	/*
 	 * Shared setup hook for all zrepl block size tests - called just once.
-	 * Creates a zvol with 4k block size.
 	 */
 	static void SetUpTestCase() {
 		zvol_io_hdr_t hdr_out, hdr_in;
@@ -1433,4 +1461,62 @@ TEST_F(ZreplBlockSizeTest, SetDifferentMetaBlockSizes) {
 	m_data_fd = -1;
 	do_data_connection(m_data_fd, m_host, m_port, m_zvol_name, 512, 120,
 	    ZVOL_OP_STATUS_FAILED);
+}
+
+/*
+ * Test disk replacement
+ */
+TEST(DiskReplaceTest, SpareReplacement) {
+	Zrepl zrepl;
+	Target target;
+	int rc, data_fd, control_fd;
+	std::string host;
+	uint16_t port;
+	int ioseq;
+	Vdev vdev2("vdev2");
+	Vdev spare("spare");
+	TestPool pool("rplcpool");
+
+	zrepl.start();
+	vdev2.create();
+	spare.create();
+	pool.create();
+	pool.createZvol("vol", "-o io.openebs:targetip=127.0.0.1");
+
+	rc = target.listen();
+	ASSERT_GE(rc, 0);
+	control_fd = target.accept(-1);
+	ASSERT_GE(control_fd, 0);
+	do_handshake(pool.getZvolName("vol"), host, port, NULL, control_fd,
+	    ZVOL_OP_STATUS_OK);
+	do_data_connection(data_fd, host, port, pool.getZvolName("vol"));
+	write_data_and_verify_resp(data_fd, ioseq, 0, 10);
+
+	// construct mirrored pool with a spare
+	execCmd("zpool", std::string("attach ") + pool.m_name + " " +
+	    pool.m_vdev->m_path + " " + vdev2.m_path);
+	write_data_and_verify_resp(data_fd, ioseq, 0, 10);
+	execCmd("zpool", std::string("add ") + pool.m_name + " spare " +
+	    spare.m_path);
+	write_data_and_verify_resp(data_fd, ioseq, 0, 10);
+	ASSERT_STREQ(getPoolState(pool.m_name).c_str(), "ONLINE");
+
+	// fail one of the disks in the mirror
+	execCmd("zpool", std::string("offline ") + pool.m_name + " " +
+	    vdev2.m_path);
+	write_data_and_verify_resp(data_fd, ioseq, 0, 10);
+	ASSERT_STREQ(getPoolState(pool.m_name).c_str(), "DEGRADED");
+
+	// replace failed disk by the spare and remove it from mirror
+	execCmd("zpool", std::string("replace ") + pool.m_name + " " +
+	    vdev2.m_path + " " + spare.m_path);
+	write_data_and_verify_resp(data_fd, ioseq, 0, 10);
+	execCmd("zpool", std::string("detach ") + pool.m_name + " " +
+	    vdev2.m_path);
+	ASSERT_STREQ(getPoolState(pool.m_name).c_str(), "ONLINE");
+
+	//std::cout << execCmd("zpool", std::string("status ") + pool.m_name);
+
+	graceful_close(data_fd);
+	graceful_close(control_fd);
 }
