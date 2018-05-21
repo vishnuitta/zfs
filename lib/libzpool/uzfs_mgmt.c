@@ -504,26 +504,14 @@ uzfs_zvol_create_cb(const char *ds_name, void *arg)
 	return (0);
 }
 
-static void
-uzfs_zvol_create_minors_impl(void *n)
-{
-	const char *name = (char *)n;
-
-	dmu_objset_find((char *)name, uzfs_zvol_create_cb, NULL,
-	    DS_FIND_CHILDREN);
-
-	kmem_free(n, MAXNAMELEN);
-}
-
 /*
  * similar to zvol_create_minors which does
  * - own dataset, zil replay, disown dataset
  * for all children
  */
 void
-uzfs_zvol_create_minors(spa_t *spa, const char *name, boolean_t async)
+uzfs_zvol_create_minors(spa_t *spa, const char *name)
 {
-	taskqid_t id;
 	char *pool_name;
 
 	if (strrchr(name, '@') != NULL)
@@ -531,10 +519,8 @@ uzfs_zvol_create_minors(spa_t *spa, const char *name, boolean_t async)
 
 	pool_name = kmem_zalloc(MAXNAMELEN, KM_SLEEP);
 	strncpy(pool_name, name, MAXNAMELEN);
-	id = taskq_dispatch(spa->spa_zvol_taskq,
-	    uzfs_zvol_create_minors_impl, (void *)pool_name, TQ_SLEEP);
-	if ((async == B_FALSE) && (id != TASKQID_INVALID))
-		taskq_wait_id(spa->spa_zvol_taskq, id);
+	dmu_objset_find(pool_name, uzfs_zvol_create_cb, NULL, DS_FIND_CHILDREN);
+	kmem_free(pool_name, MAXNAMELEN);
 }
 
 /* uZFS Zvol destroy call back function */

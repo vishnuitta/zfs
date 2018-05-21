@@ -37,8 +37,7 @@ extern int uzfs_zvol_create_meta(objset_t *os, uint64_t block_size,
     uint64_t meta_block_size, dmu_tx_t *tx);
 extern int uzfs_open_dataset(spa_t *spa, const char *ds, zvol_state_t **zv);
 extern int uzfs_zvol_create_cb(const char *ds_name, void *n);
-extern void uzfs_zvol_create_minors(spa_t *spa, const char *name,
-    boolean_t async);
+extern void uzfs_zvol_create_minors(spa_t *spa, const char *name);
 extern int uzfs_zvol_destroy_cb(const char *ds_name, void *n);
 extern uint64_t uzfs_synced_txg(zvol_state_t *zv);
 extern void uzfs_close_dataset(zvol_state_t *zv);
