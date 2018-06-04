@@ -3,8 +3,7 @@ include $(top_srcdir)/config/Rules.am
 VPATH = \
 	$(top_srcdir)/module/zfs \
 	$(top_srcdir)/module/zcommon \
-	$(top_srcdir)/lib/libzpool \
-	$(top_srcdir)/cmd/zrepl
+	$(top_srcdir)/lib/libzpool
 
 AM_CFLAGS += $(DEBUG_STACKFLAGS) $(FRAME_LARGER_THAN)
 

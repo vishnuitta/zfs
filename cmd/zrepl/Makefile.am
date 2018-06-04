@@ -20,5 +20,3 @@ zrepl_LDADD = \
 	$(top_builddir)/lib/libzpool/libzpool.la \
 	$(top_builddir)/lib/libzfs/libzfs.la \
 	$(top_builddir)/lib/libzfs_core/libzfs_core.la
-
-EXTRA_DIST = data_conn.h mgmt_conn.h
