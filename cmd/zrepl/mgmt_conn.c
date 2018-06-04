@@ -38,7 +38,7 @@
 #include <zrepl_prot.h>
 #include <uzfs_mgmt.h>
 
-#include "mgmt_conn.h"
+#include <mgmt_conn.h>
 #include "data_conn.h"
 
 /*
@@ -96,38 +96,9 @@ gettimestamp(void)
 #define	MGMT_PORT	"12000"
 #define	RECONNECT_DELAY	4	// 4 seconds
 
-/*
- * Mgmt connection states.
- */
-enum conn_state {
-	CS_CONNECT,		// tcp connect is in progress
-	CS_INIT,		// initial state or state after sending reply
-	CS_READ_VERSION,	// reading request version
-	CS_READ_HEADER,		// reading request header
-	CS_READ_PAYLOAD,	// reading request payload
-	CS_CLOSE,		// closing connection - final state
-};
-
-/*
- * Structure representing mgmt connection and all its reading/writing state.
- */
-typedef struct uzfs_mgmt_conn {
-	SLIST_ENTRY(uzfs_mgmt_conn) conn_next;
-	int		conn_fd;	// network socket FD
-	int		conn_refcount;	// should be 0 or 1
-	char		conn_host[MAX_IP_LEN];
-	uint16_t	conn_port;
-	enum conn_state	conn_state;
-	void		*conn_buf;	// buffer to hold network data
-	int		conn_bufsiz;    // bytes to read/write in total
-	int		conn_procn;	// bytes already read/written
-	zvol_io_hdr_t	*conn_hdr;	// header of currently processed cmd
-	time_t		conn_last_connect;  // time of last attempted connect()
-} uzfs_mgmt_conn_t;
-
 /* conn list can be traversed or changed only when holding the mutex */
 kmutex_t conn_list_mtx;
-SLIST_HEAD(, uzfs_mgmt_conn) uzfs_mgmt_conns;
+struct uzfs_mgmt_conn_list uzfs_mgmt_conns;
 
 /*
  * Blocking or lengthy operations must be executed asynchronously not to block
@@ -1006,6 +977,7 @@ uzfs_zvol_mgmt_thread(void *arg)
 	boolean_t		do_scan;
 	async_task_t		*async_task;
 
+	SLIST_INIT(&uzfs_mgmt_conns);
 	mutex_init(&conn_list_mtx, NULL, MUTEX_DEFAULT, NULL);
 	mutex_init(&async_tasks_mtx, NULL, MUTEX_DEFAULT, NULL);
 

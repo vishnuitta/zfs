@@ -29,6 +29,7 @@
 /* Avoid including conflicting C++ declarations for LE-BE conversions */
 #define _SYS_BYTEORDER_H
 #include <libuzfs.h>
+#include <mgmt_conn.h>
 
 TEST(uZFSServer, Setup) {
 	kernel_init(FREAD);
@@ -45,4 +46,41 @@ TEST(uZFSServer, InitServer) {
 
 TEST(uZFSServer, ClientConnectServer) {
 	EXPECT_EQ(0, libuzfs_client_init(NULL));
+}
+
+int
+slist_count(struct uzfs_mgmt_conn_list *list)
+{
+	int count = 0;
+	uzfs_mgmt_conn_t *mgmt_conn;
+
+	SLIST_FOREACH(mgmt_conn, list, conn_next)
+		count++;
+
+	return count;
+}
+
+TEST(uZFSServer, EmptyCreateProps) {
+	zvol_info_t *zinfo = (zvol_info_t *)malloc(sizeof (zvol_info_t));
+	zvol_state_t *zv = (zvol_state_t *)malloc(sizeof (zvol_state_t));
+	uzfs_mgmt_conn_t *conn;
+
+	memset(zinfo, 0, sizeof (zvol_info_t));
+	memset(zv, 0, sizeof (zvol_state_t));
+
+	zinfo->zv = zv;
+
+	mutex_init(&conn_list_mtx, NULL, MUTEX_DEFAULT, NULL);
+	SLIST_INIT(&uzfs_mgmt_conns);
+	mgmt_eventfd = -1;
+
+	zinfo_create_cb(zinfo, NULL);
+	EXPECT_EQ(1, slist_count(&uzfs_mgmt_conns));
+	conn = SLIST_FIRST(&uzfs_mgmt_conns);
+	EXPECT_EQ(1, conn->conn_refcount);
+
+	zinfo_create_cb(zinfo, NULL);
+	EXPECT_EQ(1, slist_count(&uzfs_mgmt_conns));
+	conn = SLIST_FIRST(&uzfs_mgmt_conns);
+	EXPECT_EQ(2, conn->conn_refcount);
 }

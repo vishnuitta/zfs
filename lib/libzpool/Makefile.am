@@ -3,7 +3,8 @@ include $(top_srcdir)/config/Rules.am
 VPATH = \
 	$(top_srcdir)/module/zfs \
 	$(top_srcdir)/module/zcommon \
-	$(top_srcdir)/lib/libzpool
+	$(top_srcdir)/lib/libzpool \
+	$(top_srcdir)/cmd/zrepl
 
 AM_CFLAGS += $(DEBUG_STACKFLAGS) $(FRAME_LARGER_THAN)
 
@@ -24,7 +25,9 @@ USER_C = \
 	uzfs_test_mgmt.c \
 	uzfs_zap.c \
 	vdev_disk_aio.c \
-	zrepl_mgmt.c
+	zrepl_mgmt.c \
+	mgmt_conn.c \
+	data_conn.c
 
 KERNEL_C = \
 	zfs_comutil.c \
