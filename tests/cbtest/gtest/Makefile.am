@@ -13,6 +13,7 @@ test_uzfs_LDADD = \
 	$(top_builddir)/lib/libnvpair/libnvpair.la \
 	$(top_builddir)/lib/libuutil/libuutil.la \
 	$(top_builddir)/lib/libzpool/libzpool.la \
+	$(top_builddir)/lib/libzrepl/libzrepl.la \
 	$(top_builddir)/lib/libzfs/libzfs.la \
 	$(top_builddir)/lib/libzfs_core/libzfs_core.la
 
