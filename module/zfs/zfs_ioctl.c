@@ -3430,7 +3430,6 @@ zfs_ioc_create(const char *fsname, nvlist_t *innvl, nvlist_t *outnvl)
 	return (error);
 }
 
-#if defined(_KERNEL)
 /*
  * innvl: {
  *     "origin" -> name of origin snapshot
@@ -3469,10 +3468,12 @@ zfs_ioc_clone(const char *fsname, nvlist_t *innvl, nvlist_t *outnvl)
 		    nvprops, outnvl);
 		if (error != 0)
 			(void) dsl_destroy_head(fsname);
+#if !defined(_KERNEL)
+		(void) uzfs_zvol_create_cb(fsname, nvprops);
+#endif
 	}
 	return (error);
 }
-#endif /* _KERNEL */
 
 /*
  * innvl: {
@@ -5255,6 +5256,8 @@ zfs_ioc_pool_reopen(zfs_cmd_t *zc)
 	spa_close(spa, FTAG);
 	return (0);
 }
+#endif	/* defined(_KERNEL) */
+
 /*
  * inputs:
  * zc_name	name of filesystem
@@ -5268,7 +5271,6 @@ zfs_ioc_promote(zfs_cmd_t *zc)
 	dsl_pool_t *dp;
 	dsl_dataset_t *ds, *ods;
 	char origin[ZFS_MAX_DATASET_NAME_LEN];
-	char *cp;
 	int error;
 
 	error = dsl_pool_hold(zc->zc_name, FTAG, &dp);
@@ -5300,18 +5302,21 @@ zfs_ioc_promote(zfs_cmd_t *zc)
 	dsl_dataset_rele(ds, FTAG);
 	dsl_pool_rele(dp, FTAG);
 
+#if defined(_KERNEL)
 	/*
 	 * We don't need to unmount *all* the origin fs's snapshots, but
 	 * it's easier.
 	 */
-	cp = strchr(origin, '@');
+	char *cp = strchr(origin, '@');
 	if (cp)
 		*cp = '\0';
 	(void) dmu_objset_find(origin,
 	    zfs_unmount_snap_cb, NULL, DS_FIND_SNAPSHOTS);
+#endif
 	return (dsl_dataset_promote(zc->zc_name, zc->zc_string));
 }
 
+#if defined(_KERNEL)
 /*
  * Retrieve a single {user|group}{used|quota}@... property.
  *
@@ -7291,6 +7296,26 @@ uzfs_handle_ioctl(const char *pool, zfs_cmd_t *zc, uzfs_info_t *ucmd_info)
 		return (zfs_ioc_vdev_detach(zc));
 	case ZFS_IOC_VDEV_SET_STATE:
 		return (zfs_ioc_vdev_set_state(zc));
+	case ZFS_IOC_PROMOTE:
+		return (zfs_ioc_promote(zc));
+	case ZFS_IOC_CLONE: {
+		nvlist_t *outnvl = fnvlist_alloc();
+
+		err = zfs_ioc_clone(zc->zc_name, innvl, outnvl);
+		if (!nvlist_empty(outnvl) || zc->zc_nvlist_dst_size != 0) {
+			int smusherror = 0;
+			if (should_smush_nvlist(uzfs_cmd->ioc_num)) {
+				smusherror = nvlist_smush(outnvl,
+				    zc->zc_nvlist_dst_size);
+			}
+			if (smusherror == 0)
+				puterror = put_nvlist(zc, outnvl);
+		}
+		if (puterror != 0)
+			err = puterror;
+		nvlist_free(outnvl);
+		return (err);
+	}
 	}
 	return (err);
 }
