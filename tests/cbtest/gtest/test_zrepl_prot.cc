@@ -1579,3 +1579,48 @@ TEST(ZvolResizeTest, ResizeZvol) {
 
 	graceful_close(control_fd);
 }
+
+/*
+ * Test zvol clone
+ *
+ * There is no clone protocol command but we need to test that after
+ * the clone is created, it connects successfully to iscsi target,
+ * hence the test is here in zrepl protocol test suite.
+ */
+TEST(ZvolCloneTest, CloneZvol) {
+	Zrepl zrepl;
+	Target target;
+	int rc, control_fd;
+	std::string host;
+	uint16_t port;
+	zvol_op_resize_data_t resize_data;
+	TestPool pool("resizepool");
+	std::string zvolname = pool.getZvolName("vol");
+	std::string snapname = pool.getZvolName("vol@snap");
+	std::string clonename = pool.getZvolName("clone");
+	std::string clonesnapname = pool.getZvolName("clone@snap");
+
+	zrepl.start();
+	pool.create();
+	pool.createZvol("vol", "-o io.openebs:targetip=127.0.0.1");
+	execCmd("zfs", std::string("snapshot " + snapname));
+
+	// clone the zvol
+	execCmd("zfs", std::string("clone -o "
+	    "io.openebs:targetip=127.0.0.1:6060 " +
+	    snapname + " " + clonename));
+
+	rc = target.listen(6060);
+	ASSERT_GE(rc, 0);
+	control_fd = target.accept(-1);
+	ASSERT_GE(control_fd, 0);
+	do_handshake(zvolname, host, port, NULL, control_fd,
+	    ZVOL_OP_STATUS_OK);
+
+	// promote the clone
+	execCmd("zfs", std::string("promote " + clonename));
+	// check that snap name has changed after promote
+	execCmd("zfs", std::string("list -t snapshot " + clonesnapname));
+
+	graceful_close(control_fd);
+}
