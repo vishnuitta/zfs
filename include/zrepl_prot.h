@@ -135,6 +135,7 @@ typedef struct mgmt_ack mgmt_ack_t;
  * zvol rebuild related state
  */
 enum zvol_rebuild_status {
+	ZVOL_REBUILDING_UNKNOWN,	/* Initial unknown state of rebuild status */
 	ZVOL_REBUILDING_INIT,		/* rebuilding initiated on zvol */
 	ZVOL_REBUILDING_IN_PROGRESS,	/* zvol is rebuilding */
 	ZVOL_REBUILDING_DONE,		/* done with rebuilding */

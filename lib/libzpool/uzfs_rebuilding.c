@@ -92,13 +92,24 @@ get_snapshot_zv(zvol_state_t *zv, char *snap_name, zvol_state_t **snap_zv)
 		ret = uzfs_open_dataset(zv->zv_spa, dataset, snap_zv);
 		if (ret == 0)
 			ret = uzfs_hold_dataset(*snap_zv);
+		else {
+			strfree(dataset);
+			LOG_ERR("Failed to open snapshot: %d", ret);
+			return (ret);
+		}
 	} else if (ret == 0) {
+		LOG_INFO("holding already available snapshot %s@%s",
+		    zv->zv_name, snap_name);
 		ret = uzfs_hold_dataset(*snap_zv);
+	} else {
+		strfree(dataset);
+		LOG_ERR("Failed to open snapshot: %d", ret);
+		return (ret);
 	}
 
 	if (ret != 0) {
 		strfree(dataset);
-		LOG_ERR("Failed to own snapshot: %d", ret);
+		LOG_ERR("Failed to hold snapshot: %d", ret);
 		return (ret);
 	}
 

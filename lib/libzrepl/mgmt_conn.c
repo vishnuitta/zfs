@@ -658,7 +658,7 @@ uzfs_zvol_dispatch_command(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp,
 
 static int
 uzfs_zvol_rebuild_dw_replica_start(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp,
-    mgmt_ack_t *mack, int rebuild_op_cnt)
+    mgmt_ack_t *mack, zvol_info_t *zinfo, int rebuild_op_cnt)
 {
 	int 			io_sfd = -1;
 	rebuild_thread_arg_t	*thrd_arg;
@@ -666,51 +666,18 @@ uzfs_zvol_rebuild_dw_replica_start(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp,
 	zvol_info_t		*zinfo = NULL;
 
 	for (; rebuild_op_cnt > 0; rebuild_op_cnt--, mack++) {
-		if (mack->volname[0] != '\0') {
-			LOG_INFO("zvol %s at %s:%u helping in rebuild",
-			    mack->volname, mack->ip, mack->port);
-		}
-		if (zinfo == NULL) {
-			zinfo = uzfs_zinfo_lookup(mack->dw_volname);
-			if ((zinfo == NULL) || (zinfo->mgmt_conn != conn)) {
-				LOG_ERR("zvol %s not found or not matching "
-				    "connection", mack->dw_volname);
-				return (reply_nodata(conn,
-				    ZVOL_OP_STATUS_FAILED,
-				    hdrp->opcode, hdrp->io_seq));
-			}
-			/* Track # of rebuilds we are initializing on replica */
-			zinfo->zv->rebuild_info.rebuild_cnt = rebuild_op_cnt;
-
-			/*
-			 * Case where just one replica is being used by customer
-			 */
-			if ((strcmp(mack->volname, "")) == 0) {
-				zinfo->zv->rebuild_info.rebuild_cnt = 0;
-				zinfo->zv->rebuild_info.rebuild_done_cnt = 0;
-				/* Mark replica healthy now */
-				uzfs_zvol_set_rebuild_status(zinfo->zv,
-				    ZVOL_REBUILDING_DONE);
-				uzfs_zvol_set_status(zinfo->zv,
-				    ZVOL_STATUS_HEALTHY);
-				uzfs_update_ionum_interval(zinfo, 0);
-				LOG_INFO("Rebuild of zvol %s completed",
-				    zinfo->name);
-				uzfs_zinfo_drop_refcnt(zinfo, B_FALSE);
-				break;
-			}
+		LOG_INFO("zvol %s at %s:%u helping in rebuild",
+		    mack->volname, mack->ip, mack->port);
+		if (strncmp(zinfo->name, mack->dw_volname, MAXNAMELEN)
+		    != 0) {
+			LOG_ERR("zvol %s not matching with zinfo %s",
+			    mack->dw_volname, zinfo->name);
+ret_error:
 			uzfs_zvol_set_rebuild_status(zinfo->zv,
-			    ZVOL_REBUILDING_IN_PROGRESS);
-		} else {
-			if (strncmp(zinfo->name, mack->dw_volname, MAXNAMELEN)
-			    != 0) {
-				LOG_ERR("zvol %s not matching with zinfo %s",
-				    mack->dw_volname, zinfo->name);
-				return (reply_nodata(conn,
-				    ZVOL_OP_STATUS_FAILED,
-				    hdrp->opcode, hdrp->io_seq));
-			}
-			uzfs_zinfo_take_refcnt(zinfo, B_FALSE);
+			    ZVOL_REBUILDING_FAILED);
+			return (reply_nodata(conn,
+			    ZVOL_OP_STATUS_FAILED,
+			    hdrp->opcode, hdrp->io_seq));
 		}
 
 		io_sfd = create_and_bind("", B_FALSE, B_FALSE);
@@ -718,11 +685,10 @@ uzfs_zvol_rebuild_dw_replica_start(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp,
 			/* Fail this rebuild process entirely */
 			LOG_ERR("Rebuild IO socket create and bind"
 			    " failed on zvol: %s", zinfo->name);
-			uzfs_zvol_set_rebuild_status(zinfo->zv,
-			    ZVOL_REBUILDING_FAILED);
-			uzfs_zinfo_drop_refcnt(zinfo, B_FALSE);
-			break;
+			goto ret_error;
 		}
+
+		uzfs_zinfo_take_refcnt(zinfo, B_FALSE);
 
 		thrd_arg = kmem_alloc(sizeof (rebuild_thread_arg_t), KM_SLEEP);
 		thrd_arg->zinfo = zinfo;
@@ -736,8 +702,9 @@ uzfs_zvol_rebuild_dw_replica_start(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp,
 		VERIFY3P(thrd_info, !=, NULL);
 	}
 
-	conn->conn_state = CS_INIT;
-	return (move_to_next_state(conn));
+	return (reply_nodata(conn,
+	    ZVOL_OP_STATUS_OK,
+	    hdrp->opcode, hdrp->io_seq));
 }
 
 /*
@@ -843,9 +810,52 @@ process_message(uzfs_mgmt_conn_t *conn)
 			    hdrp->opcode, hdrp->io_seq);
 			break;
 		}
+		mack = (mgmt_ack_t *) payload;
+		zinfo = uzfs_zinfo_lookup(mack->dw_volname);
+		/* TODOv: do we need lock to get rebuild status? */
+		if ((zinfo == NULL) || (zinfo->mgmt_conn != conn) ||
+		    (zinfo->zv == NULL) ||
+		    (uzfs_zvol_get_rebuild_status(zinfo->zv) !=
+		    ZVOL_REBUILDING_INIT)) {
+			if (zinfo != NULL)
+				uzfs_zinfo_drop_refcnt(zinfo, B_FALSE);
+			rc = reply_nodata(conn, ZVOL_OP_STATUS_FAILED,
+			    hdrp->opcode, hdrp->io_seq);
+			break;
+		}
+
+		rebuild_op_cnt = (payload_size / sizeof (mgmt_ack_t));
+		/* Track # of rebuilds we are initializing on replica */
+		zinfo->zv->rebuild_info.rebuild_cnt = rebuild_op_cnt;
+
+		/*
+		 * Case where just one replica is being used by customer
+		 */
+		if ((strcmp(mack->volname, "")) == 0) {
+			zinfo->zv->rebuild_info.rebuild_cnt = 0;
+			zinfo->zv->rebuild_info.rebuild_done_cnt = 0;
+			/* Mark replica healthy now */
+			uzfs_zvol_set_rebuild_status(zinfo->zv,
+			    ZVOL_REBUILDING_DONE);
+			uzfs_zvol_set_status(zinfo->zv,
+			    ZVOL_STATUS_HEALTHY);
+			uzfs_update_ionum_interval(zinfo, 0);
+			LOG_INFO("Rebuild of zvol %s completed",
+			    zinfo->name);
+			uzfs_zinfo_drop_refcnt(zinfo, B_FALSE);
+			rc = reply_nodata(conn, ZVOL_OP_STATUS_OK,
+			    hdrp->opcode, hdrp->io_seq);
+			break;
+		}
+		uzfs_zvol_set_rebuild_status(zinfo->zv,
+		    ZVOL_REBUILDING_IN_PROGRESS);
+
 		DBGCONN(conn, "Rebuild start command");
 		rc = uzfs_zvol_rebuild_dw_replica_start(conn, hdrp, payload,
-		    payload_size / sizeof (mgmt_ack_t));
+		    zinfo, payload_size / sizeof (mgmt_ack_t));
+
+		/* dropping refcount for uzfs_zinfo_lookup */
+		uzfs_zinfo_drop_refcnt(zinfo, B_FALSE);
 		break;
 
 	default:

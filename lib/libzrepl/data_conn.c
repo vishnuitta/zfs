@@ -34,7 +34,9 @@
 #include <zrepl_mgmt.h>
 #include "data_conn.h"
 
-#define	ZVOL_REBUILD_STEP_SIZE  (128 * 1024 * 1024) // 128MB
+#define	ZVOL_REBUILD_STEP_SIZE  (10 * 1024ULL * 1024ULL * 1024ULL) // 10GB
+
+uint64_t zvol_rebuild_step_size = ZVOL_REBUILD_STEP_SIZE;
 
 static kcondvar_t timer_cv;
 static kmutex_t timer_mtx;
@@ -119,12 +121,8 @@ uzfs_zvol_socket_write(int fd, char *buf, uint64_t nbytes)
 	char *p = buf;
 	while (nbytes) {
 		count = write(fd, (void *)p, nbytes);
-		if (count <= 0) {
-			if (count == 0) {
-				LOG_INFO("Connection closed");
-			} else {
-				LOG_ERRNO("Socket write error");
-			}
+		if (count < 0) {
+			LOG_ERRNO("Socket write error");
 			return (-1);
 		}
 		p += count;
@@ -303,6 +301,7 @@ uzfs_zvol_rebuild_dw_replica(void *arg)
 
 	if ((rc = connect(sfd, (struct sockaddr *)&replica_ip,
 	    sizeof (replica_ip))) != 0) {
+		LOG_ERRNO("connect failed");
 		perror("connect");
 		goto exit;
 	}
@@ -318,7 +317,7 @@ uzfs_zvol_rebuild_dw_replica(void *arg)
 
 	rc = uzfs_zvol_socket_write(sfd, (char *)&hdr, sizeof (hdr));
 	if (rc == -1) {
-		LOG_ERRNO("Socket write failed");
+		LOG_ERRNO("Socket hdr write failed");
 		goto exit;
 	}
 
@@ -361,7 +360,7 @@ next_step:
 		hdr.opcode = ZVOL_OPCODE_REBUILD_STEP;
 		hdr.checkpointed_io_seq = checkpointed_ionum;
 		hdr.offset = offset;
-		hdr.len = ZVOL_REBUILD_STEP_SIZE;
+		hdr.len = zvol_rebuild_step_size;
 		rc = uzfs_zvol_socket_write(sfd, (char *)&hdr, sizeof (hdr));
 		if (rc != 0) {
 			LOG_ERRNO("Socket write failed");
@@ -382,7 +381,7 @@ next_step:
 		}
 
 		if (hdr.opcode == ZVOL_OPCODE_REBUILD_STEP_DONE) {
-			offset += ZVOL_REBUILD_STEP_SIZE;
+			offset += zvol_rebuild_step_size;
 			LOG_DEBUG("ZVOL_OPCODE_REBUILD_STEP_DONE received");
 			goto next_step;
 		}
@@ -412,11 +411,15 @@ exit:
 	kmem_free(arg, sizeof (rebuild_thread_arg_t));
 	if (zio_cmd != NULL)
 		zio_cmd_free(&zio_cmd);
-	if (sfd != -1)
+	if (sfd != -1) {
+		shutdown(sfd, SHUT_RDWR);
 		close(sfd);
-
-	if (rc == -1)
+	}
+	if (rc == -1) {
 		uzfs_zvol_set_rebuild_status(zinfo->zv, ZVOL_REBUILDING_FAILED);
+		LOG_ERR("uzfs_zvol_rebuild_dw_replica thread exiting, rebuilding failed zvol: %s",
+		    zinfo->name);
+	}
 
 	LOG_DEBUG("uzfs_zvol_rebuild_dw_replica thread exiting, zvol: %s",
 	    zinfo->name);

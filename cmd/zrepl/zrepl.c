@@ -380,6 +380,8 @@ read_socket:
 			if (rc != 0) {
 				LOG_ERR("Rebuild scanning failed on zvol %s",
 				    zinfo->name);
+				/* TODOv: handle error differently? */
+				goto exit;
 			}
 			bzero(&hdr, sizeof (hdr));
 			hdr.status = ZVOL_OP_STATUS_OK;
@@ -414,8 +416,10 @@ exit:
 		LOG_DEBUG("uzfs_zvol_rebuild_scanner thread exiting");
 	}
 
-	if (fd != -1)
+	if (fd != -1) {
+		shutdown(fd, SHUT_RDWR);
 		close(fd);
+	}
 	zk_thread_exit();
 }
 
