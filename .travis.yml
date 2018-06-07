@@ -73,6 +73,7 @@ script:
         export FIO_SRCDIR=$PWD/../fio;
         travis_wait 5 sudo bash ./tests/cbtest/script/test_uzfs.sh -T all
         echo $?
+	sudo ps -auxwww
         sudo bash print_debug_info.sh
       else
         sudo /sbin/modprobe zfs;
