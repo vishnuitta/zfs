@@ -186,6 +186,8 @@ uzfs_submit_writes(zvol_info_t *zinfo, zvol_io_cmd_t *zio_cmd)
  * It execute read/write/sync command to uzfs.
  * It enqueue command to completion queue and
  * send signal to ack-sender thread.
+ * TODOv: update comments regarding handling of rebuild IOs,
+ * and not deleting zio_cmd for rebuild write IOs
  */
 void
 uzfs_zvol_worker(void *arg)
@@ -242,6 +244,9 @@ uzfs_zvol_worker(void *arg)
 		LOG_ERR("OP code %d failed", hdr->opcode);
 		hdr->status = ZVOL_OP_STATUS_FAILED;
 		hdr->len = 0;
+		/* This can have problem if multiple rebuilds are going on */
+		if (rebuild_cmd_req && (hdr->opcode == ZVOL_OPCODE_READ)) {
+			atomic_add_64(&zv->failed_rebuild_read_io_cnt, 1);
 	} else {
 		hdr->status = ZVOL_OP_STATUS_OK;
 	}

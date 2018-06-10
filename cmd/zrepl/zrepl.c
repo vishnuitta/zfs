@@ -312,13 +312,14 @@ uzfs_zvol_rebuild_scanner(void *arg)
 	zvol_info_t	*zinfo = NULL;
 	zvol_io_hdr_t	hdr;
 	int 		rc = 0;
-	zvol_rebuild_t  warg;
+	zvol_rebuild_t  *warg;
 	char 		*name;
 	blk_metadata_t	metadata;
 	uint64_t	rebuild_req_offset;
 	uint64_t	rebuild_req_len;
 	zvol_io_cmd_t	*zio_cmd;
 
+	warg = malloc(sizeof (zvol_rebuild_t));
 read_socket:
 	rc = uzfs_zvol_read_header(fd, &hdr);
 	if (rc != 0) {
@@ -361,8 +362,8 @@ read_socket:
 			kmem_free(name, hdr.len);
 			warg.zinfo = zinfo;
 			warg.fd = fd;
+			warg->failed_rebuild_read_io_count = 0;
 			goto read_socket;
-			break;
 
 		case ZVOL_OPCODE_REBUILD_STEP:
 
@@ -377,7 +378,7 @@ read_socket:
 
 			rc = uzfs_get_io_diff(zinfo->zv, &metadata,
 			    uzfs_zvol_rebuild_scanner_callback,
-			    rebuild_req_offset, rebuild_req_len, &warg);
+			    rebuild_req_offset, rebuild_req_len, warg);
 			if (rc != 0) {
 				LOG_ERR("Rebuild scanning failed on zvol %s",
 				    zinfo->name);
@@ -394,7 +395,6 @@ read_socket:
 			zio_cmd->zv = zinfo;
 			uzfs_zvol_worker(zio_cmd);
 			goto read_socket;
-			break;
 
 		case ZVOL_OPCODE_REBUILD_COMPLETE:
 			LOG_INFO("Rebuild process is over on zvol %s",

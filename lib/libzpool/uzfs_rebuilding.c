@@ -171,7 +171,7 @@ uzfs_get_io_diff(zvol_state_t *zv, blk_metadata_t *low,
 	buf = umem_alloc(metadata_read_chunk_size, KM_SLEEP);
 	len = metadata_read_chunk_size;
 
-	for (; offset < end && !ret; offset += len) {
+	for (; offset < end && !ret && (zv->failed_rebuild_read_io_cnt != 0); offset += len) {
 		read = 0;
 		len = metadata_read_chunk_size;
 
@@ -184,7 +184,7 @@ uzfs_get_io_diff(zvol_state_t *zv, blk_metadata_t *low,
 			break;
 
 		lun_offset = (offset / metadatasize) * zv->zv_metavolblocksize;
-		for (i = 0; i < len && !ret; i += sizeof (blk_metadata_t)) {
+		for (i = 0; i < len && !ret && (zv->failed_rebuild_read_io_cnt != 0); i += sizeof (blk_metadata_t)) {
 			if (!iszero((blk_metadata_t *)(buf+i)) &&
 			    (compare_blk_metadata((blk_metadata_t *)(buf + i),
 			    low) > 0)) {
@@ -231,7 +231,10 @@ uzfs_get_io_diff(zvol_state_t *zv, blk_metadata_t *low,
 			lun_offset += zv->zv_metavolblocksize;
 		}
 
-		if (diff_count) {
+		if (zv->failed_rebuild_read_io_cnt != 0)
+			ret = EIO;
+
+		if (!ret && diff_count) {
 			EXECUTE_DIFF_CALLBACK(last_lun_offset, diff_count, buf,
 			    last_index, arg, last_md, snap_zv, func, ret);
 		}
@@ -239,6 +242,8 @@ uzfs_get_io_diff(zvol_state_t *zv, blk_metadata_t *low,
 
 	uzfs_close_dataset(snap_zv);
 
+	if (zv->failed_rebuild_read_io_cnt != 0)
+		ret = EIO;
 	/*
 	 * TODO: if we failed to destroy snapshot here then
 	 * this should be handled separately from application.
