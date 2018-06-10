@@ -816,7 +816,8 @@ process_message(uzfs_mgmt_conn_t *conn)
 
 	case ZVOL_OPCODE_START_REBUILD:
 		/* iSCSI controller will send this msg to downgraded replica */
-		if (payload_size < sizeof (mgmt_ack_t)) {
+		if ((payload_size % sizeof (mgmt_ack_t)) != 0) {
+			LOG_ERR("rebuilding failed.. response is invalid");
 			rc = reply_nodata(conn, ZVOL_OP_STATUS_FAILED,
 			    hdrp->opcode, hdrp->io_seq);
 			break;
@@ -828,8 +829,12 @@ process_message(uzfs_mgmt_conn_t *conn)
 		    (zinfo->zv == NULL) ||
 		    (uzfs_zvol_get_rebuild_status(zinfo->zv) !=
 		    ZVOL_REBUILDING_INIT)) {
-			if (zinfo != NULL)
+			if (zinfo != NULL) {
+				LOG_ERR("rebuilding failed for %s..", zinfo->name);
 				uzfs_zinfo_drop_refcnt(zinfo, B_FALSE);
+			}
+			else
+				LOG_ERR("rebuilding failed..");
 			rc = reply_nodata(conn, ZVOL_OP_STATUS_FAILED,
 			    hdrp->opcode, hdrp->io_seq);
 			break;

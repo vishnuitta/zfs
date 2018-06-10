@@ -141,6 +141,7 @@ open_zvol(int fd, zvol_info_t **zinfopp)
 	if (uzfs_update_metadata_granularity(zv,
 	    open_data.tgt_block_size) != 0) {
 		(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
+		uzfs_rele_dataset(zv);
 		LOG_ERR("Failed to set granularity of metadata");
 		hdr.status = ZVOL_OP_STATUS_FAILED;
 		goto open_reply;

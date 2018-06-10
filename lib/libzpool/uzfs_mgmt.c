@@ -528,9 +528,8 @@ uzfs_zvol_destroy_cb(const char *ds_name, void *arg)
 	return (uzfs_zinfo_destroy(ds_name, arg));
 }
 
-/* disowns, closes dataset */
 void
-uzfs_close_dataset(zvol_state_t *zv)
+uzfs_rele_dataset(zvol_state_t *zv)
 {
 	if (zv->zv_zilog != NULL)
 		zil_close(zv->zv_zilog);
@@ -538,6 +537,13 @@ uzfs_close_dataset(zvol_state_t *zv)
 		dnode_rele(zv->zv_dn, zv);
 	if (zv->zv_objset != NULL)
 		dmu_objset_disown(zv->zv_objset, zv);
+}
+
+/* disowns, closes dataset */
+void
+uzfs_close_dataset(zvol_state_t *zv)
+{
+	uzfs_rele_dataset(zv);
 	zfs_rlock_destroy(&zv->zv_range_lock);
 	spa_close(zv->zv_spa, zv);
 	kmem_free(zv, sizeof (zvol_state_t));
