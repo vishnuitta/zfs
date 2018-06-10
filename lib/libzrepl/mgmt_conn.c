@@ -673,8 +673,19 @@ uzfs_zvol_rebuild_dw_replica_start(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp,
 			LOG_ERR("zvol %s not matching with zinfo %s",
 			    mack->dw_volname, zinfo->name);
 ret_error:
+			mutex_enter(&zinfo->zv->rebuild_mtx);
+
 			uzfs_zvol_set_rebuild_status(zinfo->zv,
 			    ZVOL_REBUILDING_FAILED);
+
+			(zinfo->zv->rebuild_info.rebuild_failed_cnt) += rebuild_op_cnt;
+			(zinfo->zv->rebuild_info.rebuild_done_cnt) += rebuild_op_cnt;
+
+			if (zinfo->zv->rebuild_info.rebuild_cnt ==
+			    zinfo->zv->rebuild_info.rebuild_done_cnt)
+				uzfs_zvol_set_rebuild_status(zinfo->zv, ZVOL_REBUILDING_INIT);
+
+			mutex_exit(&zinfo->zv->rebuild_mtx);
 			return (reply_nodata(conn,
 			    ZVOL_OP_STATUS_FAILED,
 			    hdrp->opcode, hdrp->io_seq));
@@ -824,6 +835,7 @@ process_message(uzfs_mgmt_conn_t *conn)
 			break;
 		}
 
+		memset(&zinfo->zv->rebuild_info, 0, sizeof (zvol_rebuild_info_t));
 		rebuild_op_cnt = (payload_size / sizeof (mgmt_ack_t));
 		/* Track # of rebuilds we are initializing on replica */
 		zinfo->zv->rebuild_info.rebuild_cnt = rebuild_op_cnt;

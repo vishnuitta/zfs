@@ -250,7 +250,6 @@ uzfs_zvol_worker(void *arg)
 	 * We are not sending ACK for writes meant for rebuild
 	 */
 	if (rebuild_cmd_req && (hdr->opcode == ZVOL_OPCODE_WRITE)) {
-		zio_cmd_free(&zio_cmd);
 		goto drop_refcount;
 	}
 
@@ -316,14 +315,14 @@ uzfs_zvol_rebuild_dw_replica(void *arg)
 	hdr.len = strlen(rebuild_args->zvol_name) + 1;
 
 	rc = uzfs_zvol_socket_write(sfd, (char *)&hdr, sizeof (hdr));
-	if (rc == -1) {
+	if (rc != 0) {
 		LOG_ERRNO("Socket hdr write failed");
 		goto exit;
 	}
 
 	rc = uzfs_zvol_socket_write(sfd, (void *)rebuild_args->zvol_name,
 	    hdr.len);
-	if (rc == -1) {
+	if (rc != 0) {
 		LOG_ERRNO("Socket write failed");
 		goto exit;
 	}
@@ -331,6 +330,8 @@ uzfs_zvol_rebuild_dw_replica(void *arg)
 next_step:
 
 	if (ZVOL_IS_REBUILDING_FAILED(zinfo->zv)) {
+		LOG_ERR("rebuilding failed.. for %s..", zinfo->name);
+		rc = -1;
 		goto exit;
 	}
 
@@ -342,15 +343,7 @@ next_step:
 			goto exit;
 		}
 
-		atomic_inc_16(&zinfo->zv->rebuild_info.rebuild_done_cnt);
-		if (zinfo->zv->rebuild_info.rebuild_cnt ==
-		    zinfo->zv->rebuild_info.rebuild_done_cnt) {
-			/* Mark replica healthy now */
-			uzfs_zvol_set_rebuild_status(zinfo->zv,
-			    ZVOL_REBUILDING_DONE);
-			uzfs_zvol_set_status(zinfo->zv, ZVOL_STATUS_HEALTHY);
-			uzfs_update_ionum_interval(zinfo, 0);
-		}
+		rc = 0;
 		LOG_INFO("Rebuilding zvol %s completed", zinfo->name);
 		goto exit;
 	} else {
@@ -371,12 +364,20 @@ next_step:
 	while (1) {
 
 		if (ZVOL_IS_REBUILDING_FAILED(zinfo->zv)) {
+			LOG_ERR("rebuilding already failed.. for %s..", zinfo->name);
+			rc = -1;
 			goto exit;
 		}
 
 		rc = uzfs_zvol_socket_read(sfd, (char *)&hdr, sizeof (hdr));
 		if (rc != 0) {
 			LOG_ERRNO("Socket read failed");
+			goto exit;
+		}
+
+		if (hdr.status != ZVOL_OP_STATUS_OK) {
+			LOG_ERR("received err in rebuild.. for %s..", zinfo->name);
+			rc = -1;
 			goto exit;
 		}
 
@@ -404,10 +405,37 @@ next_step:
 		uzfs_zinfo_take_refcnt(zinfo, B_FALSE);
 		zio_cmd->zv = zinfo;
 		uzfs_zvol_worker(zio_cmd);
-		zio_cmd = NULL;
+		if (zio_cmd->hdr.status != ZVOL_OP_STATUS_OK) {
+			LOG_ERR("rebuild IO failed.. for %s..", zinfo->name);
+			rc = -1;
+			goto exit;
+		}
+		zio_cmd_free(&zio_cmd);
 	}
 
 exit:
+	mutex_enter(&zinfo->zv->rebuild_mtx);
+	if (rc != 0) {
+		uzfs_zvol_set_rebuild_status(zinfo->zv, ZVOL_REBUILDING_FAILED);
+		(zinfo->zv->rebuild_info.rebuild_failed_cnt) += 1;
+		LOG_ERR("uzfs_zvol_rebuild_dw_replica thread exiting, rebuilding failed zvol: %s",
+		    zinfo->name);
+	}
+	(zinfo->zv->rebuild_info.rebuild_done_cnt) += 1;
+	if (zinfo->zv->rebuild_info.rebuild_cnt ==
+	    zinfo->zv->rebuild_info.rebuild_done_cnt) {
+		if (zinfo->zv->rebuild_info.rebuild_failed_cnt != 0)
+			uzfs_zvol_set_rebuild_status(zinfo->zv, ZVOL_REBUILDING_INIT);
+		else {
+			/* Mark replica healthy now */
+			uzfs_zvol_set_rebuild_status(zinfo->zv,
+			    ZVOL_REBUILDING_DONE);
+			uzfs_zvol_set_status(zinfo->zv, ZVOL_STATUS_HEALTHY);
+			uzfs_update_ionum_interval(zinfo, 0);
+		}
+	}
+	mutex_exit(&zinfo->zv->rebuild_mtx);
+
 	kmem_free(arg, sizeof (rebuild_thread_arg_t));
 	if (zio_cmd != NULL)
 		zio_cmd_free(&zio_cmd);
@@ -415,14 +443,6 @@ exit:
 		shutdown(sfd, SHUT_RDWR);
 		close(sfd);
 	}
-	if (rc == -1) {
-		uzfs_zvol_set_rebuild_status(zinfo->zv, ZVOL_REBUILDING_FAILED);
-		LOG_ERR("uzfs_zvol_rebuild_dw_replica thread exiting, rebuilding failed zvol: %s",
-		    zinfo->name);
-	}
-
-	LOG_DEBUG("uzfs_zvol_rebuild_dw_replica thread exiting, zvol: %s",
-	    zinfo->name);
 	/* Parent thread have taken refcount, drop it now */
 	uzfs_zinfo_drop_refcnt(zinfo, B_FALSE);
 
