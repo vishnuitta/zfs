@@ -423,7 +423,7 @@ next_step:
 exit:
 	mutex_enter(&zinfo->zv->rebuild_mtx);
 	if (rc != 0) {
-		uzfs_zvol_set_rebuild_status(zinfo->zv, ZVOL_REBUILDING_FAILED);
+		uzfs_zvol_set_rebuild_status(zinfo->zv, ZVOL_REBUILDING_ERRORED);
 		(zinfo->zv->rebuild_info.rebuild_failed_cnt) += 1;
 		LOG_ERR("uzfs_zvol_rebuild_dw_replica thread exiting, rebuilding failed zvol: %s",
 		    zinfo->name);
@@ -432,7 +432,7 @@ exit:
 	if (zinfo->zv->rebuild_info.rebuild_cnt ==
 	    zinfo->zv->rebuild_info.rebuild_done_cnt) {
 		if (zinfo->zv->rebuild_info.rebuild_failed_cnt != 0)
-			uzfs_zvol_set_rebuild_status(zinfo->zv, ZVOL_REBUILDING_INIT);
+			uzfs_zvol_set_rebuild_status(zinfo->zv, ZVOL_REBUILDING_FAILED);
 		else {
 			/* Mark replica healthy now */
 			uzfs_zvol_set_rebuild_status(zinfo->zv,

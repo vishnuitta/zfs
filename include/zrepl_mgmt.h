@@ -119,6 +119,7 @@ typedef struct zvol_info_s {
 	int 		write_req_received_cnt;
 	int 		read_req_ack_cnt;
 	int 		write_req_ack_cnt;
+	void		*zio_cmd_in_ack;
 } zvol_info_t;
 
 typedef struct thread_args_s {

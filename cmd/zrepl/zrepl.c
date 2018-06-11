@@ -305,9 +305,10 @@ uzfs_zvol_rebuild_scanner_callback(off_t offset, size_t len,
 	return (0);
 }
 
-void
+static void
 remove_pending_cmds_to_ack(int fd, zvol_info_t *zinfo)
 {
+	zvol_io_cmd_t *zio_cmd, *zio_cmd_next;
 	(void) pthread_mutex_lock(&zinfo->zinfo_mutex);
 	zio_cmd = STAILQ_FIRST(&zinfo->complete_queue);
 	while (zio_cmd != NULL) {
@@ -316,7 +317,7 @@ remove_pending_cmds_to_ack(int fd, zvol_info_t *zinfo)
 			STAILQ_REMOVE(&zinfo->complete_queue, zio_cmd, zvol_io_cmd_s, cmd_link);
 		zio_cmd = zio_cmd_next;
 	}
-	while ((zinfo->zio_cmd_in_ack != NULL) && (zinfo->zio_cmd_in_ack->conn == fd)) {
+	while ((zinfo->zio_cmd_in_ack != NULL) && (((zvol_io_cmd_t *)(zinfo->zio_cmd_in_ack))->conn == fd)) {
 		(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
 		sleep(1);
 		(void) pthread_mutex_lock(&zinfo->zinfo_mutex);
@@ -336,14 +337,13 @@ uzfs_zvol_rebuild_scanner(void *arg)
 	zvol_info_t	*zinfo = NULL;
 	zvol_io_hdr_t	hdr;
 	int 		rc = 0;
-	zvol_rebuild_t  *warg;
+	zvol_rebuild_t  warg;
 	char 		*name;
 	blk_metadata_t	metadata;
 	uint64_t	rebuild_req_offset;
 	uint64_t	rebuild_req_len;
 	zvol_io_cmd_t	*zio_cmd;
 
-	warg = malloc(sizeof (zvol_rebuild_t));
 read_socket:
 	rc = uzfs_zvol_read_header(fd, &hdr);
 	if (rc != 0) {
@@ -388,7 +388,6 @@ read_socket:
 			kmem_free(name, hdr.len);
 			warg.zinfo = zinfo;
 			warg.fd = fd;
-			warg->failed_rebuild_read_io_count = 0;
 			goto read_socket;
 
 		case ZVOL_OPCODE_REBUILD_STEP:
@@ -404,7 +403,7 @@ read_socket:
 
 			rc = uzfs_get_io_diff(zinfo->zv, &metadata,
 			    uzfs_zvol_rebuild_scanner_callback,
-			    rebuild_req_offset, rebuild_req_len, warg);
+			    rebuild_req_offset, rebuild_req_len, &warg);
 			if (rc != 0) {
 				LOG_ERR("Rebuild scanning failed on zvol %s",
 				    zinfo->name);
@@ -442,7 +441,6 @@ exit:
 	} else {
 		LOG_DEBUG("uzfs_zvol_rebuild_scanner thread exiting");
 	}
-
 
 	shutdown(fd, SHUT_RDWR);
 	close(fd);
@@ -739,6 +737,7 @@ uzfs_zvol_io_ack_sender(void *arg)
 		    (char *)&zio_cmd->hdr, sizeof (zio_cmd->hdr));
 		if (rc == -1) {
 			LOG_ERRNO("socket write err");
+			zinfo->zio_cmd_in_ack = NULL;
 			if (zio_cmd->conn == fd) {
 				zio_cmd_free(&zio_cmd);
 				(void) pthread_mutex_lock(&zinfo->zinfo_mutex);
@@ -753,8 +752,10 @@ uzfs_zvol_io_ack_sender(void *arg)
 				/* Send data read from disk */
 				rc = uzfs_send_reads(zio_cmd->conn, zio_cmd);
 				if (rc == -1) {
+					zinfo->zio_cmd_in_ack = NULL;
 					LOG_ERRNO("socket write err");
 					if (zio_cmd->conn == fd) {
+						zio_cmd_free(&zio_cmd);
 						(void) pthread_mutex_lock(
 						    &zinfo->zinfo_mutex);
 						goto exit;
@@ -765,6 +766,7 @@ uzfs_zvol_io_ack_sender(void *arg)
 		} else {
 			zinfo->write_req_ack_cnt++;
 		}
+		zinfo->zio_cmd_in_ack = NULL;
 		zio_cmd_free(&zio_cmd);
 	}
 exit:

@@ -525,6 +525,13 @@ uzfs_zvol_rebuild_status(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp,
 	hdr.len = sizeof (status_ack);
 	hdr.status = ZVOL_OP_STATUS_OK;
 
+	mutex_enter(&zinfo->zv->rebuild_mtx);
+	if (uzfs_zvol_get_rebuild_status(zinfo->zv) == ZVOL_REBUILDING_FAILED) {
+		memset(&zinfo->zv->rebuild_info, 0, sizeof (zvol_rebuild_info_t));
+		uzfs_zvol_set_rebuild_status(zinfo->zv,
+		    ZVOL_REBUILDING_INIT);
+	}
+	mutex_exit(&zinfo->zv->rebuild_mtx);
 	return (reply_data(conn, &hdr, &status_ack, sizeof (status_ack)));
 }
 
@@ -663,7 +670,6 @@ uzfs_zvol_rebuild_dw_replica_start(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp,
 	int 			io_sfd = -1;
 	rebuild_thread_arg_t	*thrd_arg;
 	kthread_t		*thrd_info;
-	zvol_info_t		*zinfo = NULL;
 
 	for (; rebuild_op_cnt > 0; rebuild_op_cnt--, mack++) {
 		LOG_INFO("zvol %s at %s:%u helping in rebuild",
@@ -676,14 +682,14 @@ ret_error:
 			mutex_enter(&zinfo->zv->rebuild_mtx);
 
 			uzfs_zvol_set_rebuild_status(zinfo->zv,
-			    ZVOL_REBUILDING_FAILED);
+			    ZVOL_REBUILDING_ERRORED);
 
 			(zinfo->zv->rebuild_info.rebuild_failed_cnt) += rebuild_op_cnt;
 			(zinfo->zv->rebuild_info.rebuild_done_cnt) += rebuild_op_cnt;
 
 			if (zinfo->zv->rebuild_info.rebuild_cnt ==
 			    zinfo->zv->rebuild_info.rebuild_done_cnt)
-				uzfs_zvol_set_rebuild_status(zinfo->zv, ZVOL_REBUILDING_INIT);
+				uzfs_zvol_set_rebuild_status(zinfo->zv, ZVOL_REBUILDING_FAILED);
 
 			mutex_exit(&zinfo->zv->rebuild_mtx);
 			return (reply_nodata(conn,
@@ -822,7 +828,7 @@ process_message(uzfs_mgmt_conn_t *conn)
 			    hdrp->opcode, hdrp->io_seq);
 			break;
 		}
-		mack = (mgmt_ack_t *) payload;
+		mgmt_ack_t *mack = (mgmt_ack_t *) payload;
 		zinfo = uzfs_zinfo_lookup(mack->dw_volname);
 		/* TODOv: do we need lock to get rebuild status? */
 		if ((zinfo == NULL) || (zinfo->mgmt_conn != conn) ||
@@ -841,7 +847,7 @@ process_message(uzfs_mgmt_conn_t *conn)
 		}
 
 		memset(&zinfo->zv->rebuild_info, 0, sizeof (zvol_rebuild_info_t));
-		rebuild_op_cnt = (payload_size / sizeof (mgmt_ack_t));
+		int rebuild_op_cnt = (payload_size / sizeof (mgmt_ack_t));
 		/* Track # of rebuilds we are initializing on replica */
 		zinfo->zv->rebuild_info.rebuild_cnt = rebuild_op_cnt;
 
@@ -869,7 +875,7 @@ process_message(uzfs_mgmt_conn_t *conn)
 
 		DBGCONN(conn, "Rebuild start command");
 		rc = uzfs_zvol_rebuild_dw_replica_start(conn, hdrp, payload,
-		    zinfo, payload_size / sizeof (mgmt_ack_t));
+		    zinfo, rebuild_op_cnt);
 
 		/* dropping refcount for uzfs_zinfo_lookup */
 		uzfs_zinfo_drop_refcnt(zinfo, B_FALSE);

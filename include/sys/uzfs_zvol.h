@@ -54,6 +54,7 @@ typedef struct zvol_rebuild_info {
 	uint64_t rebuild_bytes;
 	uint16_t rebuild_cnt;
 	uint16_t rebuild_done_cnt;
+	uint16_t rebuild_failed_cnt;
 } zvol_rebuild_info_t;
 
 /*
@@ -78,6 +79,7 @@ struct zvol_state {
 	 */
 	uint64_t zv_metavolblocksize;
 	zvol_status_t zv_status;		/* zvol status */
+	kmutex_t rebuild_mtx;
 	zvol_rebuild_info_t rebuild_info;
 };
 
