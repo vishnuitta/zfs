@@ -244,9 +244,11 @@ uzfs_zvol_worker(void *arg)
 		LOG_ERR("OP code %d failed", hdr->opcode);
 		hdr->status = ZVOL_OP_STATUS_FAILED;
 		hdr->len = 0;
+#if 0
 		/* This can have problem if multiple rebuilds are going on */
-		if (rebuild_cmd_req && (hdr->opcode == ZVOL_OPCODE_READ)) {
+		if (rebuild_cmd_req && (hdr->opcode == ZVOL_OPCODE_READ))
 			atomic_add_64(&zv->failed_rebuild_read_io_cnt, 1);
+#endif
 	} else {
 		hdr->status = ZVOL_OP_STATUS_OK;
 	}
