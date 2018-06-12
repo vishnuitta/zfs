@@ -1624,3 +1624,75 @@ TEST(ZvolCloneTest, CloneZvol) {
 
 	graceful_close(control_fd);
 }
+
+/*
+ * Due to ASSERT_* macros this function must be void and return value in
+ * parameter.
+ */
+void
+get_used(int control_fd, std::string zvolname, uint64_t *val)
+{
+	zvol_io_hdr_t hdr_out, hdr_in;
+	zvol_op_stat_t stat;
+	int rc;
+
+	hdr_out.version = REPLICA_VERSION;
+	hdr_out.opcode = ZVOL_OPCODE_STATS;
+	hdr_out.status = ZVOL_OP_STATUS_OK;
+	hdr_out.io_seq = 1;
+	hdr_out.offset = 0;
+	hdr_out.len = zvolname.length() + 1;
+	rc = write(control_fd, &hdr_out, sizeof (hdr_out));
+	ASSERT_EQ(rc, sizeof (hdr_out));
+	rc = write(control_fd, zvolname.c_str(), hdr_out.len);
+	ASSERT_EQ(rc, hdr_out.len);
+
+	rc = read(control_fd, &hdr_in, sizeof (hdr_in));
+	ASSERT_EQ(rc, sizeof (hdr_in));
+	EXPECT_EQ(hdr_in.status, ZVOL_OP_STATUS_OK);
+	ASSERT_EQ(hdr_in.len, sizeof (stat));
+	rc = read(control_fd, &stat, sizeof (stat));
+	ASSERT_EQ(rc, sizeof (stat));
+	EXPECT_STREQ(stat.label, "used");
+	*val = stat.value;
+}
+
+/*
+ * Test zvol stats command
+ */
+TEST(ZvolStatsTest, StatsZvol) {
+	Zrepl zrepl;
+	Target target;
+	int rc, control_fd, data_fd;
+	int ioseq = 0;
+	std::string host;
+	uint16_t port;
+	uint64_t val1, val2;
+	TestPool pool("statspool");
+	std::string zvolname = pool.getZvolName("vol");
+
+	zrepl.start();
+	pool.create();
+	pool.createZvol("vol", "-o io.openebs:targetip=127.0.0.1");
+
+	rc = target.listen();
+	ASSERT_GE(rc, 0);
+	control_fd = target.accept(-1);
+	ASSERT_GE(control_fd, 0);
+	do_handshake(zvolname, host, port, NULL, control_fd,
+	    ZVOL_OP_STATUS_OK);
+
+	// get "used" before
+	get_used(control_fd, zvolname, &val1);
+
+	do_data_connection(data_fd, host, port, zvolname, 4096);
+	for (int i = 0; i < 100; i++) {
+		write_data_and_verify_resp(data_fd, ioseq, 4096 * i, i + 1);
+	}
+	graceful_close(data_fd);
+
+	// get "used" after
+	get_used(control_fd, zvolname, &val2);
+	EXPECT_GT(val2, val1);
+	graceful_close(control_fd);
+}
