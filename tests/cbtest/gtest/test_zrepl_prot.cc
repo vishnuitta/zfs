@@ -198,7 +198,7 @@ static void write_data(int data_fd, int &ioseq, void *buf, size_t offset,
  * left to the caller.
  */
 static void read_data_start(int data_fd, int &ioseq, size_t offset, int len,
-    zvol_io_hdr_t *hdr_inp, bool rebuild_flag=false) {
+    zvol_io_hdr_t *hdr_inp, int flags = 0) {
 	zvol_io_hdr_t hdr_out;
 	int rc;
 
@@ -208,7 +208,7 @@ static void read_data_start(int data_fd, int &ioseq, size_t offset, int len,
 	hdr_out.io_seq = ++ioseq;
 	hdr_out.offset = offset;
 	hdr_out.len = len;
-	hdr_out.flags = (rebuild_flag) ? ZVOL_OP_FLAG_REBUILD : 0;
+	hdr_out.flags = flags;
 
 	rc = write(data_fd, &hdr_out, sizeof (hdr_out));
 	ASSERT_EQ(rc, sizeof (hdr_out));
@@ -974,8 +974,8 @@ TEST_F(ZreplDataTest, WriteInvalidLength) {
 }
 
 /*
- * Metadata ionum should be returned only when zvol is degraded (rebuild
- * not finished) or when explicitly requested by ZVOL_OP_FLAG_REBUILD flag.
+ * Metadata ionum should be returned when zvol is degraded (rebuild
+ * not finished) or when requested by ZVOL_OP_FLAG_REBUILD flag.
  */
 TEST_F(ZreplDataTest, RebuildFlag) {
 	zvol_io_hdr_t hdr_in, hdr_out;
@@ -1000,7 +1000,7 @@ TEST_F(ZreplDataTest, RebuildFlag) {
 	get_zvol_status(m_zvol_name1, m_ioseq1, m_control_fd1, ZVOL_STATUS_HEALTHY, ZVOL_REBUILDING_DONE);
 
 	/* read the block without rebuild flag */
-	read_data_start(m_data_fd1, m_ioseq1, 0, sizeof (buf), &hdr_in, false);
+	read_data_start(m_data_fd1, m_ioseq1, 0, sizeof (buf), &hdr_in, 0);
 	ASSERT_EQ(hdr_in.status, ZVOL_OP_STATUS_OK);
 	ASSERT_EQ(hdr_in.len, sizeof (read_hdr) + sizeof (buf));
 	rc = read(m_data_fd1, &read_hdr, sizeof (read_hdr));
@@ -1013,7 +1013,50 @@ TEST_F(ZreplDataTest, RebuildFlag) {
 	ASSERT_EQ(rc, sizeof (buf));
 
 	/* read the block with rebuild flag */
-	read_data_start(m_data_fd1, m_ioseq1, 0, sizeof (buf), &hdr_in, true);
+	read_data_start(m_data_fd1, m_ioseq1, 0, sizeof (buf), &hdr_in, ZVOL_OP_FLAG_REBUILD);
+	ASSERT_EQ(hdr_in.status, ZVOL_OP_STATUS_OK);
+	ASSERT_EQ(hdr_in.len, sizeof (read_hdr) + sizeof (buf));
+	rc = read(m_data_fd1, &read_hdr, sizeof (read_hdr));
+	ASSERT_ERRNO("read", rc >= 0);
+	ASSERT_EQ(rc, sizeof (read_hdr));
+	ASSERT_EQ(read_hdr.io_num, 654);
+	ASSERT_EQ(read_hdr.len, sizeof (buf));
+	rc = read(m_data_fd1, buf, sizeof (buf));
+	ASSERT_ERRNO("read", rc >= 0);
+	ASSERT_EQ(rc, sizeof (buf));
+}
+
+/*
+ * Metadata ionum should be returned when requested by
+ * ZVOL_OP_FLAG_READ_METADATA flag.
+ */
+TEST_F(ZreplDataTest, ReadMetaDataFlag) {
+	zvol_io_hdr_t hdr_in, hdr_out;
+	struct zvol_io_rw_hdr read_hdr;
+	struct zvol_io_rw_hdr write_hdr;
+	struct zrepl_status_ack status;
+	struct mgmt_ack mgmt_ack;
+	char buf[4096];
+	int rc;
+
+	/* write a data block with known ionum */
+	write_data_and_verify_resp(m_data_fd1, m_ioseq1, 0, 654);
+
+	/* read the block without ZVOL_OP_FLAG_READ_METADATA flag */
+	read_data_start(m_data_fd1, m_ioseq1, 0, sizeof (buf), &hdr_in, 0);
+	ASSERT_EQ(hdr_in.status, ZVOL_OP_STATUS_OK);
+	ASSERT_EQ(hdr_in.len, sizeof (read_hdr) + sizeof (buf));
+	rc = read(m_data_fd1, &read_hdr, sizeof (read_hdr));
+	ASSERT_ERRNO("read", rc >= 0);
+	ASSERT_EQ(rc, sizeof (read_hdr));
+	ASSERT_EQ(read_hdr.io_num, 0);
+	ASSERT_EQ(read_hdr.len, sizeof (buf));
+	rc = read(m_data_fd1, buf, sizeof (buf));
+	ASSERT_ERRNO("read", rc >= 0);
+	ASSERT_EQ(rc, sizeof (buf));
+
+	/* read the block with ZVOL_OP_FLAG_READ_METADATA flag */
+	read_data_start(m_data_fd1, m_ioseq1, 0, sizeof (buf), &hdr_in, ZVOL_OP_FLAG_READ_METADATA);
 	ASSERT_EQ(hdr_in.status, ZVOL_OP_STATUS_OK);
 	ASSERT_EQ(hdr_in.len, sizeof (read_hdr) + sizeof (buf));
 	rc = read(m_data_fd1, &read_hdr, sizeof (read_hdr));
