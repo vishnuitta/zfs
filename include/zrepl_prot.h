@@ -72,6 +72,7 @@ enum zvol_op_code {
 	ZVOL_OPCODE_SNAP_CREATE,
 	ZVOL_OPCODE_SNAP_DESTROY,
 	ZVOL_OPCODE_RESIZE,
+	ZVOL_OPCODE_STATS,
 } __attribute__((packed));
 
 typedef enum zvol_op_code zvol_op_code_t;
@@ -167,6 +168,13 @@ struct zvol_op_resize_data {
 } __attribute__((packed));
 
 typedef struct zvol_op_resize_data zvol_op_resize_data_t;
+
+struct zvol_op_stat {
+	char		label[24];	/* name of the stat */
+	uint64_t	value;		/* value of the stat */
+} __attribute__((packed));
+
+typedef struct zvol_op_stat zvol_op_stat_t;
 
 /*
  * Describes chunk of data following this header.
