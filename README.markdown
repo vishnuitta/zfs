@@ -77,11 +77,15 @@ A docker image with zrepl *for testing purpose* can be built as follows.
 The privileged parameter when starting container is to enable process
 tracing inside the container. The last command gets you a shell inside
 the container which can be used for debugging, running zfs & zpool commands,
-etc.
+etc. Explanation of the two mounted volumes follows:
+
+ * /dev: All devices from host are visible inside the container so we can create pools on arbitrary block device.
+ * /tmp: This is a directory where core is dumped in case of a fatal failure. We make it persistent in order to preserve core dumps for later debugging.
 
 ```bash
 sudo docker build -t my-cstor .
-sudo docker run --privileged -it my-cstor
+sudo mkdir /tmp/cstor
+sudo docker run --privileged -it -v /dev:/dev --mount source=cstortmp,target=/tmp my-cstor
 sudo docker exec -it <container-id> /bin/bash
 ```
 
