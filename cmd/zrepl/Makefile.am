@@ -3,6 +3,8 @@ include $(top_srcdir)/config/Rules.am
 # -Wnoformat-truncation to get rid of compiler warning for unchecked
 #  truncating snprintfs on gcc 7.1.1.
 AM_CFLAGS += $(FRAME_LARGER_THAN) $(NO_FORMAT_TRUNCATION)
+# Dynamic symbol table is needed for printing symbol names in stack trace
+AM_LDFLAGS = -rdynamic
 
 DEFAULT_INCLUDES += \
 	-I$(top_srcdir)/include \

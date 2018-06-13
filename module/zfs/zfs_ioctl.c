@@ -3469,7 +3469,8 @@ zfs_ioc_clone(const char *fsname, nvlist_t *innvl, nvlist_t *outnvl)
 		if (error != 0)
 			(void) dsl_destroy_head(fsname);
 #if !defined(_KERNEL)
-		(void) uzfs_zvol_create_cb(fsname, nvprops);
+		else
+			(void) uzfs_zvol_create_cb(fsname, nvprops);
 #endif
 	}
 	return (error);
