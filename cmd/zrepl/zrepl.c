@@ -305,6 +305,10 @@ uzfs_zvol_rebuild_scanner_callback(off_t offset, size_t len,
 	return (0);
 }
 
+/*
+ * This function finds cmds that need to be acked to its sender on a given fd.
+ * Removes those commands from that list.
+ */
 static void
 remove_pending_cmds_to_ack(int fd, zvol_info_t *zinfo)
 {
@@ -314,10 +318,12 @@ remove_pending_cmds_to_ack(int fd, zvol_info_t *zinfo)
 	while (zio_cmd != NULL) {
 		zio_cmd_next = STAILQ_NEXT(zio_cmd, cmd_link);
 		if (zio_cmd->conn == fd)
-			STAILQ_REMOVE(&zinfo->complete_queue, zio_cmd, zvol_io_cmd_s, cmd_link);
+			STAILQ_REMOVE(&zinfo->complete_queue, zio_cmd,
+			    zvol_io_cmd_s, cmd_link);
 		zio_cmd = zio_cmd_next;
 	}
-	while ((zinfo->zio_cmd_in_ack != NULL) && (((zvol_io_cmd_t *)(zinfo->zio_cmd_in_ack))->conn == fd)) {
+	while ((zinfo->zio_cmd_in_ack != NULL) &&
+	    (((zvol_io_cmd_t *)(zinfo->zio_cmd_in_ack))->conn == fd)) {
 		(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
 		sleep(1);
 		(void) pthread_mutex_lock(&zinfo->zinfo_mutex);
@@ -405,7 +411,7 @@ read_socket:
 			    uzfs_zvol_rebuild_scanner_callback,
 			    rebuild_req_offset, rebuild_req_len, &warg);
 			if (rc != 0) {
-				LOG_ERR("Rebuild scanning failed on zvol %s",
+				LOG_ERR("Rebuild scanning failed on zvol %s ",
 				    "err(%d)", zinfo->name, rc);
 				goto exit;
 			}

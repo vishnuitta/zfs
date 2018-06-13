@@ -198,7 +198,7 @@ uzfs_zinfo_lookup(const char *name)
 	int namelen = ((name) ? strlen(name) : 0);
 
 	if (name == NULL)
-		return NULL;
+		return (NULL);
 
 	(void) mutex_enter(&zvol_list_mutex);
 	SLIST_FOREACH(zv, &zvol_list, zinfo_next) {

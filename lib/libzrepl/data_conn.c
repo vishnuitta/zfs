@@ -186,8 +186,10 @@ uzfs_submit_writes(zvol_info_t *zinfo, zvol_io_cmd_t *zio_cmd)
  * It execute read/write/sync command to uzfs.
  * It enqueue command to completion queue and
  * send signal to ack-sender thread.
- * TODOv: update comments regarding handling of rebuild IOs,
- * and not deleting zio_cmd for rebuild write IOs
+ *
+ * Write commands that are for rebuild will not
+ * be enqueued. Also, commands memory is
+ * maintained by its caller.
  */
 void
 uzfs_zvol_worker(void *arg)
@@ -248,11 +250,6 @@ uzfs_zvol_worker(void *arg)
 		LOG_ERR("OP code %d failed", hdr->opcode);
 		hdr->status = ZVOL_OP_STATUS_FAILED;
 		hdr->len = 0;
-#if 0
-		/* This can have problem if multiple rebuilds are going on */
-		if (rebuild_cmd_req && (hdr->opcode == ZVOL_OPCODE_READ))
-			atomic_add_64(&zv->failed_rebuild_read_io_cnt, 1);
-#endif
 	} else {
 		hdr->status = ZVOL_OP_STATUS_OK;
 	}
@@ -379,7 +376,8 @@ next_step:
 	while (1) {
 
 		if (ZVOL_IS_REBUILDING_FAILED(zinfo->zv)) {
-			LOG_ERR("rebuilding already failed.. for %s..", zinfo->name);
+			LOG_ERR("rebuilding already failed.. for %s..",
+			    zinfo->name);
 			rc = -1;
 			goto exit;
 		}
@@ -391,7 +389,8 @@ next_step:
 		}
 
 		if (hdr.status != ZVOL_OP_STATUS_OK) {
-			LOG_ERR("received err in rebuild.. for %s..", zinfo->name);
+			LOG_ERR("received err in rebuild.. for %s..",
+			    zinfo->name);
 			rc = -1;
 			goto exit;
 		}
@@ -431,16 +430,18 @@ next_step:
 exit:
 	mutex_enter(&zinfo->zv->rebuild_mtx);
 	if (rc != 0) {
-		uzfs_zvol_set_rebuild_status(zinfo->zv, ZVOL_REBUILDING_ERRORED);
+		uzfs_zvol_set_rebuild_status(zinfo->zv,
+		    ZVOL_REBUILDING_ERRORED);
 		(zinfo->zv->rebuild_info.rebuild_failed_cnt) += 1;
-		LOG_ERR("uzfs_zvol_rebuild_dw_replica thread exiting, rebuilding failed zvol: %s",
-		    zinfo->name);
+		LOG_ERR("uzfs_zvol_rebuild_dw_replica thread exiting, "
+		    "rebuilding failed zvol: %s", zinfo->name);
 	}
 	(zinfo->zv->rebuild_info.rebuild_done_cnt) += 1;
 	if (zinfo->zv->rebuild_info.rebuild_cnt ==
 	    zinfo->zv->rebuild_info.rebuild_done_cnt) {
 		if (zinfo->zv->rebuild_info.rebuild_failed_cnt != 0)
-			uzfs_zvol_set_rebuild_status(zinfo->zv, ZVOL_REBUILDING_FAILED);
+			uzfs_zvol_set_rebuild_status(zinfo->zv,
+			    ZVOL_REBUILDING_FAILED);
 		else {
 			/* Mark replica healthy now */
 			uzfs_zvol_set_rebuild_status(zinfo->zv,
