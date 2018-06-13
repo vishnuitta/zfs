@@ -39,7 +39,6 @@
 #include <netinet/tcp.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-#include <algorithm>
 
 #include <zrepl_prot.h>
 #include "gtest_utils.h"
@@ -199,7 +198,7 @@ static void write_data(int data_fd, int &ioseq, void *buf, size_t offset,
  * left to the caller.
  */
 static void read_data_start(int data_fd, int &ioseq, size_t offset, int len,
-    zvol_io_hdr_t *hdr_inp, bool rebuild_flag=false) {
+    zvol_io_hdr_t *hdr_inp, int flags = 0) {
 	zvol_io_hdr_t hdr_out;
 	int rc;
 
@@ -209,7 +208,7 @@ static void read_data_start(int data_fd, int &ioseq, size_t offset, int len,
 	hdr_out.io_seq = ++ioseq;
 	hdr_out.offset = offset;
 	hdr_out.len = len;
-	hdr_out.flags = (rebuild_flag) ? ZVOL_OP_FLAG_REBUILD : 0;
+	hdr_out.flags = flags;
 
 	rc = write(data_fd, &hdr_out, sizeof (hdr_out));
 	ASSERT_EQ(rc, sizeof (hdr_out));
@@ -420,13 +419,7 @@ static void graceful_close(int sockfd)
 
 static std::string getPoolState(std::string pname)
 {
-	std::string s;
-
-	s = execCmd("zpool", std::string("list -Ho health ") + pname);
-	// Trim white space at the end of string
-	s.erase(std::find_if(s.rbegin(), s.rend(),
-	    std::not1(std::ptr_fun<int, int>(std::isspace))).base(), s.end());
-	return (s);
+	return (execCmd("zpool", std::string("list -Ho health ") + pname));
 }
 
 /*
@@ -981,8 +974,8 @@ TEST_F(ZreplDataTest, WriteInvalidLength) {
 }
 
 /*
- * Metadata ionum should be returned only when zvol is degraded (rebuild
- * not finished) or when explicitly requested by ZVOL_OP_FLAG_REBUILD flag.
+ * Metadata ionum should be returned when zvol is degraded (rebuild
+ * not finished) or when requested by ZVOL_OP_FLAG_REBUILD flag.
  */
 TEST_F(ZreplDataTest, RebuildFlag) {
 	zvol_io_hdr_t hdr_in, hdr_out;
@@ -1007,7 +1000,7 @@ TEST_F(ZreplDataTest, RebuildFlag) {
 	get_zvol_status(m_zvol_name1, m_ioseq1, m_control_fd1, ZVOL_STATUS_HEALTHY, ZVOL_REBUILDING_DONE);
 
 	/* read the block without rebuild flag */
-	read_data_start(m_data_fd1, m_ioseq1, 0, sizeof (buf), &hdr_in, false);
+	read_data_start(m_data_fd1, m_ioseq1, 0, sizeof (buf), &hdr_in, 0);
 	ASSERT_EQ(hdr_in.status, ZVOL_OP_STATUS_OK);
 	ASSERT_EQ(hdr_in.len, sizeof (read_hdr) + sizeof (buf));
 	rc = read(m_data_fd1, &read_hdr, sizeof (read_hdr));
@@ -1020,7 +1013,50 @@ TEST_F(ZreplDataTest, RebuildFlag) {
 	ASSERT_EQ(rc, sizeof (buf));
 
 	/* read the block with rebuild flag */
-	read_data_start(m_data_fd1, m_ioseq1, 0, sizeof (buf), &hdr_in, true);
+	read_data_start(m_data_fd1, m_ioseq1, 0, sizeof (buf), &hdr_in, ZVOL_OP_FLAG_REBUILD);
+	ASSERT_EQ(hdr_in.status, ZVOL_OP_STATUS_OK);
+	ASSERT_EQ(hdr_in.len, sizeof (read_hdr) + sizeof (buf));
+	rc = read(m_data_fd1, &read_hdr, sizeof (read_hdr));
+	ASSERT_ERRNO("read", rc >= 0);
+	ASSERT_EQ(rc, sizeof (read_hdr));
+	ASSERT_EQ(read_hdr.io_num, 654);
+	ASSERT_EQ(read_hdr.len, sizeof (buf));
+	rc = read(m_data_fd1, buf, sizeof (buf));
+	ASSERT_ERRNO("read", rc >= 0);
+	ASSERT_EQ(rc, sizeof (buf));
+}
+
+/*
+ * Metadata ionum should be returned when requested by
+ * ZVOL_OP_FLAG_READ_METADATA flag.
+ */
+TEST_F(ZreplDataTest, ReadMetaDataFlag) {
+	zvol_io_hdr_t hdr_in, hdr_out;
+	struct zvol_io_rw_hdr read_hdr;
+	struct zvol_io_rw_hdr write_hdr;
+	struct zrepl_status_ack status;
+	struct mgmt_ack mgmt_ack;
+	char buf[4096];
+	int rc;
+
+	/* write a data block with known ionum */
+	write_data_and_verify_resp(m_data_fd1, m_ioseq1, 0, 654);
+
+	/* read the block without ZVOL_OP_FLAG_READ_METADATA flag */
+	read_data_start(m_data_fd1, m_ioseq1, 0, sizeof (buf), &hdr_in, 0);
+	ASSERT_EQ(hdr_in.status, ZVOL_OP_STATUS_OK);
+	ASSERT_EQ(hdr_in.len, sizeof (read_hdr) + sizeof (buf));
+	rc = read(m_data_fd1, &read_hdr, sizeof (read_hdr));
+	ASSERT_ERRNO("read", rc >= 0);
+	ASSERT_EQ(rc, sizeof (read_hdr));
+	ASSERT_EQ(read_hdr.io_num, 0);
+	ASSERT_EQ(read_hdr.len, sizeof (buf));
+	rc = read(m_data_fd1, buf, sizeof (buf));
+	ASSERT_ERRNO("read", rc >= 0);
+	ASSERT_EQ(rc, sizeof (buf));
+
+	/* read the block with ZVOL_OP_FLAG_READ_METADATA flag */
+	read_data_start(m_data_fd1, m_ioseq1, 0, sizeof (buf), &hdr_in, ZVOL_OP_FLAG_READ_METADATA);
 	ASSERT_EQ(hdr_in.status, ZVOL_OP_STATUS_OK);
 	ASSERT_EQ(hdr_in.len, sizeof (read_hdr) + sizeof (buf));
 	rc = read(m_data_fd1, &read_hdr, sizeof (read_hdr));
@@ -1481,6 +1517,65 @@ TEST(Snapshot, CreateAndDestroy) {
 
 	ASSERT_THROW(execCmd("zfs", std::string("list ") + snap_name),
 	    std::runtime_error);
+
+	graceful_close(control_fd);
+}
+
+/*
+ * Test zvol resize
+ */
+TEST(ZvolResizeTest, ResizeZvol) {
+	zvol_io_hdr_t hdr_out, hdr_in;
+	Zrepl zrepl;
+	Target target;
+	int rc, control_fd;
+	std::string host;
+	std::string str;
+	uint64_t val1, val2;
+	uint16_t port;
+	zvol_op_resize_data_t resize_data;
+	TestPool pool("resizepool");
+	std::string zvolname = pool.getZvolName("vol");
+
+	zrepl.start();
+	pool.create();
+	pool.createZvol("vol", "-o io.openebs:targetip=127.0.0.1");
+
+	// get the zvol size before
+	str = execCmd("zfs", std::string("get -Hpo value volsize ") + zvolname);
+	val1 = atoi(str.c_str());
+
+	rc = target.listen();
+	ASSERT_GE(rc, 0);
+	control_fd = target.accept(-1);
+	ASSERT_GE(control_fd, 0);
+	do_handshake(zvolname, host, port, NULL, control_fd,
+	    ZVOL_OP_STATUS_OK);
+
+	hdr_out.version = REPLICA_VERSION;
+	hdr_out.opcode = ZVOL_OPCODE_RESIZE;
+	hdr_out.status = ZVOL_OP_STATUS_OK;
+	hdr_out.io_seq = 1;
+	hdr_out.offset = 0;
+	hdr_out.len = sizeof (resize_data);
+	rc = write(control_fd, &hdr_out, sizeof (hdr_out));
+	ASSERT_EQ(rc, sizeof (hdr_out));
+	// double the zvol size
+	val1 <<= 1;
+	strcpy(resize_data.volname, zvolname.c_str());
+	resize_data.size = val1;
+	rc = write(control_fd, &resize_data, sizeof (resize_data));
+	ASSERT_EQ(rc, sizeof (resize_data));
+
+	rc = read(control_fd, &hdr_in, sizeof (hdr_in));
+	ASSERT_EQ(rc, sizeof (hdr_in));
+	EXPECT_EQ(hdr_in.status, ZVOL_OP_STATUS_OK);
+	ASSERT_EQ(hdr_in.len, 0);
+
+	// get the zvol size after
+	str = execCmd("zfs", std::string("get -Hpo value volsize ") + zvolname);
+	val2 = atoi(str.c_str());
+	EXPECT_EQ(val1, val2);
 
 	graceful_close(control_fd);
 }

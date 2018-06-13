@@ -406,8 +406,7 @@ read_socket:
 			    rebuild_req_offset, rebuild_req_len, &warg);
 			if (rc != 0) {
 				LOG_ERR("Rebuild scanning failed on zvol %s",
-				    zinfo->name);
-				/* TODOv: handle error differently? */
+				    "err(%d)", zinfo->name, rc);
 				goto exit;
 			}
 			bzero(&hdr, sizeof (hdr));
