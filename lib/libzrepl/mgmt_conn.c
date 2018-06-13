@@ -516,7 +516,6 @@ uzfs_zvol_rebuild_status(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp,
 	zvol_io_hdr_t		hdr;
 
 	status_ack.state = uzfs_zvol_get_status(zinfo->zv);
-	status_ack.rebuild_status = uzfs_zvol_get_rebuild_status(zinfo->zv);
 
 	bzero(&hdr, sizeof (hdr));
 	hdr.version = REPLICA_VERSION;
@@ -526,6 +525,7 @@ uzfs_zvol_rebuild_status(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp,
 	hdr.status = ZVOL_OP_STATUS_OK;
 
 	mutex_enter(&zinfo->zv->rebuild_mtx);
+	status_ack.rebuild_status = uzfs_zvol_get_rebuild_status(zinfo->zv);
 	if (uzfs_zvol_get_rebuild_status(zinfo->zv) == ZVOL_REBUILDING_FAILED) {
 		memset(&zinfo->zv->rebuild_info, 0, sizeof (zvol_rebuild_info_t));
 		uzfs_zvol_set_rebuild_status(zinfo->zv,
@@ -724,6 +724,82 @@ ret_error:
 	    hdrp->opcode, hdrp->io_seq));
 }
 
+int handle_start_rebuild_req(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp, void *payload, size_t payload_size)
+{
+	int rc = 0;
+	zvol_info_t *zinfo;
+
+	/* iSCSI controller will send this msg to downgraded replica */
+	if ((payload_size == 0) || (payload_size % sizeof (mgmt_ack_t)) != 0) {
+		LOG_ERR("rebuilding failed.. response is invalid");
+		rc = reply_nodata(conn, ZVOL_OP_STATUS_FAILED,
+		    hdrp->opcode, hdrp->io_seq);
+		goto end;
+	}
+	mgmt_ack_t *mack = (mgmt_ack_t *) payload;
+	zinfo = uzfs_zinfo_lookup(mack->dw_volname);
+	if ((zinfo == NULL) || (zinfo->mgmt_conn != conn) ||
+	    (zinfo->zv == NULL)) {
+		if (zinfo != NULL) {
+			LOG_ERR("rebuilding failed for %s..", zinfo->name);
+			uzfs_zinfo_drop_refcnt(zinfo, B_FALSE);
+		}
+		else
+			LOG_ERR("rebuilding failed..");
+		rc = reply_nodata(conn, ZVOL_OP_STATUS_FAILED,
+		    hdrp->opcode, hdrp->io_seq);
+		goto end;
+	}
+
+	mutex_enter(&zinfo->zv->rebuild_mtx);
+	if (uzfs_zvol_get_rebuild_status(zinfo->zv) !=
+	    ZVOL_REBUILDING_INIT) {
+		mutex_exit(&zinfo->zv->rebuild_mtx);
+		uzfs_zinfo_drop_refcnt(zinfo, B_FALSE);
+		LOG_ERR("rebuilding failed for %s due to improper rebuild status..", zinfo->name);
+		rc = reply_nodata(conn, ZVOL_OP_STATUS_FAILED,
+		    hdrp->opcode, hdrp->io_seq);
+		goto end;
+	}
+	memset(&zinfo->zv->rebuild_info, 0, sizeof (zvol_rebuild_info_t));
+	int rebuild_op_cnt = (payload_size / sizeof (mgmt_ack_t));
+	/* Track # of rebuilds we are initializing on replica */
+	zinfo->zv->rebuild_info.rebuild_cnt = rebuild_op_cnt;
+
+	/*
+	 * Case where just one replica is being used by customer
+	 */
+	if ((strcmp(mack->volname, "")) == 0) {
+		zinfo->zv->rebuild_info.rebuild_cnt = 0;
+		zinfo->zv->rebuild_info.rebuild_done_cnt = 0;
+		/* Mark replica healthy now */
+		uzfs_zvol_set_rebuild_status(zinfo->zv,
+		    ZVOL_REBUILDING_DONE);
+		mutex_exit(&zinfo->zv->rebuild_mtx);
+		uzfs_zvol_set_status(zinfo->zv,
+		    ZVOL_STATUS_HEALTHY);
+		uzfs_update_ionum_interval(zinfo, 0);
+		LOG_INFO("Rebuild of zvol %s completed",
+		    zinfo->name);
+		uzfs_zinfo_drop_refcnt(zinfo, B_FALSE);
+		rc = reply_nodata(conn, ZVOL_OP_STATUS_OK,
+		    hdrp->opcode, hdrp->io_seq);
+		goto end;
+	}
+	uzfs_zvol_set_rebuild_status(zinfo->zv,
+	    ZVOL_REBUILDING_IN_PROGRESS);
+	mutex_exit(&zinfo->zv->rebuild_mtx);
+
+	DBGCONN(conn, "Rebuild start command");
+	rc = uzfs_zvol_rebuild_dw_replica_start(conn, hdrp, payload,
+	    zinfo, rebuild_op_cnt);
+
+	/* dropping refcount for uzfs_zinfo_lookup */
+	uzfs_zinfo_drop_refcnt(zinfo, B_FALSE);
+end:
+	return rc;
+}
+
 /*
  * Process the whole message consisting of message header and optional payload.
  */
@@ -833,64 +909,7 @@ process_message(uzfs_mgmt_conn_t *conn)
 		break;
 
 	case ZVOL_OPCODE_START_REBUILD:
-		/* iSCSI controller will send this msg to downgraded replica */
-		if ((payload_size % sizeof (mgmt_ack_t)) != 0) {
-			LOG_ERR("rebuilding failed.. response is invalid");
-			rc = reply_nodata(conn, ZVOL_OP_STATUS_FAILED,
-			    hdrp->opcode, hdrp->io_seq);
-			break;
-		}
-		mgmt_ack_t *mack = (mgmt_ack_t *) payload;
-		zinfo = uzfs_zinfo_lookup(mack->dw_volname);
-		/* TODOv: do we need lock to get rebuild status? */
-		if ((zinfo == NULL) || (zinfo->mgmt_conn != conn) ||
-		    (zinfo->zv == NULL) ||
-		    (uzfs_zvol_get_rebuild_status(zinfo->zv) !=
-		    ZVOL_REBUILDING_INIT)) {
-			if (zinfo != NULL) {
-				LOG_ERR("rebuilding failed for %s..", zinfo->name);
-				uzfs_zinfo_drop_refcnt(zinfo, B_FALSE);
-			}
-			else
-				LOG_ERR("rebuilding failed..");
-			rc = reply_nodata(conn, ZVOL_OP_STATUS_FAILED,
-			    hdrp->opcode, hdrp->io_seq);
-			break;
-		}
-
-		memset(&zinfo->zv->rebuild_info, 0, sizeof (zvol_rebuild_info_t));
-		int rebuild_op_cnt = (payload_size / sizeof (mgmt_ack_t));
-		/* Track # of rebuilds we are initializing on replica */
-		zinfo->zv->rebuild_info.rebuild_cnt = rebuild_op_cnt;
-
-		/*
-		 * Case where just one replica is being used by customer
-		 */
-		if ((strcmp(mack->volname, "")) == 0) {
-			zinfo->zv->rebuild_info.rebuild_cnt = 0;
-			zinfo->zv->rebuild_info.rebuild_done_cnt = 0;
-			/* Mark replica healthy now */
-			uzfs_zvol_set_rebuild_status(zinfo->zv,
-			    ZVOL_REBUILDING_DONE);
-			uzfs_zvol_set_status(zinfo->zv,
-			    ZVOL_STATUS_HEALTHY);
-			uzfs_update_ionum_interval(zinfo, 0);
-			LOG_INFO("Rebuild of zvol %s completed",
-			    zinfo->name);
-			uzfs_zinfo_drop_refcnt(zinfo, B_FALSE);
-			rc = reply_nodata(conn, ZVOL_OP_STATUS_OK,
-			    hdrp->opcode, hdrp->io_seq);
-			break;
-		}
-		uzfs_zvol_set_rebuild_status(zinfo->zv,
-		    ZVOL_REBUILDING_IN_PROGRESS);
-
-		DBGCONN(conn, "Rebuild start command");
-		rc = uzfs_zvol_rebuild_dw_replica_start(conn, hdrp, payload,
-		    zinfo, rebuild_op_cnt);
-
-		/* dropping refcount for uzfs_zinfo_lookup */
-		uzfs_zinfo_drop_refcnt(zinfo, B_FALSE);
+		rc = handle_start_rebuild_req(conn, hdrp, payload, payload_size);
 		break;
 
 	default:

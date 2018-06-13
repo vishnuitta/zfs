@@ -32,6 +32,7 @@
 
 static int uzfs_fd_rand = -1;
 kmutex_t zvol_list_mutex;
+char *uzfs_spa_tag = "UZFS_SPA_TAG";
 
 static nvlist_t *
 make_root(char *path, int ashift, int log)
@@ -104,6 +105,7 @@ uzfs_init(void)
 	int err = 0;
 
 	kernel_init(FREAD | FWRITE);
+	SLIST_INIT(&zvol_list);
 	uzfs_fd_rand = open("/dev/urandom", O_RDONLY);
 	if (uzfs_fd_rand == -1)
 		err = errno;
@@ -116,7 +118,7 @@ uzfs_init(void)
 void
 uzfs_close_pool(spa_t *spa)
 {
-	spa_close(spa, "UZFS_SPA_TAG");
+	spa_close(spa, uzfs_spa_tag);
 }
 
 /*
@@ -126,7 +128,7 @@ int
 uzfs_open_pool(char *name, spa_t **s)
 {
 	spa_t *spa = NULL;
-	int err = spa_open(name, &spa, "UZFS_SPA_TAG");
+	int err = spa_open(name, &spa, uzfs_spa_tag);
 	if (err != 0) {
 		spa = NULL;
 		goto ret;
