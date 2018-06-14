@@ -67,13 +67,16 @@ setup_unit_test(char *path)
 TEST(uZFS, Setup) {
 	char *path;
 	int ret;
+	char *pool_ds;
 	ds_name = (char *)malloc(MAXNAMELEN);
+	pool_ds = (char *)malloc(MAXNAMELEN);
 	path = (char *)malloc(MAXNAMELEN);
 	pool = (char *)malloc(MAXNAMELEN);
 
 	strncpy(path, "/tmp/uztest.1a", MAXNAMELEN);
 	strncpy(pool, "pool1", MAXNAMELEN);
 	strncpy(ds_name, "vol1", MAXNAMELEN);
+	strncpy(pool_ds, "pool1/vol1", MAXNAMELEN);
 
 	uzfs_init();
 	setup_unit_test(path);
@@ -89,7 +92,7 @@ TEST(uZFS, Setup) {
 	zinfo_create_hook = &zinfo_create_cb;
 	zinfo_destroy_hook = &zinfo_destroy_cb;
 
-	uzfs_zinfo_init(zv, ds_name, NULL);
+	uzfs_zinfo_init(zv, pool_ds, NULL);
 	zinfo = uzfs_zinfo_lookup(ds_name);
 	EXPECT_EQ(0, !zinfo);
 
@@ -223,14 +226,6 @@ TEST(uZFS, TestStartRebuild) {
 	handle_start_rebuild_req(conn, hdrp, payload, sizeof (mgmt_ack_t));
 	EXPECT_EQ(ZVOL_OP_STATUS_FAILED, ((zvol_io_hdr_t *)conn->conn_buf)->status);
 	EXPECT_EQ(2, zinfo->refcnt);
-
-	/* invalid mgmt conn */
-	set_start_rebuild_mgmt_ack(mack, "vol1", NULL);
-	zinfo->mgmt_conn = NULL;
-	handle_start_rebuild_req(conn, hdrp, payload, sizeof (mgmt_ack_t));
-	EXPECT_EQ(ZVOL_OP_STATUS_FAILED, ((zvol_io_hdr_t *)conn->conn_buf)->status);
-	EXPECT_EQ(2, zinfo->refcnt);
-	zinfo->mgmt_conn = conn;
 
 	/* invalid rebuild state */
 	for (i = 1; i < 5; i++) {
