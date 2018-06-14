@@ -160,7 +160,8 @@ TEST(uZFS, TestZInfoRefcnt) {
 
 	strncpy(ds1, "pool1/vol1", MAXNAMELEN);
 	zinfo1 = uzfs_zinfo_lookup(ds1);
-	EXPECT_EQ(NULL, zinfo1);
+	EXPECT_EQ(NULL, !zinfo1);
+	EXPECT_EQ(2, zinfo->refcnt);
 
 	zinfo1 = uzfs_zinfo_lookup(NULL);
 	EXPECT_EQ(NULL, zinfo1);
@@ -168,6 +169,9 @@ TEST(uZFS, TestZInfoRefcnt) {
 	strncpy(ds1, "vol1", MAXNAMELEN);
 	zinfo1 = uzfs_zinfo_lookup(ds1);
 	EXPECT_EQ(NULL, !zinfo1);
+	EXPECT_EQ(3, zinfo->refcnt);
+
+	uzfs_zinfo_drop_refcnt(zinfo, B_FALSE);
 	EXPECT_EQ(2, zinfo->refcnt);
 }
 
@@ -250,7 +254,7 @@ TEST(uZFS, TestStartRebuild) {
 	/* rebuild in two replicas case with 'connect' failure */
 	uzfs_zvol_set_rebuild_status(zinfo->zv,
 	    ZVOL_REBUILDING_INIT);
-	set_start_rebuild_mgmt_ack(mack, "vol1", "vol2");
+	set_start_rebuild_mgmt_ack(mack, "pool1/vol1", "vol2");
 	handle_start_rebuild_req(conn, hdrp, payload, sizeof (mgmt_ack_t));
 	EXPECT_EQ(ZVOL_OP_STATUS_OK, ((zvol_io_hdr_t *)conn->conn_buf)->status);
 	while (1) {
@@ -264,7 +268,7 @@ TEST(uZFS, TestStartRebuild) {
 	/* rebuild in three replicas case with invalid volname to rebuild */
 	uzfs_zvol_set_rebuild_status(zinfo->zv,
 	    ZVOL_REBUILDING_INIT);
-	set_start_rebuild_mgmt_ack(mack, "vol1", "vol3");
+	set_start_rebuild_mgmt_ack(mack, "pool1/vol1", "vol3");
 	set_start_rebuild_mgmt_ack(mack + 1, "vol2", "vol3");
 	handle_start_rebuild_req(conn, hdrp, payload, sizeof (mgmt_ack_t)*2);
 	EXPECT_EQ(ZVOL_OP_STATUS_FAILED, ((zvol_io_hdr_t *)conn->conn_buf)->status);
@@ -279,8 +283,8 @@ TEST(uZFS, TestStartRebuild) {
 	/* rebuild in three replicas case with 'connect' failing */
 	uzfs_zvol_set_rebuild_status(zinfo->zv,
 	    ZVOL_REBUILDING_INIT);
-	set_start_rebuild_mgmt_ack(mack, "vol1", "vol3");
-	set_start_rebuild_mgmt_ack(mack + 1, "vol1", "vol3");
+	set_start_rebuild_mgmt_ack(mack, "pool1/vol1", "vol3");
+	set_start_rebuild_mgmt_ack(mack + 1, "pool1/vol1", "vol3");
 	handle_start_rebuild_req(conn, hdrp, payload, sizeof (mgmt_ack_t)*2);
 	EXPECT_EQ(ZVOL_OP_STATUS_OK, ((zvol_io_hdr_t *)conn->conn_buf)->status);
 	while (1) {
