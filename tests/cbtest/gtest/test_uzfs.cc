@@ -30,7 +30,9 @@
 #define _SYS_BYTEORDER_H
 #include <sys/spa.h>
 #include <libuzfs.h>
+#include <zrepl_mgmt.h>
 #include <mgmt_conn.h>
+#include <data_conn.h>
 #include <uzfs_mgmt.h>
 
 char *ds_name;
@@ -79,6 +81,7 @@ TEST(uZFS, Setup) {
 	strncpy(pool_ds, "pool1/vol1", MAXNAMELEN);
 
 	uzfs_init();
+	init_zrepl();
 	setup_unit_test(path);
 	ret = uzfs_create_pool(pool, path, &spa);
 	EXPECT_EQ(0, ret);
@@ -100,7 +103,7 @@ TEST(uZFS, Setup) {
 }
 
 int
-slist_count(struct uzfs_mgmt_conn_list *list)
+uzfs_mgmt_conn_list_count(struct uzfs_mgmt_conn_list *list)
 {
 	int count = 0;
 	uzfs_mgmt_conn_t *mgmt_conn;
@@ -114,12 +117,12 @@ slist_count(struct uzfs_mgmt_conn_list *list)
 TEST(uZFS, EmptyCreateProps) {
 	uzfs_mgmt_conn_t *conn;
 
-	EXPECT_EQ(1, slist_count(&uzfs_mgmt_conns));
+	EXPECT_EQ(1, uzfs_mgmt_conn_list_count(&uzfs_mgmt_conns));
 	conn = SLIST_FIRST(&uzfs_mgmt_conns);
 	EXPECT_EQ(1, conn->conn_refcount);
 
 	zinfo_create_cb(zinfo, NULL);
-	EXPECT_EQ(1, slist_count(&uzfs_mgmt_conns));
+	EXPECT_EQ(1, uzfs_mgmt_conn_list_count(&uzfs_mgmt_conns));
 	conn = SLIST_FIRST(&uzfs_mgmt_conns);
 	EXPECT_EQ(2, conn->conn_refcount);
 }
@@ -205,27 +208,29 @@ TEST(uZFS, TestStartRebuild) {
 	rebuild_status[3] = ZVOL_REBUILDING_ERRORED;
 	rebuild_status[4] = ZVOL_REBUILDING_FAILED;
 
-	EXPECT_EQ(1, slist_count(&uzfs_mgmt_conns));
+	EXPECT_EQ(1, uzfs_mgmt_conn_list_count(&uzfs_mgmt_conns));
 	EXPECT_EQ(2, zinfo->refcnt);
 	conn = SLIST_FIRST(&uzfs_mgmt_conns);
 
 	zvol_io_hdr_t *hdrp = (zvol_io_hdr_t *)kmem_zalloc(sizeof (*hdrp), KM_SLEEP);
 	void *payload = kmem_zalloc(sizeof (mgmt_ack_t) * 5, KM_SLEEP);
 	mack = (mgmt_ack_t *)payload;
+	set_zvol_io_hdr(hdrp, ZVOL_OP_STATUS_OK, ZVOL_OPCODE_PREPARE_FOR_REBUILD, 0);
 
 	/* payload is 0 */
-	set_zvol_io_hdr(hdrp, ZVOL_OP_STATUS_OK, ZVOL_OPCODE_PREPARE_FOR_REBUILD, 0);
+	conn->conn_buf = NULL;
 	handle_start_rebuild_req(conn, hdrp, NULL, 0);
 	EXPECT_EQ(ZVOL_OP_STATUS_FAILED, ((zvol_io_hdr_t *)conn->conn_buf)->status);
 	EXPECT_EQ(2, zinfo->refcnt);
 
 	/* NULL name in payload */
-	set_zvol_io_hdr(hdrp, ZVOL_OP_STATUS_OK, ZVOL_OPCODE_PREPARE_FOR_REBUILD, sizeof (mgmt_ack_t));
+	conn->conn_buf = NULL;
 	handle_start_rebuild_req(conn, hdrp, payload, sizeof (mgmt_ack_t));
 	EXPECT_EQ(ZVOL_OP_STATUS_FAILED, ((zvol_io_hdr_t *)conn->conn_buf)->status);
 	EXPECT_EQ(2, zinfo->refcnt);
 
 	/* invalid name in payload */
+	conn->conn_buf = NULL;
 	set_start_rebuild_mgmt_ack(mack, "vol2", NULL);
 	handle_start_rebuild_req(conn, hdrp, payload, sizeof (mgmt_ack_t));
 	EXPECT_EQ(ZVOL_OP_STATUS_FAILED, ((zvol_io_hdr_t *)conn->conn_buf)->status);
@@ -233,6 +238,7 @@ TEST(uZFS, TestStartRebuild) {
 
 	/* invalid rebuild state */
 	for (i = 1; i < 5; i++) {
+		conn->conn_buf = NULL;
 		uzfs_zvol_set_rebuild_status(zinfo->zv,
 		    rebuild_status[i]);
 		set_start_rebuild_mgmt_ack(mack, "vol1", NULL);
@@ -242,6 +248,7 @@ TEST(uZFS, TestStartRebuild) {
 	}
 
 	/* rebuild for single replica case */
+	conn->conn_buf = NULL;
 	uzfs_zvol_set_rebuild_status(zinfo->zv,
 	    ZVOL_REBUILDING_INIT);
 	set_start_rebuild_mgmt_ack(mack, "vol1", NULL);
@@ -252,6 +259,7 @@ TEST(uZFS, TestStartRebuild) {
 	EXPECT_EQ(2, zinfo->refcnt);
 
 	/* rebuild in two replicas case with 'connect' failure */
+	conn->conn_buf = NULL;
 	uzfs_zvol_set_rebuild_status(zinfo->zv,
 	    ZVOL_REBUILDING_INIT);
 	set_start_rebuild_mgmt_ack(mack, "pool1/vol1", "vol2");
@@ -266,6 +274,7 @@ TEST(uZFS, TestStartRebuild) {
 	EXPECT_EQ(2, zinfo->refcnt);
 
 	/* rebuild in three replicas case with invalid volname to rebuild */
+	conn->conn_buf = NULL;
 	uzfs_zvol_set_rebuild_status(zinfo->zv,
 	    ZVOL_REBUILDING_INIT);
 	set_start_rebuild_mgmt_ack(mack, "pool1/vol1", "vol3");
@@ -281,6 +290,7 @@ TEST(uZFS, TestStartRebuild) {
 	EXPECT_EQ(2, zinfo->refcnt);
 
 	/* rebuild in three replicas case with 'connect' failing */
+	conn->conn_buf = NULL;
 	uzfs_zvol_set_rebuild_status(zinfo->zv,
 	    ZVOL_REBUILDING_INIT);
 	set_start_rebuild_mgmt_ack(mack, "pool1/vol1", "vol3");
@@ -294,4 +304,86 @@ TEST(uZFS, TestStartRebuild) {
 			break;
 	}
 	EXPECT_EQ(2, zinfo->refcnt);
+}
+
+int
+complete_q_list_count(zvol_info_t *zinfo)
+{
+	int count = 0;
+	zvol_io_cmd_t *zio_cmd;
+
+	STAILQ_FOREACH(zio_cmd, &zinfo->complete_queue, cmd_link)
+		count++;
+
+	return count;
+} 
+
+TEST(uZFS, RemovePendingCmds) {
+	zvol_io_hdr_t hdr;
+	zvol_io_cmd_t *zio_cmd;
+
+	memset(&hdr, 0, sizeof (zvol_io_hdr_t));
+	EXPECT_EQ(0, complete_q_list_count(zinfo));
+
+	/* Case of one IO in q */
+	zio_cmd = zio_cmd_alloc(&hdr, 1);
+	STAILQ_INSERT_TAIL(&zinfo->complete_queue, zio_cmd, cmd_link);
+	EXPECT_EQ(1, complete_q_list_count(zinfo));
+
+	remove_pending_cmds_to_ack(2, zinfo);
+	EXPECT_EQ(1, complete_q_list_count(zinfo));
+
+	remove_pending_cmds_to_ack(1, zinfo);
+	EXPECT_EQ(0, complete_q_list_count(zinfo));
+
+	/* Case of two IOs with different fds in q */
+	zio_cmd = zio_cmd_alloc(&hdr, 1);
+	STAILQ_INSERT_TAIL(&zinfo->complete_queue, zio_cmd, cmd_link);
+
+	zio_cmd = zio_cmd_alloc(&hdr, 2);
+	STAILQ_INSERT_TAIL(&zinfo->complete_queue, zio_cmd, cmd_link);
+
+	EXPECT_EQ(2, complete_q_list_count(zinfo));
+
+	remove_pending_cmds_to_ack(3, zinfo);
+	EXPECT_EQ(2, complete_q_list_count(zinfo));
+
+	remove_pending_cmds_to_ack(1, zinfo);
+	EXPECT_EQ(1, complete_q_list_count(zinfo));
+
+	remove_pending_cmds_to_ack(2, zinfo);
+	EXPECT_EQ(0, complete_q_list_count(zinfo));
+
+	/* Case of two IOs with same fds in q */
+	zio_cmd = zio_cmd_alloc(&hdr, 1);
+	STAILQ_INSERT_TAIL(&zinfo->complete_queue, zio_cmd, cmd_link);
+
+	zio_cmd = zio_cmd_alloc(&hdr, 1);
+	STAILQ_INSERT_TAIL(&zinfo->complete_queue, zio_cmd, cmd_link);
+
+	EXPECT_EQ(2, complete_q_list_count(zinfo));
+
+	remove_pending_cmds_to_ack(1, zinfo);
+	EXPECT_EQ(0, complete_q_list_count(zinfo));
+
+	/* Case of three IOs with diff fds in q */
+	zio_cmd = zio_cmd_alloc(&hdr, 1);
+	STAILQ_INSERT_TAIL(&zinfo->complete_queue, zio_cmd, cmd_link);
+
+	zio_cmd = zio_cmd_alloc(&hdr, 2);
+	STAILQ_INSERT_TAIL(&zinfo->complete_queue, zio_cmd, cmd_link);
+
+	zio_cmd = zio_cmd_alloc(&hdr, 3);
+	STAILQ_INSERT_TAIL(&zinfo->complete_queue, zio_cmd, cmd_link);
+
+	EXPECT_EQ(3, complete_q_list_count(zinfo));
+
+	remove_pending_cmds_to_ack(2, zinfo);
+	EXPECT_EQ(2, complete_q_list_count(zinfo));
+
+	remove_pending_cmds_to_ack(3, zinfo);
+	EXPECT_EQ(1, complete_q_list_count(zinfo));
+
+	remove_pending_cmds_to_ack(1, zinfo);
+	EXPECT_EQ(0, complete_q_list_count(zinfo));
 }

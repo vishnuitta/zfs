@@ -306,32 +306,6 @@ uzfs_zvol_rebuild_scanner_callback(off_t offset, size_t len,
 }
 
 /*
- * This function finds cmds that need to be acked to its sender on a given fd.
- * Removes those commands from that list.
- */
-static void
-remove_pending_cmds_to_ack(int fd, zvol_info_t *zinfo)
-{
-	zvol_io_cmd_t *zio_cmd, *zio_cmd_next;
-	(void) pthread_mutex_lock(&zinfo->zinfo_mutex);
-	zio_cmd = STAILQ_FIRST(&zinfo->complete_queue);
-	while (zio_cmd != NULL) {
-		zio_cmd_next = STAILQ_NEXT(zio_cmd, cmd_link);
-		if (zio_cmd->conn == fd)
-			STAILQ_REMOVE(&zinfo->complete_queue, zio_cmd,
-			    zvol_io_cmd_s, cmd_link);
-		zio_cmd = zio_cmd_next;
-	}
-	while ((zinfo->zio_cmd_in_ack != NULL) &&
-	    (((zvol_io_cmd_t *)(zinfo->zio_cmd_in_ack))->conn == fd)) {
-		(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
-		sleep(1);
-		(void) pthread_mutex_lock(&zinfo->zinfo_mutex);
-	}
-	(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
-}
-
-/*
  * Rebuild scanner function which after receiving
  * vol_name and IO number, will scan metadata and
  * read data and send across.

@@ -28,6 +28,10 @@
 #include <zrepl_prot.h>
 #include <zrepl_mgmt.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct rebuild_thread_arg {
 	zvol_info_t	*zinfo;
 	char		zvol_name[MAX_NAME_LEN];
@@ -36,6 +40,8 @@ typedef struct rebuild_thread_arg {
 	uint16_t	port;
 } rebuild_thread_arg_t;
 
+void init_zrepl(void);
+void remove_pending_cmds_to_ack(int fd, zvol_info_t *zinfo);
 zvol_io_cmd_t *zio_cmd_alloc(zvol_io_hdr_t *hdr, int fd);
 void zio_cmd_free(zvol_io_cmd_t **cmd);
 int uzfs_zvol_socket_read(int fd, char *buf, uint64_t nbytes);
@@ -44,5 +50,9 @@ void uzfs_zvol_worker(void *arg);
 void uzfs_zvol_rebuild_dw_replica(void *arg);
 void uzfs_update_ionum_interval(zvol_info_t *zinfo, uint32_t timeout);
 void uzfs_zvol_timer_thread(void);
+
+#ifdef __cplusplus
+}
+#endif 
 
 #endif /* _REBUILD_H */

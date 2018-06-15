@@ -32,14 +32,15 @@
 #include <uzfs_io.h>
 #include <uzfs_rebuilding.h>
 #include <zrepl_mgmt.h>
+#include "mgmt_conn.h"
 #include "data_conn.h"
 
 #define	ZVOL_REBUILD_STEP_SIZE  (10 * 1024ULL * 1024ULL * 1024ULL) // 10GB
 
 uint64_t zvol_rebuild_step_size = ZVOL_REBUILD_STEP_SIZE;
 
-static kcondvar_t timer_cv;
-static kmutex_t timer_mtx;
+kcondvar_t timer_cv;
+kmutex_t timer_mtx;
 
 /*
  * Allocate zio command along with
@@ -472,8 +473,7 @@ uzfs_zvol_timer_thread(void)
 	time_t min_interval;
 	time_t now, next_check;
 
-	mutex_init(&timer_mtx, NULL, MUTEX_DEFAULT, NULL);
-	cv_init(&timer_cv, NULL, CV_DEFAULT, NULL);
+	init_zrepl();
 	prctl(PR_SET_NAME, "zvol_timer", 0, 0, 0);
 
 	mutex_enter(&timer_mtx);
@@ -532,3 +532,37 @@ uzfs_update_ionum_interval(zvol_info_t *zinfo, uint32_t timeout)
 	cv_signal(&timer_cv);
 	mutex_exit(&timer_mtx);
 }
+
+/*
+ * This function finds cmds that need to be acked to its sender on a given fd,
+ * and removes those commands from that list.
+ */
+void
+remove_pending_cmds_to_ack(int fd, zvol_info_t *zinfo)
+{
+	zvol_io_cmd_t *zio_cmd, *zio_cmd_next;
+	(void) pthread_mutex_lock(&zinfo->zinfo_mutex);
+	zio_cmd = STAILQ_FIRST(&zinfo->complete_queue);
+	while (zio_cmd != NULL) {
+		zio_cmd_next = STAILQ_NEXT(zio_cmd, cmd_link);
+		if (zio_cmd->conn == fd)
+			STAILQ_REMOVE(&zinfo->complete_queue, zio_cmd,
+			    zvol_io_cmd_s, cmd_link);
+		zio_cmd = zio_cmd_next;
+	}
+	while ((zinfo->zio_cmd_in_ack != NULL) &&
+	    (((zvol_io_cmd_t *)(zinfo->zio_cmd_in_ack))->conn == fd)) {
+		(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
+		sleep(1);
+		(void) pthread_mutex_lock(&zinfo->zinfo_mutex);
+	}
+	(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
+}
+
+void
+init_zrepl(void)
+{
+	mutex_init(&timer_mtx, NULL, MUTEX_DEFAULT, NULL);
+	cv_init(&timer_cv, NULL, CV_DEFAULT, NULL);
+}
+
