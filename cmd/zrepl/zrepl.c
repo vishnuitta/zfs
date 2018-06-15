@@ -1,5 +1,6 @@
 #include <arpa/inet.h>
 #include <netdb.h>
+#include <execinfo.h>
 
 #include <libuzfs.h>
 #include <libzfs.h>
@@ -786,6 +787,54 @@ zrepl_svc_run(void)
 }
 
 /*
+ * Print a stack trace before program exits.
+ */
+void
+fatal_handler(int sig)
+{
+	void *array[20];
+	size_t size;
+
+	fprintf(stderr, "Fatal signal received: %d\n", sig);
+	fprintf(stderr, "Stack trace:\n");
+
+	size = backtrace(array, 20);
+	backtrace_symbols_fd(array, size, STDERR_FILENO);
+
+	/*
+	 * Hand over the sig for default processing to system to generate
+	 * a coredump
+	 */
+	signal(sig, SIG_DFL);
+	kill(getpid(), sig);
+}
+
+/*
+ * We would like to do a graceful shutdown here to avoid recovery actions
+ * when pool is imported next time. However we don't want to call export
+ * which does a bunch of other things which are not necessary (freeing
+ * memory resources etc.), since we run in userspace.
+ *
+ * mutex_enter(&spa_namespace_lock);
+ * while ((spa = spa_next(NULL)) != NULL) {
+ *	strlcpy(spaname, spa_name(spa), sizeof (spaname));
+ *	mutex_exit(&spa_namespace_lock);
+ *	LOG_INFO("Exporting pool %s", spaname);
+ *	spa_export(spaname, NULL, B_TRUE, B_FALSE);
+ *	mutex_enter(&spa_namespace_lock);
+ * }
+ * mutex_exit(&spa_namespace_lock);
+ *
+ * For now we keep it simple and just exit.
+ */
+void
+exit_handler(int sig)
+{
+	LOG_INFO("Caught SIGTERM. Exiting...");
+	exit(0);
+}
+
+/*
  * Main function for replica.
  */
 int
@@ -827,6 +876,11 @@ main(int argc, char **argv)
 
 	/* Ignore SIGPIPE signal */
 	signal(SIGPIPE, SIG_IGN);
+	signal(SIGTERM, exit_handler);
+	signal(SIGSEGV, fatal_handler);
+	signal(SIGBUS, fatal_handler);
+	signal(SIGILL, fatal_handler);
+
 	if (libuzfs_ioctl_init() < 0) {
 		LOG_ERR("Failed to initialize libuzfs ioctl");
 		goto initialize_error;

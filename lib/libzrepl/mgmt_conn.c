@@ -34,6 +34,7 @@
 
 #include <sys/dsl_dataset.h>
 #include <sys/dsl_destroy.h>
+#include <sys/dsl_dir.h>
 #include <sys/dmu_objset.h>
 #include <zrepl_prot.h>
 #include <uzfs_mgmt.h>
@@ -541,6 +542,26 @@ uzfs_zvol_rebuild_status(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp,
 	return (reply_data(conn, &hdr, &status_ack, sizeof (status_ack)));
 }
 
+static int
+uzfs_zvol_stats(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp, zvol_info_t *zinfo)
+{
+	zvol_io_hdr_t	hdr;
+	zvol_op_stat_t	stat;
+
+	strncpy(stat.label, "used", sizeof (stat.label));
+	stat.value = dsl_dir_phys(
+	    zinfo->zv->zv_objset->os_dsl_dataset->ds_dir)->dd_used_bytes;
+
+	bzero(&hdr, sizeof (hdr));
+	hdr.version = REPLICA_VERSION;
+	hdr.opcode = hdrp->opcode;
+	hdr.io_seq = hdrp->io_seq;
+	hdr.len = sizeof (zvol_op_stat_t);
+	hdr.status = ZVOL_OP_STATUS_OK;
+
+	return (reply_data(conn, &hdr, &stat, sizeof (stat)));
+}
+
 static void
 free_async_task(async_task_t *async_task)
 {
@@ -872,6 +893,7 @@ process_message(uzfs_mgmt_conn_t *conn)
 	case ZVOL_OPCODE_HANDSHAKE:
 	case ZVOL_OPCODE_PREPARE_FOR_REBUILD:
 	case ZVOL_OPCODE_REPLICA_STATUS:
+	case ZVOL_OPCODE_STATS:
 		if (payload_size == 0 || payload_size > MAX_NAME_LEN) {
 			rc = reply_nodata(conn, ZVOL_OP_STATUS_FAILED,
 			    hdrp->opcode, hdrp->io_seq);
@@ -915,6 +937,9 @@ process_message(uzfs_mgmt_conn_t *conn)
 			    zvol_name);
 			rc = uzfs_zvol_rebuild_status(conn, hdrp, zvol_name,
 			    zinfo);
+		} else if (hdrp->opcode == ZVOL_OPCODE_STATS) {
+			DBGCONN(conn, "Stats command for zvol %s", zvol_name);
+			rc = uzfs_zvol_stats(conn, hdrp, zinfo);
 		} else {
 			ASSERT(0);
 		}
