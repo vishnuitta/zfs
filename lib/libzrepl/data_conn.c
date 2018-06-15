@@ -565,4 +565,3 @@ init_zrepl(void)
 	mutex_init(&timer_mtx, NULL, MUTEX_DEFAULT, NULL);
 	cv_init(&timer_cv, NULL, CV_DEFAULT, NULL);
 }
-

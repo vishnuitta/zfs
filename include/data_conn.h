@@ -53,6 +53,6 @@ void uzfs_zvol_timer_thread(void);
 
 #ifdef __cplusplus
 }
-#endif 
+#endif
 
 #endif /* _REBUILD_H */
