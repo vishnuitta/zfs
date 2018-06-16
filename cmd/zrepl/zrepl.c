@@ -687,6 +687,8 @@ uzfs_zvol_io_ack_sender(void *arg)
 				    &zinfo->zinfo_mutex);
 				zinfo->io_ack_waiting = 0;
 			}
+			else
+				break;
 		}
 
 		zio_cmd = STAILQ_FIRST(&zinfo->complete_queue);
