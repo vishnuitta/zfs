@@ -323,6 +323,7 @@ TEST(uZFS, RemovePendingCmds) {
 	zvol_io_cmd_t *zio_cmd;
 
 	memset(&hdr, 0, sizeof (zvol_io_hdr_t));
+	hdr.opcode = ZVOL_OPCODE_READ;
 	EXPECT_EQ(0, complete_q_list_count(zinfo));
 
 	/* Case of one IO in q */
