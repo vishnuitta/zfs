@@ -56,7 +56,7 @@ typedef struct zvol_rebuild_info {
 
 	/* peer replica cnt whose rebuild is done either success or failure */
 	uint16_t rebuild_done_cnt;
-	
+
 	/* peer replica cnt whose rebuild is done and failure */
 	uint16_t rebuild_failed_cnt;
 } zvol_rebuild_info_t;
