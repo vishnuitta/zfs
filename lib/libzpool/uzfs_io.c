@@ -113,7 +113,7 @@ uzfs_write_data(zvol_state_t *zv, char *buf, uint64_t offset, uint64_t len,
 
 	if (is_rebuild) {
 		VERIFY(ZVOL_IS_DEGRADED(zv) && (ZVOL_IS_REBUILDING(zv) ||
-		    ZVOL_IS_REBUILDING_FAILED(zv)));
+		    ZVOL_IS_REBUILDING_ERRORED(zv)));
 		count = uzfs_get_nonoverlapping_ondisk_blks(zv, offset,
 		    len, metadata, (void **)&chunk_io);
 		if (!count)

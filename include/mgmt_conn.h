@@ -22,7 +22,7 @@
  * Copyright (c) 2018 Cloudbyte. All rights reserved.
  */
 
-#ifndef _MGMT_CONN_H
+#ifndef	_MGMT_CONN_H
 #define	_MGMT_CONN_H
 
 #include <zrepl_mgmt.h>

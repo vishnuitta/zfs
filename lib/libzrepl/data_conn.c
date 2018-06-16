@@ -338,8 +338,8 @@ uzfs_zvol_rebuild_dw_replica(void *arg)
 
 next_step:
 
-	if (ZVOL_IS_REBUILDING_FAILED(zinfo->zv)) {
-		LOG_ERR("rebuilding failed.. for %s..", zinfo->name);
+	if (ZVOL_IS_REBUILDING_ERRORED(zinfo->zv)) {
+		LOG_ERR("rebuilding errored.. for %s..", zinfo->name);
 		rc = -1;
 		goto exit;
 	}
@@ -376,8 +376,8 @@ next_step:
 
 	while (1) {
 
-		if (ZVOL_IS_REBUILDING_FAILED(zinfo->zv)) {
-			LOG_ERR("rebuilding already failed.. for %s..",
+		if (ZVOL_IS_REBUILDING_ERRORED(zinfo->zv)) {
+			LOG_ERR("rebuilding already errored.. for %s..",
 			    zinfo->name);
 			rc = -1;
 			goto exit;
@@ -545,9 +545,11 @@ remove_pending_cmds_to_ack(int fd, zvol_info_t *zinfo)
 	zio_cmd = STAILQ_FIRST(&zinfo->complete_queue);
 	while (zio_cmd != NULL) {
 		zio_cmd_next = STAILQ_NEXT(zio_cmd, cmd_link);
-		if (zio_cmd->conn == fd)
+		if (zio_cmd->conn == fd) {
 			STAILQ_REMOVE(&zinfo->complete_queue, zio_cmd,
 			    zvol_io_cmd_s, cmd_link);
+			zio_cmd_free(&zio_cmd);
+		}
 		zio_cmd = zio_cmd_next;
 	}
 	while ((zinfo->zio_cmd_in_ack != NULL) &&

@@ -655,6 +655,10 @@ end:
  * One thread per LUN/vol. This thread works
  * on queue and it sends ack back to client on
  * a given fd.
+ * There are two types of clients - one is iscsi target, and,
+ * other is a replica which undergoes rebuild.
+ * Need to exit from thread when there are network errors
+ * on fd related to iscsi target.
  */
 static void
 uzfs_zvol_io_ack_sender(void *arg)
@@ -720,6 +724,10 @@ uzfs_zvol_io_ack_sender(void *arg)
 		if (rc == -1) {
 			LOG_ERRNO("socket write err");
 			zinfo->zio_cmd_in_ack = NULL;
+			/*
+			 * exit due to network errors on fd related
+			 * to iscsi target
+			 */
 			if (zio_cmd->conn == fd) {
 				zio_cmd_free(&zio_cmd);
 				(void) pthread_mutex_lock(&zinfo->zinfo_mutex);
