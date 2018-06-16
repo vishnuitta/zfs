@@ -94,7 +94,7 @@ get_snapshot_zv(zvol_state_t *zv, char *snap_name, zvol_state_t **snap_zv)
 			ret = uzfs_hold_dataset(*snap_zv);
 			if (ret != 0) {
 				LOG_ERR("Failed to hold snapshot: %d", ret);
-				uzfs_rele_dataset(*snap_zv);
+				uzfs_close_dataset(*snap_zv);
 			}
 		}
 		else
@@ -106,7 +106,7 @@ get_snapshot_zv(zvol_state_t *zv, char *snap_name, zvol_state_t **snap_zv)
 		if (ret != 0) {
 			LOG_ERR("Failed to hold already existing snapshot: %d",
 			    ret);
-			uzfs_rele_dataset(*snap_zv);
+			uzfs_close_dataset(*snap_zv);
 		}
 	} else
 		LOG_ERR("Failed to open snapshot: %d", ret);
