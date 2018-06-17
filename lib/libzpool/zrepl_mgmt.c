@@ -17,7 +17,6 @@ void (*zinfo_create_hook)(zvol_info_t *, nvlist_t *);
 void (*zinfo_destroy_hook)(zvol_info_t *);
 
 struct zvol_list zvol_list;
-struct zvol_list stale_zv_list;
 
 #define	SLIST_FOREACH_SAFE(var, head, field, tvar)			\
 	for ((var) = SLIST_FIRST((head));				\
@@ -198,6 +197,9 @@ uzfs_zinfo_lookup(const char *name)
 	zvol_info_t *zv = NULL;
 	int namelen = ((name) ? strlen(name) : 0);
 
+	if (name == NULL)
+		return (NULL);
+
 	(void) mutex_enter(&zvol_list_mutex);
 	SLIST_FOREACH(zv, &zvol_list, zinfo_next) {
 		/*
@@ -214,7 +216,7 @@ uzfs_zinfo_lookup(const char *name)
 		 * Name can be in any of these formats
 		 * "vol1" or "zpool/vol1"
 		 */
-		if (name == NULL || (strcmp(zv->name, name) == 0) ||
+		if ((strcmp(zv->name, name) == 0) ||
 		    ((strcmp(p, name) == 0) && (*(--p) == '/'))) {
 			break;
 		}
@@ -284,8 +286,7 @@ uzfs_zinfo_destroy(const char *name, spa_t *spa)
 int
 uzfs_zinfo_init(void *zv, const char *ds_name, nvlist_t *create_props)
 {
-
-	zvol_info_t 	*zinfo;
+	zvol_info_t	*zinfo;
 
 	zinfo =	kmem_zalloc(sizeof (zvol_info_t), KM_SLEEP);
 	bzero(zinfo, sizeof (zvol_info_t));

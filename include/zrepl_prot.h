@@ -138,10 +138,14 @@ typedef struct mgmt_ack mgmt_ack_t;
  * zvol rebuild related state
  */
 enum zvol_rebuild_status {
-	ZVOL_REBUILDING_INIT,		/* rebuilding initiated on zvol */
+	ZVOL_REBUILDING_INIT,		/* rebuilding can be initiated */
 	ZVOL_REBUILDING_IN_PROGRESS,	/* zvol is rebuilding */
-	ZVOL_REBUILDING_DONE,		/* done with rebuilding */
-	ZVOL_REBUILDING_FAILED		/* Rebuilding failed */
+	ZVOL_REBUILDING_DONE,		/* Rebuilding completed with success */
+
+	/* errored during rebuilding, but not completed */
+	ZVOL_REBUILDING_ERRORED,
+
+	ZVOL_REBUILDING_FAILED		/* Rebuilding completed with error */
 } __attribute__((packed));
 
 typedef enum zvol_rebuild_status zvol_rebuild_status_t;

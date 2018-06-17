@@ -142,6 +142,7 @@ open_zvol(int fd, zvol_info_t **zinfopp)
 	if (uzfs_update_metadata_granularity(zv,
 	    open_data.tgt_block_size) != 0) {
 		(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
+		uzfs_rele_dataset(zv);
 		LOG_ERR("Failed to set granularity of metadata");
 		hdr.status = ZVOL_OP_STATUS_FAILED;
 		goto open_reply;
@@ -296,6 +297,11 @@ uzfs_zvol_rebuild_scanner_callback(off_t offset, size_t len,
 	/* Take refcount for uzfs_zvol_worker to work on it */
 	uzfs_zinfo_take_refcnt(zinfo, B_FALSE);
 	zio_cmd->zv = zinfo;
+
+	/*
+	 * Any error in uzfs_zvol_worker will send FAILURE status to degraded
+	 * replica. Degraded replica will take care of breaking the connection
+	 */
 	uzfs_zvol_worker(zio_cmd);
 	return (0);
 }
@@ -329,10 +335,10 @@ read_socket:
 
 	/* Handshake yet to happen */
 	if ((hdr.opcode != ZVOL_OPCODE_HANDSHAKE) && (zinfo == NULL)) {
+		rc = -1;
 		goto exit;
 	}
 	switch (hdr.opcode) {
-
 		case ZVOL_OPCODE_HANDSHAKE:
 			name = kmem_alloc(hdr.len, KM_SLEEP);
 			rc = uzfs_zvol_socket_read(fd, name, hdr.len);
@@ -347,6 +353,7 @@ read_socket:
 				    "zvol %s",
 				    zinfo->name, name);
 				kmem_free(name, hdr.len);
+				rc = -1;
 				goto exit;
 			}
 
@@ -354,6 +361,7 @@ read_socket:
 			if (zinfo == NULL) {
 				LOG_ERR("zvol %s not found", name);
 				kmem_free(name, hdr.len);
+				rc = -1;
 				goto exit;
 			}
 
@@ -362,7 +370,6 @@ read_socket:
 			warg.zinfo = zinfo;
 			warg.fd = fd;
 			goto read_socket;
-			break;
 
 		case ZVOL_OPCODE_REBUILD_STEP:
 
@@ -379,8 +386,9 @@ read_socket:
 			    uzfs_zvol_rebuild_scanner_callback,
 			    rebuild_req_offset, rebuild_req_len, &warg);
 			if (rc != 0) {
-				LOG_ERR("Rebuild scanning failed on zvol %s "
+				LOG_ERR("Rebuild scanning failed on zvol %s ",
 				    "err(%d)", zinfo->name, rc);
+				goto exit;
 			}
 			bzero(&hdr, sizeof (hdr));
 			hdr.status = ZVOL_OP_STATUS_OK;
@@ -391,32 +399,31 @@ read_socket:
 			uzfs_zinfo_take_refcnt(zinfo, B_FALSE);
 			zio_cmd->zv = zinfo;
 			uzfs_zvol_worker(zio_cmd);
+			zio_cmd = NULL;
 			goto read_socket;
-			break;
 
 		case ZVOL_OPCODE_REBUILD_COMPLETE:
 			LOG_INFO("Rebuild process is over on zvol %s",
 			    zinfo->name);
 			goto exit;
-			break;
 
 		default:
 			LOG_ERR("Wrong opcode: %d", hdr.opcode);
 			goto exit;
-			break;
 	}
 
 exit:
 	if (zinfo != NULL) {
 		LOG_DEBUG("uzfs_zvol_rebuild_scanner thread for zvol %s "
 		    "exiting", zinfo->name);
+		remove_pending_cmds_to_ack(fd, zinfo);
 		uzfs_zinfo_drop_refcnt(zinfo, B_FALSE);
 	} else {
 		LOG_DEBUG("uzfs_zvol_rebuild_scanner thread exiting");
 	}
 
-	if (fd != -1)
-		close(fd);
+	shutdown(fd, SHUT_RDWR);
+	close(fd);
 	zk_thread_exit();
 }
 
@@ -648,6 +655,10 @@ end:
  * One thread per LUN/vol. This thread works
  * on queue and it sends ack back to client on
  * a given fd.
+ * There are two types of clients - one is iscsi target, and,
+ * other is a replica which undergoes rebuild.
+ * Need to exit from thread when there are network errors
+ * on fd related to iscsi target.
  */
 static void
 uzfs_zvol_io_ack_sender(void *arg)
@@ -668,20 +679,25 @@ uzfs_zvol_io_ack_sender(void *arg)
 	while (1) {
 		int rc = 0;
 		(void) pthread_mutex_lock(&zinfo->zinfo_mutex);
-		while (STAILQ_EMPTY(&zinfo->complete_queue)) {
-
+		zinfo->zio_cmd_in_ack = NULL;
+		while (1) {
 			if ((zinfo->state == ZVOL_INFO_STATE_OFFLINE) ||
 			    (zinfo->conn_closed == B_TRUE)) {
 				goto exit;
 			}
-			zinfo->io_ack_waiting = 1;
-			pthread_cond_wait(&zinfo->io_ack_cond,
-			    &zinfo->zinfo_mutex);
-			zinfo->io_ack_waiting = 0;
+			if (STAILQ_EMPTY(&zinfo->complete_queue)) {
+				zinfo->io_ack_waiting = 1;
+				pthread_cond_wait(&zinfo->io_ack_cond,
+				    &zinfo->zinfo_mutex);
+				zinfo->io_ack_waiting = 0;
+			}
+			else
+				break;
 		}
 
 		zio_cmd = STAILQ_FIRST(&zinfo->complete_queue);
 		STAILQ_REMOVE_HEAD(&zinfo->complete_queue, cmd_link);
+		zinfo->zio_cmd_in_ack = zio_cmd;
 		(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
 
 		LOG_DEBUG("ACK for op: %d, seq-id: %ld",
@@ -707,6 +723,11 @@ uzfs_zvol_io_ack_sender(void *arg)
 		    (char *)&zio_cmd->hdr, sizeof (zio_cmd->hdr));
 		if (rc == -1) {
 			LOG_ERRNO("socket write err");
+			zinfo->zio_cmd_in_ack = NULL;
+			/*
+			 * exit due to network errors on fd related
+			 * to iscsi target
+			 */
 			if (zio_cmd->conn == fd) {
 				zio_cmd_free(&zio_cmd);
 				(void) pthread_mutex_lock(&zinfo->zinfo_mutex);
@@ -721,8 +742,10 @@ uzfs_zvol_io_ack_sender(void *arg)
 				/* Send data read from disk */
 				rc = uzfs_send_reads(zio_cmd->conn, zio_cmd);
 				if (rc == -1) {
+					zinfo->zio_cmd_in_ack = NULL;
 					LOG_ERRNO("socket write err");
 					if (zio_cmd->conn == fd) {
+						zio_cmd_free(&zio_cmd);
 						(void) pthread_mutex_lock(
 						    &zinfo->zinfo_mutex);
 						goto exit;
@@ -733,12 +756,14 @@ uzfs_zvol_io_ack_sender(void *arg)
 		} else {
 			zinfo->write_req_ack_cnt++;
 		}
+		zinfo->zio_cmd_in_ack = NULL;
 		zio_cmd_free(&zio_cmd);
 	}
 exit:
 	LOG_DEBUG("uzfs_zvol_io_ack_sender thread for zvol %s exiting",
 	    zinfo->name);
 
+	zinfo->zio_cmd_in_ack = NULL;
 	close(fd);
 	while (!STAILQ_EMPTY(&zinfo->complete_queue)) {
 		zio_cmd = STAILQ_FIRST(&zinfo->complete_queue);

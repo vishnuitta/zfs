@@ -32,6 +32,7 @@
 
 static int uzfs_fd_rand = -1;
 kmutex_t zvol_list_mutex;
+char *uzfs_spa_tag = "UZFS_SPA_TAG";
 
 static nvlist_t *
 make_root(char *path, int ashift, int log)
@@ -104,6 +105,7 @@ uzfs_init(void)
 	int err = 0;
 
 	kernel_init(FREAD | FWRITE);
+	SLIST_INIT(&zvol_list);
 	uzfs_fd_rand = open("/dev/urandom", O_RDONLY);
 	if (uzfs_fd_rand == -1)
 		err = errno;
@@ -116,7 +118,7 @@ uzfs_init(void)
 void
 uzfs_close_pool(spa_t *spa)
 {
-	spa_close(spa, "UZFS_SPA_TAG");
+	spa_close(spa, uzfs_spa_tag);
 }
 
 /*
@@ -126,7 +128,7 @@ int
 uzfs_open_pool(char *name, spa_t **s)
 {
 	spa_t *spa = NULL;
-	int err = spa_open(name, &spa, "UZFS_SPA_TAG");
+	int err = spa_open(name, &spa, uzfs_spa_tag);
 	if (err != 0) {
 		spa = NULL;
 		goto ret;
@@ -330,6 +332,7 @@ uzfs_own_dataset(const char *ds_name, zvol_state_t **z)
 
 	zv->zv_spa = spa;
 	zfs_rlock_init(&zv->zv_range_lock);
+	mutex_init(&zv->rebuild_mtx, NULL, MUTEX_DEFAULT, NULL);
 
 	strlcpy(zv->zv_name, ds_name, MAXNAMELEN);
 
@@ -344,6 +347,7 @@ uzfs_own_dataset(const char *ds_name, zvol_state_t **z)
 disown_free:
 		dmu_objset_disown(zv->zv_objset, zv);
 free_ret:
+		mutex_destroy(&zv->rebuild_mtx);
 		zfs_rlock_destroy(&zv->zv_range_lock);
 		spa_close(spa, zv);
 		kmem_free(zv, sizeof (zvol_state_t));
@@ -528,9 +532,8 @@ uzfs_zvol_destroy_cb(const char *ds_name, void *arg)
 	return (uzfs_zinfo_destroy(ds_name, arg));
 }
 
-/* disowns, closes dataset */
 void
-uzfs_close_dataset(zvol_state_t *zv)
+uzfs_rele_dataset(zvol_state_t *zv)
 {
 	if (zv->zv_zilog != NULL)
 		zil_close(zv->zv_zilog);
@@ -538,6 +541,14 @@ uzfs_close_dataset(zvol_state_t *zv)
 		dnode_rele(zv->zv_dn, zv);
 	if (zv->zv_objset != NULL)
 		dmu_objset_disown(zv->zv_objset, zv);
+}
+
+/* disowns, closes dataset */
+void
+uzfs_close_dataset(zvol_state_t *zv)
+{
+	uzfs_rele_dataset(zv);
+	mutex_destroy(&zv->rebuild_mtx);
 	zfs_rlock_destroy(&zv->zv_range_lock);
 	spa_close(zv->zv_spa, zv);
 	kmem_free(zv, sizeof (zvol_state_t));
