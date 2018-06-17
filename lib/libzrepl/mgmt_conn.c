@@ -39,7 +39,7 @@
 #include <zrepl_prot.h>
 #include <uzfs_mgmt.h>
 
-#include "mgmt_conn.h"
+#include <mgmt_conn.h>
 #include "data_conn.h"
 
 /*
@@ -73,38 +73,9 @@
 #define	MGMT_PORT	"12000"
 #define	RECONNECT_DELAY	4	// 4 seconds
 
-/*
- * Mgmt connection states.
- */
-enum conn_state {
-	CS_CONNECT,		// tcp connect is in progress
-	CS_INIT,		// initial state or state after sending reply
-	CS_READ_VERSION,	// reading request version
-	CS_READ_HEADER,		// reading request header
-	CS_READ_PAYLOAD,	// reading request payload
-	CS_CLOSE,		// closing connection - final state
-};
-
-/*
- * Structure representing mgmt connection and all its reading/writing state.
- */
-typedef struct uzfs_mgmt_conn {
-	SLIST_ENTRY(uzfs_mgmt_conn) conn_next;
-	int		conn_fd;	// network socket FD
-	int		conn_refcount;	// should be 0 or 1
-	char		conn_host[MAX_IP_LEN];
-	uint16_t	conn_port;
-	enum conn_state	conn_state;
-	void		*conn_buf;	// buffer to hold network data
-	int		conn_bufsiz;    // bytes to read/write in total
-	int		conn_procn;	// bytes already read/written
-	zvol_io_hdr_t	*conn_hdr;	// header of currently processed cmd
-	time_t		conn_last_connect;  // time of last attempted connect()
-} uzfs_mgmt_conn_t;
-
 /* conn list can be traversed or changed only when holding the mutex */
 kmutex_t conn_list_mtx;
-SLIST_HEAD(, uzfs_mgmt_conn) uzfs_mgmt_conns;
+struct uzfs_mgmt_conn_list uzfs_mgmt_conns;
 
 /*
  * Blocking or lengthy operations must be executed asynchronously not to block
@@ -546,7 +517,6 @@ uzfs_zvol_rebuild_status(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp,
 	zvol_io_hdr_t		hdr;
 
 	status_ack.state = uzfs_zvol_get_status(zinfo->zv);
-	status_ack.rebuild_status = uzfs_zvol_get_rebuild_status(zinfo->zv);
 
 	bzero(&hdr, sizeof (hdr));
 	hdr.version = REPLICA_VERSION;
@@ -555,6 +525,20 @@ uzfs_zvol_rebuild_status(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp,
 	hdr.len = sizeof (status_ack);
 	hdr.status = ZVOL_OP_STATUS_OK;
 
+	mutex_enter(&zinfo->zv->rebuild_mtx);
+	status_ack.rebuild_status = uzfs_zvol_get_rebuild_status(zinfo->zv);
+
+	/*
+	 * Once the REBUILD_FAILED status is sent to target, rebuild status
+	 * need to be set to INIT so that rebuild can be retriggered
+	 */
+	if (uzfs_zvol_get_rebuild_status(zinfo->zv) == ZVOL_REBUILDING_FAILED) {
+		memset(&zinfo->zv->rebuild_info, 0,
+		    sizeof (zvol_rebuild_info_t));
+		uzfs_zvol_set_rebuild_status(zinfo->zv,
+		    ZVOL_REBUILDING_INIT);
+	}
+	mutex_exit(&zinfo->zv->rebuild_mtx);
 	return (reply_data(conn, &hdr, &status_ack, sizeof (status_ack)));
 }
 
@@ -724,61 +708,50 @@ uzfs_zvol_dispatch_command(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp,
 	return (epoll_ctl(epollfd, EPOLL_CTL_MOD, conn->conn_fd, &ev));
 }
 
+/*
+ * Sanitizes the START_REBUILD request payload.
+ * Starts rebuild thread to every helping replica
+ */
 static int
 uzfs_zvol_rebuild_dw_replica_start(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp,
-    mgmt_ack_t *mack, int rebuild_op_cnt)
+    mgmt_ack_t *mack, zvol_info_t *zinfo, int rebuild_op_cnt)
 {
 	int 			io_sfd = -1;
 	rebuild_thread_arg_t	*thrd_arg;
 	kthread_t		*thrd_info;
-	zvol_info_t		*zinfo = NULL;
 
 	for (; rebuild_op_cnt > 0; rebuild_op_cnt--, mack++) {
-		if (mack->volname[0] != '\0') {
-			LOG_INFO("zvol %s at %s:%u helping in rebuild",
-			    mack->volname, mack->ip, mack->port);
-		}
-		if (zinfo == NULL) {
-			zinfo = uzfs_zinfo_lookup(mack->dw_volname);
-			if ((zinfo == NULL) || (zinfo->mgmt_conn != conn)) {
-				LOG_ERR("zvol %s not found or not matching "
-				    "connection", mack->dw_volname);
-				return (reply_nodata(conn,
-				    ZVOL_OP_STATUS_FAILED,
-				    hdrp->opcode, hdrp->io_seq));
-			}
-			/* Track # of rebuilds we are initializing on replica */
-			zinfo->zv->rebuild_info.rebuild_cnt = rebuild_op_cnt;
+		LOG_INFO("zvol %s at %s:%u helping in rebuild",
+		    mack->volname, mack->ip, mack->port);
+		if (strncmp(zinfo->name, mack->dw_volname, MAXNAMELEN)
+		    != 0) {
+			LOG_ERR("zvol %s not matching with zinfo %s",
+			    mack->dw_volname, zinfo->name);
+ret_error:
+			mutex_enter(&zinfo->zv->rebuild_mtx);
+
+			/* Error happened, so set to REBUILD_ERRORED state */
+			uzfs_zvol_set_rebuild_status(zinfo->zv,
+			    ZVOL_REBUILDING_ERRORED);
+
+			(zinfo->zv->rebuild_info.rebuild_failed_cnt) +=
+			    rebuild_op_cnt;
+			(zinfo->zv->rebuild_info.rebuild_done_cnt) +=
+			    rebuild_op_cnt;
 
 			/*
-			 * Case where just one replica is being used by customer
+			 * If all the triggered rebuilds are done,
+			 * mark state as REBUILD_FAILED
 			 */
-			if ((strcmp(mack->volname, "")) == 0) {
-				zinfo->zv->rebuild_info.rebuild_cnt = 0;
-				zinfo->zv->rebuild_info.rebuild_done_cnt = 0;
-				/* Mark replica healthy now */
+			if (zinfo->zv->rebuild_info.rebuild_cnt ==
+			    zinfo->zv->rebuild_info.rebuild_done_cnt)
 				uzfs_zvol_set_rebuild_status(zinfo->zv,
-				    ZVOL_REBUILDING_DONE);
-				uzfs_zvol_set_status(zinfo->zv,
-				    ZVOL_STATUS_HEALTHY);
-				uzfs_update_ionum_interval(zinfo, 0);
-				LOG_INFO("Rebuild of zvol %s completed",
-				    zinfo->name);
-				uzfs_zinfo_drop_refcnt(zinfo, B_FALSE);
-				break;
-			}
-			uzfs_zvol_set_rebuild_status(zinfo->zv,
-			    ZVOL_REBUILDING_IN_PROGRESS);
-		} else {
-			if (strncmp(zinfo->name, mack->dw_volname, MAXNAMELEN)
-			    != 0) {
-				LOG_ERR("zvol %s not matching with zinfo %s",
-				    mack->dw_volname, zinfo->name);
-				return (reply_nodata(conn,
-				    ZVOL_OP_STATUS_FAILED,
-				    hdrp->opcode, hdrp->io_seq));
-			}
-			uzfs_zinfo_take_refcnt(zinfo, B_FALSE);
+				    ZVOL_REBUILDING_FAILED);
+
+			mutex_exit(&zinfo->zv->rebuild_mtx);
+			return (reply_nodata(conn,
+			    ZVOL_OP_STATUS_FAILED,
+			    hdrp->opcode, hdrp->io_seq));
 		}
 
 		io_sfd = create_and_bind("", B_FALSE, B_FALSE);
@@ -786,11 +759,10 @@ uzfs_zvol_rebuild_dw_replica_start(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp,
 			/* Fail this rebuild process entirely */
 			LOG_ERR("Rebuild IO socket create and bind"
 			    " failed on zvol: %s", zinfo->name);
-			uzfs_zvol_set_rebuild_status(zinfo->zv,
-			    ZVOL_REBUILDING_FAILED);
-			uzfs_zinfo_drop_refcnt(zinfo, B_FALSE);
-			break;
+			goto ret_error;
 		}
+
+		uzfs_zinfo_take_refcnt(zinfo, B_FALSE);
 
 		thrd_arg = kmem_alloc(sizeof (rebuild_thread_arg_t), KM_SLEEP);
 		thrd_arg->zinfo = zinfo;
@@ -804,8 +776,97 @@ uzfs_zvol_rebuild_dw_replica_start(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp,
 		VERIFY3P(thrd_info, !=, NULL);
 	}
 
-	conn->conn_state = CS_INIT;
-	return (move_to_next_state(conn));
+	return (reply_nodata(conn,
+	    ZVOL_OP_STATUS_OK,
+	    hdrp->opcode, hdrp->io_seq));
+}
+
+/*
+ * Sanitizes START_REBUILD request, its header.
+ * Handles rebuild for single replica case.
+ * Calls API to start threads with every helping replica to rebuild
+ */
+int
+handle_start_rebuild_req(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp,
+    void *payload, size_t payload_size)
+{
+	int rc = 0;
+	zvol_info_t *zinfo;
+
+	/* Invalid payload size */
+	if ((payload_size == 0) || (payload_size % sizeof (mgmt_ack_t)) != 0) {
+		LOG_ERR("rebuilding failed.. response is invalid");
+		rc = reply_nodata(conn, ZVOL_OP_STATUS_FAILED,
+		    hdrp->opcode, hdrp->io_seq);
+		goto end;
+	}
+
+	/* Find matching zinfo for given downgraded replica */
+	mgmt_ack_t *mack = (mgmt_ack_t *)payload;
+	zinfo = uzfs_zinfo_lookup(mack->dw_volname);
+	if ((zinfo == NULL) || (zinfo->mgmt_conn != conn) ||
+	    (zinfo->zv == NULL)) {
+		if (zinfo != NULL) {
+			LOG_ERR("rebuilding failed for %s..", zinfo->name);
+			uzfs_zinfo_drop_refcnt(zinfo, B_FALSE);
+		}
+		else
+			LOG_ERR("rebuilding failed..");
+		rc = reply_nodata(conn, ZVOL_OP_STATUS_FAILED,
+		    hdrp->opcode, hdrp->io_seq);
+		goto end;
+	}
+
+	mutex_enter(&zinfo->zv->rebuild_mtx);
+	/* Check rebuild status of downgraded zinfo */
+	if (uzfs_zvol_get_rebuild_status(zinfo->zv) !=
+	    ZVOL_REBUILDING_INIT) {
+		mutex_exit(&zinfo->zv->rebuild_mtx);
+		uzfs_zinfo_drop_refcnt(zinfo, B_FALSE);
+		LOG_ERR("rebuilding failed for %s due to improper rebuild "
+		    "status", zinfo->name);
+		rc = reply_nodata(conn, ZVOL_OP_STATUS_FAILED,
+		    hdrp->opcode, hdrp->io_seq);
+		goto end;
+	}
+	memset(&zinfo->zv->rebuild_info, 0, sizeof (zvol_rebuild_info_t));
+	int rebuild_op_cnt = (payload_size / sizeof (mgmt_ack_t));
+	/* Track # of rebuilds we are initializing on replica */
+	zinfo->zv->rebuild_info.rebuild_cnt = rebuild_op_cnt;
+
+	/*
+	 * Case where just one replica is being used by customer
+	 */
+	if ((strcmp(mack->volname, "")) == 0) {
+		zinfo->zv->rebuild_info.rebuild_cnt = 0;
+		zinfo->zv->rebuild_info.rebuild_done_cnt = 0;
+		/* Mark replica healthy now */
+		uzfs_zvol_set_rebuild_status(zinfo->zv,
+		    ZVOL_REBUILDING_DONE);
+		mutex_exit(&zinfo->zv->rebuild_mtx);
+		uzfs_zvol_set_status(zinfo->zv,
+		    ZVOL_STATUS_HEALTHY);
+		uzfs_update_ionum_interval(zinfo, 0);
+		LOG_INFO("Rebuild of zvol %s completed",
+		    zinfo->name);
+		uzfs_zinfo_drop_refcnt(zinfo, B_FALSE);
+		rc = reply_nodata(conn, ZVOL_OP_STATUS_OK,
+		    hdrp->opcode, hdrp->io_seq);
+		goto end;
+	}
+	uzfs_zvol_set_rebuild_status(zinfo->zv,
+	    ZVOL_REBUILDING_IN_PROGRESS);
+	mutex_exit(&zinfo->zv->rebuild_mtx);
+
+	DBGCONN(conn, "Rebuild start command");
+	/* Call API to start threads with every helping replica */
+	rc = uzfs_zvol_rebuild_dw_replica_start(conn, hdrp, payload,
+	    zinfo, rebuild_op_cnt);
+
+	/* dropping refcount for uzfs_zinfo_lookup */
+	uzfs_zinfo_drop_refcnt(zinfo, B_FALSE);
+end:
+	return (rc);
 }
 
 /*
@@ -960,14 +1021,8 @@ process_message(uzfs_mgmt_conn_t *conn)
 
 	case ZVOL_OPCODE_START_REBUILD:
 		/* iSCSI controller will send this msg to downgraded replica */
-		if (payload_size < sizeof (mgmt_ack_t)) {
-			rc = reply_nodata(conn, ZVOL_OP_STATUS_FAILED,
-			    hdrp->opcode, hdrp->io_seq);
-			break;
-		}
-		DBGCONN(conn, "Rebuild start command");
-		rc = uzfs_zvol_rebuild_dw_replica_start(conn, hdrp, payload,
-		    payload_size / sizeof (mgmt_ack_t));
+		rc = handle_start_rebuild_req(conn, hdrp, payload,
+		    payload_size);
 		break;
 
 	default:
@@ -1078,6 +1133,7 @@ uzfs_zvol_mgmt_thread(void *arg)
 	boolean_t		do_scan;
 	async_task_t		*async_task;
 
+	SLIST_INIT(&uzfs_mgmt_conns);
 	mutex_init(&conn_list_mtx, NULL, MUTEX_DEFAULT, NULL);
 	mutex_init(&async_tasks_mtx, NULL, MUTEX_DEFAULT, NULL);
 

@@ -32,12 +32,15 @@
 #include <uzfs_io.h>
 #include <uzfs_rebuilding.h>
 #include <zrepl_mgmt.h>
+#include "mgmt_conn.h"
 #include "data_conn.h"
 
-#define	ZVOL_REBUILD_STEP_SIZE  (128 * 1024 * 1024) // 128MB
+#define	ZVOL_REBUILD_STEP_SIZE  (10 * 1024ULL * 1024ULL * 1024ULL) // 10GB
 
-static kcondvar_t timer_cv;
-static kmutex_t timer_mtx;
+uint64_t zvol_rebuild_step_size = ZVOL_REBUILD_STEP_SIZE;
+
+kcondvar_t timer_cv;
+kmutex_t timer_mtx;
 
 /*
  * Allocate zio command along with
@@ -119,12 +122,8 @@ uzfs_zvol_socket_write(int fd, char *buf, uint64_t nbytes)
 	char *p = buf;
 	while (nbytes) {
 		count = write(fd, (void *)p, nbytes);
-		if (count <= 0) {
-			if (count == 0) {
-				LOG_INFO("Connection closed");
-			} else {
-				LOG_ERRNO("Socket write error");
-			}
+		if (count < 0) {
+			LOG_ERRNO("Socket write error");
 			return (-1);
 		}
 		p += count;
@@ -188,6 +187,10 @@ uzfs_submit_writes(zvol_info_t *zinfo, zvol_io_cmd_t *zio_cmd)
  * It execute read/write/sync command to uzfs.
  * It enqueue command to completion queue and
  * send signal to ack-sender thread.
+ *
+ * Write commands that are for rebuild will not
+ * be enqueued. Also, commands memory is
+ * maintained by its caller.
  */
 void
 uzfs_zvol_worker(void *arg)
@@ -256,7 +259,6 @@ uzfs_zvol_worker(void *arg)
 	 * We are not sending ACK for writes meant for rebuild
 	 */
 	if (rebuild_cmd_req && (hdr->opcode == ZVOL_OPCODE_WRITE)) {
-		zio_cmd_free(&zio_cmd);
 		goto drop_refcount;
 	}
 
@@ -307,6 +309,7 @@ uzfs_zvol_rebuild_dw_replica(void *arg)
 
 	if ((rc = connect(sfd, (struct sockaddr *)&replica_ip,
 	    sizeof (replica_ip))) != 0) {
+		LOG_ERRNO("connect failed");
 		perror("connect");
 		goto exit;
 	}
@@ -321,21 +324,23 @@ uzfs_zvol_rebuild_dw_replica(void *arg)
 	hdr.len = strlen(rebuild_args->zvol_name) + 1;
 
 	rc = uzfs_zvol_socket_write(sfd, (char *)&hdr, sizeof (hdr));
-	if (rc == -1) {
-		LOG_ERRNO("Socket write failed");
+	if (rc != 0) {
+		LOG_ERRNO("Socket hdr write failed");
 		goto exit;
 	}
 
 	rc = uzfs_zvol_socket_write(sfd, (void *)rebuild_args->zvol_name,
 	    hdr.len);
-	if (rc == -1) {
+	if (rc != 0) {
 		LOG_ERRNO("Socket write failed");
 		goto exit;
 	}
 
 next_step:
 
-	if (ZVOL_IS_REBUILDING_FAILED(zinfo->zv)) {
+	if (ZVOL_IS_REBUILDING_ERRORED(zinfo->zv)) {
+		LOG_ERR("rebuilding errored.. for %s..", zinfo->name);
+		rc = -1;
 		goto exit;
 	}
 
@@ -347,15 +352,7 @@ next_step:
 			goto exit;
 		}
 
-		atomic_inc_16(&zinfo->zv->rebuild_info.rebuild_done_cnt);
-		if (zinfo->zv->rebuild_info.rebuild_cnt ==
-		    zinfo->zv->rebuild_info.rebuild_done_cnt) {
-			/* Mark replica healthy now */
-			uzfs_zvol_set_rebuild_status(zinfo->zv,
-			    ZVOL_REBUILDING_DONE);
-			uzfs_zvol_set_status(zinfo->zv, ZVOL_STATUS_HEALTHY);
-			uzfs_update_ionum_interval(zinfo, 0);
-		}
+		rc = 0;
 		LOG_INFO("Rebuilding zvol %s completed", zinfo->name);
 		goto exit;
 	} else {
@@ -379,7 +376,10 @@ next_step:
 
 	while (1) {
 
-		if (ZVOL_IS_REBUILDING_FAILED(zinfo->zv)) {
+		if (ZVOL_IS_REBUILDING_ERRORED(zinfo->zv)) {
+			LOG_ERR("rebuilding already errored.. for %s..",
+			    zinfo->name);
+			rc = -1;
 			goto exit;
 		}
 
@@ -389,8 +389,15 @@ next_step:
 			goto exit;
 		}
 
+		if (hdr.status != ZVOL_OP_STATUS_OK) {
+			LOG_ERR("received err in rebuild.. for %s..",
+			    zinfo->name);
+			rc = -1;
+			goto exit;
+		}
+
 		if (hdr.opcode == ZVOL_OPCODE_REBUILD_STEP_DONE) {
-			offset += ZVOL_REBUILD_STEP_SIZE;
+			offset += zvol_rebuild_step_size;
 			LOG_DEBUG("ZVOL_OPCODE_REBUILD_STEP_DONE received");
 			goto next_step;
 		}
@@ -413,21 +420,46 @@ next_step:
 		uzfs_zinfo_take_refcnt(zinfo, B_FALSE);
 		zio_cmd->zv = zinfo;
 		uzfs_zvol_worker(zio_cmd);
-		zio_cmd = NULL;
+		if (zio_cmd->hdr.status != ZVOL_OP_STATUS_OK) {
+			LOG_ERR("rebuild IO failed.. for %s..", zinfo->name);
+			rc = -1;
+			goto exit;
+		}
+		zio_cmd_free(&zio_cmd);
 	}
 
 exit:
+	mutex_enter(&zinfo->zv->rebuild_mtx);
+	if (rc != 0) {
+		uzfs_zvol_set_rebuild_status(zinfo->zv,
+		    ZVOL_REBUILDING_ERRORED);
+		(zinfo->zv->rebuild_info.rebuild_failed_cnt) += 1;
+		LOG_ERR("uzfs_zvol_rebuild_dw_replica thread exiting, "
+		    "rebuilding failed zvol: %s", zinfo->name);
+	}
+	(zinfo->zv->rebuild_info.rebuild_done_cnt) += 1;
+	if (zinfo->zv->rebuild_info.rebuild_cnt ==
+	    zinfo->zv->rebuild_info.rebuild_done_cnt) {
+		if (zinfo->zv->rebuild_info.rebuild_failed_cnt != 0)
+			uzfs_zvol_set_rebuild_status(zinfo->zv,
+			    ZVOL_REBUILDING_FAILED);
+		else {
+			/* Mark replica healthy now */
+			uzfs_zvol_set_rebuild_status(zinfo->zv,
+			    ZVOL_REBUILDING_DONE);
+			uzfs_zvol_set_status(zinfo->zv, ZVOL_STATUS_HEALTHY);
+			uzfs_update_ionum_interval(zinfo, 0);
+		}
+	}
+	mutex_exit(&zinfo->zv->rebuild_mtx);
+
 	kmem_free(arg, sizeof (rebuild_thread_arg_t));
 	if (zio_cmd != NULL)
 		zio_cmd_free(&zio_cmd);
-	if (sfd != -1)
+	if (sfd != -1) {
+		shutdown(sfd, SHUT_RDWR);
 		close(sfd);
-
-	if (rc == -1)
-		uzfs_zvol_set_rebuild_status(zinfo->zv, ZVOL_REBUILDING_FAILED);
-
-	LOG_DEBUG("uzfs_zvol_rebuild_dw_replica thread exiting, zvol: %s",
-	    zinfo->name);
+	}
 	/* Parent thread have taken refcount, drop it now */
 	uzfs_zinfo_drop_refcnt(zinfo, B_FALSE);
 
@@ -441,8 +473,7 @@ uzfs_zvol_timer_thread(void)
 	time_t min_interval;
 	time_t now, next_check;
 
-	mutex_init(&timer_mtx, NULL, MUTEX_DEFAULT, NULL);
-	cv_init(&timer_cv, NULL, CV_DEFAULT, NULL);
+	init_zrepl();
 	prctl(PR_SET_NAME, "zvol_timer", 0, 0, 0);
 
 	mutex_enter(&timer_mtx);
@@ -500,4 +531,39 @@ uzfs_update_ionum_interval(zvol_info_t *zinfo, uint32_t timeout)
 		zinfo->update_ionum_interval = timeout;
 	cv_signal(&timer_cv);
 	mutex_exit(&timer_mtx);
+}
+
+/*
+ * This function finds cmds that need to be acked to its sender on a given fd,
+ * and removes those commands from that list.
+ */
+void
+remove_pending_cmds_to_ack(int fd, zvol_info_t *zinfo)
+{
+	zvol_io_cmd_t *zio_cmd, *zio_cmd_next;
+	(void) pthread_mutex_lock(&zinfo->zinfo_mutex);
+	zio_cmd = STAILQ_FIRST(&zinfo->complete_queue);
+	while (zio_cmd != NULL) {
+		zio_cmd_next = STAILQ_NEXT(zio_cmd, cmd_link);
+		if (zio_cmd->conn == fd) {
+			STAILQ_REMOVE(&zinfo->complete_queue, zio_cmd,
+			    zvol_io_cmd_s, cmd_link);
+			zio_cmd_free(&zio_cmd);
+		}
+		zio_cmd = zio_cmd_next;
+	}
+	while ((zinfo->zio_cmd_in_ack != NULL) &&
+	    (((zvol_io_cmd_t *)(zinfo->zio_cmd_in_ack))->conn == fd)) {
+		(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
+		sleep(1);
+		(void) pthread_mutex_lock(&zinfo->zinfo_mutex);
+	}
+	(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
+}
+
+void
+init_zrepl(void)
+{
+	mutex_init(&timer_mtx, NULL, MUTEX_DEFAULT, NULL);
+	cv_init(&timer_cv, NULL, CV_DEFAULT, NULL);
 }

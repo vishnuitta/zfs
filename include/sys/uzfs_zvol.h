@@ -53,7 +53,12 @@ typedef struct zvol_rebuild_info {
 	zvol_rebuild_status_t zv_rebuild_status; /* zvol rebuilding status */
 	uint64_t rebuild_bytes;
 	uint16_t rebuild_cnt;
+
+	/* peer replica cnt whose rebuild is done either success or failure */
 	uint16_t rebuild_done_cnt;
+
+	/* peer replica cnt whose rebuild is done and failure */
+	uint16_t rebuild_failed_cnt;
 } zvol_rebuild_info_t;
 
 /*
@@ -78,6 +83,7 @@ struct zvol_state {
 	 */
 	uint64_t zv_metavolblocksize;
 	zvol_status_t zv_status;		/* zvol status */
+	kmutex_t rebuild_mtx;
 	zvol_rebuild_info_t rebuild_info;
 };
 
@@ -89,10 +95,12 @@ typedef struct zvol_state zvol_state_t;
 #define	UZFS_IO_MREAD_FAIL	3
 
 #define	ZVOL_IS_DEGRADED(zv)	(zv->zv_status == ZVOL_STATUS_DEGRADED)
-#define	ZVOL_IS_REBUILDING(zv)	\
+#define	ZVOL_IS_REBUILDING(zv)		\
 	(zv->rebuild_info.zv_rebuild_status == ZVOL_REBUILDING_IN_PROGRESS)
-#define	ZVOL_IS_REBUILDED(zv)	\
+#define	ZVOL_IS_REBUILDED(zv)		\
 	(zv->rebuild_info.zv_rebuild_status == ZVOL_REBUILDING_DONE)
+#define	ZVOL_IS_REBUILDING_ERRORED(zv)	\
+	(zv->rebuild_info.zv_rebuild_status == ZVOL_REBUILDING_ERRORED)
 #define	ZVOL_IS_REBUILDING_FAILED(zv)	\
 	(zv->rebuild_info.zv_rebuild_status == ZVOL_REBUILDING_FAILED)
 

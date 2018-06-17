@@ -90,17 +90,26 @@ get_snapshot_zv(zvol_state_t *zv, char *snap_name, zvol_state_t **snap_zv)
 		}
 
 		ret = uzfs_open_dataset(zv->zv_spa, dataset, snap_zv);
-		if (ret == 0)
+		if (ret == 0) {
 			ret = uzfs_hold_dataset(*snap_zv);
+			if (ret != 0) {
+				LOG_ERR("Failed to hold snapshot: %d", ret);
+				uzfs_close_dataset(*snap_zv);
+			}
+		}
+		else
+			LOG_ERR("Failed to open snapshot: %d", ret);
 	} else if (ret == 0) {
+		LOG_INFO("holding already available snapshot %s@%s",
+		    zv->zv_name, snap_name);
 		ret = uzfs_hold_dataset(*snap_zv);
-	}
-
-	if (ret != 0) {
-		strfree(dataset);
-		LOG_ERR("Failed to own snapshot: %d", ret);
-		return (ret);
-	}
+		if (ret != 0) {
+			LOG_ERR("Failed to hold already existing snapshot: %d",
+			    ret);
+			uzfs_close_dataset(*snap_zv);
+		}
+	} else
+		LOG_ERR("Failed to open snapshot: %d", ret);
 
 	strfree(dataset);
 	return (ret);
@@ -219,8 +228,7 @@ uzfs_get_io_diff(zvol_state_t *zv, blk_metadata_t *low,
 
 			lun_offset += zv->zv_metavolblocksize;
 		}
-
-		if (diff_count) {
+		if (!ret && diff_count) {
 			EXECUTE_DIFF_CALLBACK(last_lun_offset, diff_count, buf,
 			    last_index, arg, last_md, snap_zv, func, ret);
 		}

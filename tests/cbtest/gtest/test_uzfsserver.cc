@@ -18,19 +18,31 @@
  *
  * CDDL HEADER END
  */
+
 /*
- * Copyright (c) 2018 Cloudbyte. All rights reserved.
+ * Copyright (c) 2018 CloudByte, Inc. All rights reserved.
  */
 
-#ifndef _MGMT_CONN_H
-#define	_MGMT_CONN_H
+#include <gtest/gtest.h>
+#include <unistd.h>
 
-#include <zrepl_mgmt.h>
+/* Avoid including conflicting C++ declarations for LE-BE conversions */
+#define _SYS_BYTEORDER_H
+#include <libuzfs.h>
 
-extern char *target_addr;
+TEST(uZFSServer, Setup) {
+	kernel_init(FREAD);
+	EXPECT_GT(kthread_nr, 0);
+}
 
-void zinfo_create_cb(zvol_info_t *zinfo, nvlist_t *create_props);
-void zinfo_destroy_cb(zvol_info_t *zinfo);
-void uzfs_zvol_mgmt_thread(void *arg);
+TEST(uZFSServer, ClientConnectNoServer) {
+	EXPECT_NE(0, libuzfs_client_init(NULL));
+}
 
-#endif	/* _MGMT_CONN_H */
+TEST(uZFSServer, InitServer) {
+	EXPECT_EQ(0, libuzfs_ioctl_init());
+}
+
+TEST(uZFSServer, ClientConnectServer) {
+	EXPECT_EQ(0, libuzfs_client_init(NULL));
+}

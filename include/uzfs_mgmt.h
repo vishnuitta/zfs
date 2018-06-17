@@ -45,6 +45,7 @@ extern void uzfs_close_pool(spa_t *spa);
 extern void uzfs_fini(void);
 extern uint64_t uzfs_random(uint64_t);
 extern int uzfs_hold_dataset(zvol_state_t *zv);
+extern void uzfs_rele_dataset(zvol_state_t *zv);
 
 int uzfs_pool_create(const char *name, char *path, spa_t **spa);
 #ifdef __cplusplus

@@ -11,4 +11,6 @@ AC_DEFUN([ZFS_ZOL_UZFS], [
 
 	AC_SUBST(UZFS_CFLAGS)
 	AC_MSG_RESULT([$enable_uzfs])
+	AM_CONDITIONAL([ENABLE_UZFS],
+	    [test "x$enable_uzfs" = xyes])
 ])

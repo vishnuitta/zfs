@@ -396,6 +396,14 @@ static void transition_zvol_to_online(int &ioseq, int control_fd,
 	rc = write(control_fd, &mgmt_ack, sizeof (mgmt_ack));
 	ASSERT_ERRNO("write", rc >= 0);
 	ASSERT_EQ(rc, sizeof (mgmt_ack));
+
+	rc = read(control_fd, &hdr_in, sizeof (hdr_in));
+	ASSERT_ERRNO("read", rc >= 0);
+	ASSERT_EQ(rc, sizeof (hdr_in));
+	EXPECT_EQ(hdr_in.opcode, ZVOL_OPCODE_START_REBUILD);
+	EXPECT_EQ(hdr_in.io_seq, ioseq);
+	EXPECT_EQ(hdr_in.status, ZVOL_OP_STATUS_OK);
+	EXPECT_EQ(hdr_in.len, 0);
 }
 
 /*

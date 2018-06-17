@@ -282,6 +282,17 @@ zrepl_utest_replica_rebuild_start(int fd, mgmt_ack_t *mgmt_ack,
 		printf("rebuild_start: sending volname failed\n");
 		return (count);
 	}
+
+	count = read(fd, (void *)&hdr, sizeof (zvol_io_hdr_t));
+	if (count == -1) {
+		printf("start rebuild: error in hdr read\n");
+		return (-1);
+	}
+	if (hdr.status != ZVOL_OP_STATUS_OK) {
+		printf("hdr status: response failed\n");
+		return (-1);
+	}
+
 	return (0);
 }
 
