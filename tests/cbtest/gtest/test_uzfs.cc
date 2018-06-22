@@ -28,6 +28,9 @@
 
 /* Avoid including conflicting C++ declarations for LE-BE conversions */
 #define _SYS_BYTEORDER_H
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include <sys/spa.h>
 #include <libuzfs.h>
 #include <zrepl_mgmt.h>
@@ -60,6 +63,20 @@ make_vdev(const char *path)
 }
 
 void
+uzfs_mock_io_receiver(void *arg)
+{
+	sleep(5);
+	zk_thread_exit();
+}
+
+void
+uzfs_mock_rebuild_scanner(void *arg)
+{
+	sleep(5);
+	zk_thread_exit();
+}
+
+void
 setup_unit_test(char *path)
 {
 	make_vdev(path);
@@ -79,6 +96,7 @@ TEST(uZFS, Setup) {
 	strncpy(pool, "pool1", MAXNAMELEN);
 	strncpy(ds_name, "vol1", MAXNAMELEN);
 	strncpy(pool_ds, "pool1/vol1", MAXNAMELEN);
+	signal(SIGPIPE, SIG_IGN);
 
 	uzfs_init();
 	init_zrepl();
@@ -94,6 +112,11 @@ TEST(uZFS, Setup) {
 
 	zinfo_create_hook = &zinfo_create_cb;
 	zinfo_destroy_hook = &zinfo_destroy_cb;
+
+	io_receiver = &uzfs_mock_io_receiver;
+	rebuild_scanner = &uzfs_mock_rebuild_scanner;
+
+	zrepl_log_level = LOG_LEVEL_DEBUG;
 
 	uzfs_zinfo_init(zv, pool_ds, NULL);
 	zinfo = uzfs_zinfo_lookup(ds_name);
@@ -200,6 +223,7 @@ TEST(uZFS, TestStartRebuild) {
 	int i;
 	uzfs_mgmt_conn_t *conn;
 	mgmt_ack_t *mack;
+	int nthreads = kthread_nr;
 
 	zvol_rebuild_status_t rebuild_status[5];
 	rebuild_status[0] = ZVOL_REBUILDING_INIT;
@@ -266,7 +290,10 @@ TEST(uZFS, TestStartRebuild) {
 	handle_start_rebuild_req(conn, hdrp, payload, sizeof (mgmt_ack_t));
 	EXPECT_EQ(ZVOL_OP_STATUS_OK, ((zvol_io_hdr_t *)conn->conn_buf)->status);
 	while (1) {
-		if (uzfs_zvol_get_rebuild_status(zinfo->zv) != ZVOL_REBUILDING_FAILED)
+		/* wait to get FAILD status, and threads to return */
+		if (ZVOL_REBUILDING_FAILED != uzfs_zvol_get_rebuild_status(zinfo->zv))
+			sleep(1);
+		else if (nthreads != kthread_nr)
 			sleep(1);
 		else
 			break;
@@ -282,11 +309,15 @@ TEST(uZFS, TestStartRebuild) {
 	handle_start_rebuild_req(conn, hdrp, payload, sizeof (mgmt_ack_t)*2);
 	EXPECT_EQ(ZVOL_OP_STATUS_FAILED, ((zvol_io_hdr_t *)conn->conn_buf)->status);
 	while (1) {
-		if (uzfs_zvol_get_rebuild_status(zinfo->zv) != ZVOL_REBUILDING_FAILED)
+		/* wait to get FAILD status, and threads to return */
+		if (ZVOL_REBUILDING_FAILED != uzfs_zvol_get_rebuild_status(zinfo->zv))
+			sleep(1);
+		else if (nthreads != kthread_nr)
 			sleep(1);
 		else
 			break;
 	}
+	EXPECT_EQ(ZVOL_REBUILDING_FAILED, uzfs_zvol_get_rebuild_status(zinfo->zv));
 	EXPECT_EQ(2, zinfo->refcnt);
 
 	/* rebuild in three replicas case with 'connect' failing */
@@ -298,11 +329,15 @@ TEST(uZFS, TestStartRebuild) {
 	handle_start_rebuild_req(conn, hdrp, payload, sizeof (mgmt_ack_t)*2);
 	EXPECT_EQ(ZVOL_OP_STATUS_OK, ((zvol_io_hdr_t *)conn->conn_buf)->status);
 	while (1) {
-		if (uzfs_zvol_get_rebuild_status(zinfo->zv) != ZVOL_REBUILDING_FAILED)
+		/* wait to get FAILD status, and threads to return */
+		if (ZVOL_REBUILDING_FAILED != uzfs_zvol_get_rebuild_status(zinfo->zv))
+			sleep(1);
+		else if (nthreads != kthread_nr)
 			sleep(1);
 		else
 			break;
 	}
+	EXPECT_EQ(ZVOL_REBUILDING_FAILED, uzfs_zvol_get_rebuild_status(zinfo->zv));
 	EXPECT_EQ(2, zinfo->refcnt);
 }
 
@@ -387,4 +422,92 @@ TEST(uZFS, RemovePendingCmds) {
 
 	remove_pending_cmds_to_ack(1, zinfo);
 	EXPECT_EQ(0, complete_q_list_count(zinfo));
+}
+
+extern uint16_t io_server_port;
+extern uint16_t rebuild_io_server_port;
+
+TEST(uZFS, TestIOConnAcceptor) {
+	int fd;
+	int rc;
+	int nthreads = kthread_nr;
+	kthread_t *conn_accpt_thread, *conn_accpt_thread1;
+	char port[8];
+	char ip[MAX_IP_LEN];
+	struct sockaddr_in replica_io_addr;
+	conn_acceptors_t *ca;
+
+	io_server_port = IO_SERVER_PORT;
+	rebuild_io_server_port = REBUILD_IO_SERVER_PORT;
+	ca = (conn_acceptors_t *)kmem_zalloc(sizeof (conn_acceptors_t),
+	    KM_SLEEP);
+
+	conn_accpt_thread = zk_thread_create(NULL, 0,
+	    uzfs_zvol_io_conn_acceptor, ca, 0, NULL, TS_RUN,
+	    0, PTHREAD_CREATE_DETACHED);
+	EXPECT_EQ(NULL, !conn_accpt_thread);
+	while (1) {
+		if(ca->io_fd == 0)
+			sleep(1);
+		else
+			break;
+	}
+
+	/* connect to io_conn_acceptor */
+	bzero((char *)&replica_io_addr, sizeof (replica_io_addr));
+	uzfs_zvol_get_ip(ip);
+	replica_io_addr.sin_family = AF_INET;
+	replica_io_addr.sin_addr.s_addr = inet_addr(ip);
+	replica_io_addr.sin_port = htons(IO_SERVER_PORT);
+
+	fd = create_and_bind("", B_FALSE, B_FALSE);
+	EXPECT_NE(fd, -1);
+
+	rc = connect(fd, (struct sockaddr *)&replica_io_addr,
+	    sizeof (replica_io_addr));
+	EXPECT_NE(rc, -1);
+
+	while (1) {
+		/* wait to create io_thread */
+		if((nthreads + 2) != kthread_nr)
+			sleep(1);
+		else
+			break;
+	}
+	shutdown(fd, SHUT_RDWR);
+	close(fd);
+	EXPECT_EQ(nthreads + 2, kthread_nr);
+
+	/* connect to rebuild_conn_acceptor */
+	bzero((char *)&replica_io_addr, sizeof (replica_io_addr));
+	uzfs_zvol_get_ip(ip);
+	replica_io_addr.sin_family = AF_INET;
+	replica_io_addr.sin_addr.s_addr = inet_addr(ip);
+	replica_io_addr.sin_port = htons(REBUILD_IO_SERVER_PORT);
+
+	fd = create_and_bind("", B_FALSE, B_FALSE);
+	EXPECT_NE(fd, -1);
+
+	rc = connect(fd, (struct sockaddr *)&replica_io_addr,
+	    sizeof (replica_io_addr));
+	EXPECT_NE(rc, -1);
+
+	while (1) {
+		/* wait to create rebuild_thread */
+		if((nthreads + 3) != kthread_nr)
+			sleep(1);
+		else
+			break;
+	}
+	shutdown(fd, SHUT_RDWR);
+	close(fd);
+	EXPECT_EQ(nthreads + 3, kthread_nr);
+
+	/* wait for threads to return */
+	while (1) {
+		if((nthreads + 1) != kthread_nr)
+			sleep(1);
+		else
+			break;
+	}
 }

@@ -22,6 +22,7 @@
  * Copyright (c) 2018 Cloudbyte. All rights reserved.
  */
 
+#include <sys/epoll.h>
 #include <sys/prctl.h>
 #include <netdb.h>
 #include <sys/types.h>
@@ -35,7 +36,11 @@
 #include "mgmt_conn.h"
 #include "data_conn.h"
 
+#define	MAXEVENTS 64
 #define	ZVOL_REBUILD_STEP_SIZE  (10 * 1024ULL * 1024ULL * 1024ULL) // 10GB
+
+uint16_t io_server_port = IO_SERVER_PORT;
+uint16_t rebuild_io_server_port = REBUILD_IO_SERVER_PORT;
 
 uint64_t zvol_rebuild_step_size = ZVOL_REBUILD_STEP_SIZE;
 
@@ -556,6 +561,197 @@ remove_pending_cmds_to_ack(int fd, zvol_info_t *zinfo)
 		(void) pthread_mutex_lock(&zinfo->zinfo_mutex);
 	}
 	(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
+}
+
+/*
+ * One thread per replica. Responsible for accepting
+ * IO connections. This thread will accept a connection
+ * and spawn a new thread for each new connection req.
+ *
+ * This accepts connections for rebuild operation from
+ * another replica to help it in rebuilding missing data.
+ *
+ * Exits if any error in bind/listen/epoll_* APIs
+ */
+void
+uzfs_zvol_io_conn_acceptor(void *arg)
+{
+	int			io_sfd, efd;
+	intptr_t		new_fd;
+	int			rebuild_fd;
+	int			rc, i, n;
+	uint32_t		flags;
+#ifdef DEBUG
+	char			*hbuf;
+	char			*sbuf;
+#endif
+	kthread_t		*thrd_info;
+	socklen_t		in_len;
+	struct sockaddr		in_addr;
+	struct epoll_event	event;
+	struct epoll_event	*events = NULL;
+	char port[10];
+	conn_acceptors_t	*ca = (conn_acceptors_t *)arg;
+
+	io_sfd = rebuild_fd = efd = -1;
+	flags = EPOLLIN | EPOLLERR | EPOLLHUP | EPOLLRDHUP;
+
+	/* Create IO connection acceptor fd in non-blocking mode */
+	snprintf(port, 8, "%d", io_server_port);
+	io_sfd = create_and_bind(port, B_TRUE, B_FALSE);
+	if (io_sfd == -1) {
+		LOG_ERRNO("unable to bind %s", port);
+		goto exit;
+	}
+
+	rc = listen(io_sfd, SOMAXCONN);
+	if (rc == -1) {
+		LOG_ERRNO("listen on IO FD in acceptor failed");
+		goto exit;
+	}
+	LOG_DEBUG("listening %s %d for IO", port, io_sfd);
+
+	snprintf(port, 8, "%d", rebuild_io_server_port);
+	rebuild_fd = create_and_bind(port, B_TRUE, B_FALSE);
+	if (rebuild_fd == -1) {
+		LOG_ERRNO("unable to bind %s", port);
+		goto exit;
+	}
+
+	rc = listen(rebuild_fd, SOMAXCONN);
+	if (rc == -1) {
+		LOG_ERRNO("listen on rebuild FD in acceptor failed");
+		goto exit;
+	}
+	LOG_DEBUG("listening %s %d for rebuild", port, rebuild_fd);
+
+	efd = epoll_create1(0);
+	if (efd == -1) {
+		LOG_ERRNO("epoll_create1 failed");
+		goto exit;
+	}
+
+	event.data.fd = io_sfd;
+	event.events = flags;
+	rc = epoll_ctl(efd, EPOLL_CTL_ADD, io_sfd, &event);
+	if (rc == -1) {
+		LOG_ERRNO("epoll_ctl on IO FD failed");
+		goto exit;
+	}
+
+	event.data.fd = rebuild_fd;
+	event.events = flags;
+	rc = epoll_ctl(efd, EPOLL_CTL_ADD, rebuild_fd, &event);
+	if (rc == -1) {
+		LOG_ERRNO("epoll_ctl on rebuild FD failed");
+		goto exit;
+	}
+
+	/* Buffer where events are returned */
+	events = calloc(MAXEVENTS, sizeof (event));
+
+	prctl(PR_SET_NAME, "acceptor", 0, 0, 0);
+
+	if (ca != NULL) {
+		ca->io_fd = io_sfd;
+		ca->rebuild_fd = rebuild_fd;
+	}
+
+	/* The event loop */
+	while (1) {
+		n = epoll_wait(efd, events, MAXEVENTS, -1);
+		/*
+		 * EINTR err can come when signal handler
+		 * interrupt epoll_wait system call. It
+		 * should be okay to continue in that case.
+		 */
+		if ((n < 0) && (errno == EINTR)) {
+			continue;
+		} else if (n < 0) {
+			goto exit;
+		}
+
+		for (i = 0; i < n; i++) {
+			/*
+			 * An error has occured on this fd, or
+			 * the socket is not ready for reading
+			 * (why were we notified then?)
+			 */
+			if ((events[i].events & (~EPOLLIN)) != 0) {
+				LOG_ERRNO("epoll failed");
+				if (events[i].data.fd == io_sfd) {
+					io_sfd = -1;
+				} else {
+					rebuild_fd = -1;
+				}
+				close(events[i].data.fd);
+				/*
+				 * TODO:We have choosen to exit
+				 * instead of continuing here.
+				 */
+				goto exit;
+			}
+			/*
+			 * We have a notification on the listening
+			 * socket, which means one or more incoming
+			 * connections.
+			 */
+			in_len = sizeof (in_addr);
+			new_fd = accept(events[i].data.fd, &in_addr, &in_len);
+			if (new_fd == -1) {
+				LOG_ERRNO("accept failed");
+				continue;
+			}
+#ifdef DEBUG
+			hbuf = kmem_alloc(sizeof (NI_MAXHOST), KM_SLEEP);
+			sbuf = kmem_alloc(sizeof (NI_MAXSERV), KM_SLEEP);
+			rc = getnameinfo(&in_addr, in_len, hbuf, sizeof (hbuf),
+			    sbuf, sizeof (sbuf), NI_NUMERICHOST |
+			    NI_NUMERICSERV);
+			if (rc == 0) {
+				LOG_DEBUG("Accepted connection from %s:%s",
+				    hbuf, sbuf);
+			}
+
+			kmem_free(hbuf, sizeof (NI_MAXHOST));
+			kmem_free(sbuf, sizeof (NI_MAXSERV));
+#endif
+			if (events[i].data.fd == io_sfd) {
+				LOG_INFO("Connection req for data IO");
+				thrd_info = zk_thread_create(NULL, 0,
+				    (thread_func_t)io_receiver,
+				    (void *)new_fd, 0, NULL, TS_RUN, 0,
+				    PTHREAD_CREATE_DETACHED);
+			} else {
+				LOG_INFO("Connection req for rebuild");
+				thrd_info = zk_thread_create(NULL, 0,
+				    (thread_func_t)rebuild_scanner,
+				    (void *)new_fd, 0, NULL, TS_RUN, 0,
+				    PTHREAD_CREATE_DETACHED);
+			}
+			VERIFY3P(thrd_info, !=, NULL);
+		}
+	}
+exit:
+	if (events != NULL)
+		free(events);
+
+	if (io_sfd != -1) {
+		LOG_DEBUG("closing iofd %d", io_sfd);
+		close(io_sfd);
+	}
+
+	if (rebuild_fd != -1) {
+		LOG_DEBUG("closing rebuildfd %d", rebuild_fd);
+		close(rebuild_fd);
+	}
+
+	if (efd != -1)
+		close(efd);
+
+	LOG_DEBUG("uzfs_zvol_io_conn_acceptor thread exiting");
+
+	exit(1);
 }
 
 void

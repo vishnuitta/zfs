@@ -40,8 +40,8 @@ extern "C" {
 #define	uZFS_ZVOL_WORKERS_DEFAULT 6
 #define	ZFS_PROP_TARGET_IP	"io.openebs:targetip"
 
-#define	REBUILD_IO_SERVER_PORT	"3233"
-#define	IO_SERVER_PORT	"3232"
+#define	REBUILD_IO_SERVER_PORT	3233
+#define	IO_SERVER_PORT	3232
 
 enum zrepl_log_level {
 	LOG_LEVEL_DEBUG,
