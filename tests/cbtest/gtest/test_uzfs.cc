@@ -118,6 +118,8 @@ TEST(uZFS, Setup) {
 
 	zrepl_log_level = LOG_LEVEL_DEBUG;
 
+	/* give time to get the zfs threads created */
+	sleep(5);
 	uzfs_zinfo_init(zv, pool_ds, NULL);
 	zinfo = uzfs_zinfo_lookup(ds_name);
 	EXPECT_EQ(0, !zinfo);
@@ -223,7 +225,6 @@ TEST(uZFS, TestStartRebuild) {
 	int i;
 	uzfs_mgmt_conn_t *conn;
 	mgmt_ack_t *mack;
-	int nthreads = kthread_nr;
 
 	zvol_rebuild_status_t rebuild_status[5];
 	rebuild_status[0] = ZVOL_REBUILDING_INIT;
@@ -290,15 +291,14 @@ TEST(uZFS, TestStartRebuild) {
 	handle_start_rebuild_req(conn, hdrp, payload, sizeof (mgmt_ack_t));
 	EXPECT_EQ(ZVOL_OP_STATUS_OK, ((zvol_io_hdr_t *)conn->conn_buf)->status);
 	while (1) {
-		/* wait to get FAILD status, and threads to return */
+		/* wait to get FAILD status, and threads to return with refcnt to 2 */
 		if (ZVOL_REBUILDING_FAILED != uzfs_zvol_get_rebuild_status(zinfo->zv))
 			sleep(1);
-		else if (nthreads != kthread_nr)
+		else if (2 != zinfo->refcnt)
 			sleep(1);
 		else
 			break;
 	}
-	EXPECT_EQ(2, zinfo->refcnt);
 
 	/* rebuild in three replicas case with invalid volname to rebuild */
 	conn->conn_buf = NULL;
@@ -309,16 +309,14 @@ TEST(uZFS, TestStartRebuild) {
 	handle_start_rebuild_req(conn, hdrp, payload, sizeof (mgmt_ack_t)*2);
 	EXPECT_EQ(ZVOL_OP_STATUS_FAILED, ((zvol_io_hdr_t *)conn->conn_buf)->status);
 	while (1) {
-		/* wait to get FAILD status, and threads to return */
+		/* wait to get FAILD status, and threads to return with refcnt to 2 */
 		if (ZVOL_REBUILDING_FAILED != uzfs_zvol_get_rebuild_status(zinfo->zv))
 			sleep(1);
-		else if (nthreads != kthread_nr)
+		else if (2 != zinfo->refcnt)
 			sleep(1);
 		else
 			break;
 	}
-	EXPECT_EQ(ZVOL_REBUILDING_FAILED, uzfs_zvol_get_rebuild_status(zinfo->zv));
-	EXPECT_EQ(2, zinfo->refcnt);
 
 	/* rebuild in three replicas case with 'connect' failing */
 	conn->conn_buf = NULL;
@@ -329,16 +327,14 @@ TEST(uZFS, TestStartRebuild) {
 	handle_start_rebuild_req(conn, hdrp, payload, sizeof (mgmt_ack_t)*2);
 	EXPECT_EQ(ZVOL_OP_STATUS_OK, ((zvol_io_hdr_t *)conn->conn_buf)->status);
 	while (1) {
-		/* wait to get FAILD status, and threads to return */
+		/* wait to get FAILD status, and threads to return with refcnt to 2 */
 		if (ZVOL_REBUILDING_FAILED != uzfs_zvol_get_rebuild_status(zinfo->zv))
 			sleep(1);
-		else if (nthreads != kthread_nr)
+		else if (2 != zinfo->refcnt)
 			sleep(1);
 		else
 			break;
 	}
-	EXPECT_EQ(ZVOL_REBUILDING_FAILED, uzfs_zvol_get_rebuild_status(zinfo->zv));
-	EXPECT_EQ(2, zinfo->refcnt);
 }
 
 int
@@ -463,20 +459,20 @@ TEST(uZFS, TestIOConnAcceptor) {
 	fd = create_and_bind("", B_FALSE, B_FALSE);
 	EXPECT_NE(fd, -1);
 
+	nthreads = kthread_nr;
 	rc = connect(fd, (struct sockaddr *)&replica_io_addr,
 	    sizeof (replica_io_addr));
 	EXPECT_NE(rc, -1);
 
 	while (1) {
 		/* wait to create io_thread */
-		if((nthreads + 2) != kthread_nr)
+		if((nthreads + 1) != kthread_nr)
 			sleep(1);
 		else
 			break;
 	}
 	shutdown(fd, SHUT_RDWR);
 	close(fd);
-	EXPECT_EQ(nthreads + 2, kthread_nr);
 
 	/* connect to rebuild_conn_acceptor */
 	bzero((char *)&replica_io_addr, sizeof (replica_io_addr));
@@ -488,24 +484,25 @@ TEST(uZFS, TestIOConnAcceptor) {
 	fd = create_and_bind("", B_FALSE, B_FALSE);
 	EXPECT_NE(fd, -1);
 
+	nthreads = kthread_nr;
 	rc = connect(fd, (struct sockaddr *)&replica_io_addr,
 	    sizeof (replica_io_addr));
 	EXPECT_NE(rc, -1);
 
 	while (1) {
 		/* wait to create rebuild_thread */
-		if((nthreads + 3) != kthread_nr)
+		if((nthreads + 1) != kthread_nr)
 			sleep(1);
 		else
 			break;
 	}
 	shutdown(fd, SHUT_RDWR);
 	close(fd);
-	EXPECT_EQ(nthreads + 3, kthread_nr);
 
-	/* wait for threads to return */
+	/* wait for two threads (mock_io_receiver & rebuild_scanner) to return */
+	nthreads = kthread_nr;
 	while (1) {
-		if((nthreads + 1) != kthread_nr)
+		if((nthreads - 2) != kthread_nr)
 			sleep(1);
 		else
 			break;
