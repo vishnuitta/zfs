@@ -37,12 +37,12 @@
 #include "data_conn.h"
 
 #define	MAXEVENTS 64
+
 #define	ZVOL_REBUILD_STEP_SIZE  (10 * 1024ULL * 1024ULL * 1024ULL) // 10GB
+uint64_t zvol_rebuild_step_size = ZVOL_REBUILD_STEP_SIZE;
 
 uint16_t io_server_port = IO_SERVER_PORT;
 uint16_t rebuild_io_server_port = REBUILD_IO_SERVER_PORT;
-
-uint64_t zvol_rebuild_step_size = ZVOL_REBUILD_STEP_SIZE;
 
 kcondvar_t timer_cv;
 kmutex_t timer_mtx;
@@ -99,6 +99,10 @@ zio_cmd_free(zvol_io_cmd_t **cmd)
 	*cmd = NULL;
 }
 
+/*
+ * This API is to read data from "blocking" sockets
+ * Returns 0 on success, -1 on error
+ */
 int
 uzfs_zvol_socket_read(int fd, char *buf, uint64_t nbytes)
 {
@@ -106,12 +110,13 @@ uzfs_zvol_socket_read(int fd, char *buf, uint64_t nbytes)
 	char *p = buf;
 	while (nbytes) {
 		count = read(fd, (void *)p, nbytes);
-		if (count <= 0) {
-			if (count == 0) {
-				LOG_INFO("Connection closed");
-			} else {
-				LOG_ERRNO("Socket read error");
-			}
+		if (count < 0) {
+			if (errno == EINTR)
+				continue;
+			LOG_ERRNO("Socket read error %d", fd);
+			return (-1);
+		} else if (count == 0) {
+			LOG_ERRNO("Socket conn closed %d", fd);
 			return (-1);
 		}
 		p += count;
@@ -120,6 +125,10 @@ uzfs_zvol_socket_read(int fd, char *buf, uint64_t nbytes)
 	return (0);
 }
 
+/*
+ * This API is to write data from "blocking" sockets
+ * Returns 0 on success, -1 on error
+ */
 int
 uzfs_zvol_socket_write(int fd, char *buf, uint64_t nbytes)
 {
@@ -128,6 +137,8 @@ uzfs_zvol_socket_write(int fd, char *buf, uint64_t nbytes)
 	while (nbytes) {
 		count = write(fd, (void *)p, nbytes);
 		if (count < 0) {
+			if (errno == EINTR)
+				continue;
 			LOG_ERRNO("Socket write error");
 			return (-1);
 		}
@@ -300,9 +311,16 @@ uzfs_zvol_rebuild_dw_replica(void *arg)
 	zvol_state_t	*zvol_state;
 	zvol_io_cmd_t	*zio_cmd = NULL;
 	zvol_io_hdr_t 	hdr;
+	struct linger lo = { 1, 0 };
 
 	sfd = rebuild_args->fd;
 	zinfo = rebuild_args->zinfo;
+
+	if ((rc = setsockopt(sfd, SOL_SOCKET, SO_LINGER, &lo, sizeof (lo)))
+	    != 0) {
+		LOG_ERRNO("setsockopt failed");
+		goto exit;
+	}
 
 	bzero(&replica_ip, sizeof (replica_ip));
 	replica_ip.sin_family = AF_INET;
@@ -327,14 +345,14 @@ uzfs_zvol_rebuild_dw_replica(void *arg)
 
 	rc = uzfs_zvol_socket_write(sfd, (char *)&hdr, sizeof (hdr));
 	if (rc != 0) {
-		LOG_ERRNO("Socket hdr write failed");
+		LOG_ERR("Socket hdr write failed");
 		goto exit;
 	}
 
 	rc = uzfs_zvol_socket_write(sfd, (void *)rebuild_args->zvol_name,
 	    hdr.len);
 	if (rc != 0) {
-		LOG_ERRNO("Socket write failed");
+		LOG_ERR("Socket handshake write failed");
 		goto exit;
 	}
 
@@ -350,7 +368,9 @@ next_step:
 		hdr.opcode = ZVOL_OPCODE_REBUILD_COMPLETE;
 		rc = uzfs_zvol_socket_write(sfd, (char *)&hdr, sizeof (hdr));
 		if (rc != 0) {
-			LOG_ERRNO("Socket write failed");
+			LOG_ERRNO("Socket rebuild_complete write failed, but,"
+			    "counting as success with this replica");
+			rc = 0;
 			goto exit;
 		}
 
@@ -364,14 +384,14 @@ next_step:
 		hdr.opcode = ZVOL_OPCODE_REBUILD_STEP;
 		hdr.checkpointed_io_seq = checkpointed_ionum;
 		hdr.offset = offset;
-		if ((offset + ZVOL_REBUILD_STEP_SIZE) >
+		if ((offset + zvol_rebuild_step_size) >
 		    ZVOL_VOLUME_SIZE(zvol_state))
 			hdr.len = ZVOL_VOLUME_SIZE(zvol_state) - offset;
 		else
-			hdr.len = ZVOL_REBUILD_STEP_SIZE;
+			hdr.len = zvol_rebuild_step_size;
 		rc = uzfs_zvol_socket_write(sfd, (char *)&hdr, sizeof (hdr));
 		if (rc != 0) {
-			LOG_ERRNO("Socket write failed");
+			LOG_ERR("Socket rebuild_step write failed");
 			goto exit;
 		}
 	}
@@ -387,7 +407,7 @@ next_step:
 
 		rc = uzfs_zvol_socket_read(sfd, (char *)&hdr, sizeof (hdr));
 		if (rc != 0) {
-			LOG_ERRNO("Socket read failed");
+			LOG_ERR("Socket read failed");
 			goto exit;
 		}
 
@@ -411,7 +431,7 @@ next_step:
 		zio_cmd = zio_cmd_alloc(&hdr, sfd);
 		rc = uzfs_zvol_socket_read(sfd, zio_cmd->buf, hdr.len);
 		if (rc != 0) {
-			LOG_ERRNO("Socket read failed");
+			LOG_ERR("Socket read writeIO failed");
 			goto exit;
 		}
 
