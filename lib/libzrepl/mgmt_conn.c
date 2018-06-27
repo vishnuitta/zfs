@@ -397,7 +397,7 @@ reply_data(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp, void *buf, int size)
 /*
  * Get IP address of first external network interface we encounter.
  */
-static int
+int
 uzfs_zvol_get_ip(char *host)
 {
 	struct ifaddrs *ifaddr, *ifa;
@@ -464,8 +464,8 @@ uzfs_zvol_mgmt_do_handshake(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp,
 	}
 
 	strncpy(mgmt_ack.volname, name, sizeof (mgmt_ack.volname));
-	mgmt_ack.port = atoi((hdrp->opcode == ZVOL_OPCODE_PREPARE_FOR_REBUILD) ?
-	    REBUILD_IO_SERVER_PORT : IO_SERVER_PORT);
+	mgmt_ack.port = (hdrp->opcode == ZVOL_OPCODE_PREPARE_FOR_REBUILD) ?
+	    REBUILD_IO_SERVER_PORT : IO_SERVER_PORT;
 	mgmt_ack.pool_guid = spa_guid(zv->zv_spa);
 
 	/*

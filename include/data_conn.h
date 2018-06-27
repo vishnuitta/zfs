@@ -40,6 +40,23 @@ typedef struct rebuild_thread_arg {
 	uint16_t	port;
 } rebuild_thread_arg_t;
 
+typedef struct conn_acceptors {
+	int io_fd;
+	int rebuild_fd;
+} conn_acceptors_t;
+
+thread_func_t io_receiver;
+thread_func_t rebuild_scanner;
+
+extern void (*io_receiver)(void *arg);
+extern void (*rebuild_scanner)(void *arg);
+
+extern uint16_t io_server_port;
+extern uint16_t rebuild_io_server_port;
+extern uint64_t zvol_rebuild_step_size;
+
+int uzfs_zvol_get_ip(char *host);
+void uzfs_zvol_io_conn_acceptor(void *arg);
 void init_zrepl(void);
 void remove_pending_cmds_to_ack(int fd, zvol_info_t *zinfo);
 zvol_io_cmd_t *zio_cmd_alloc(zvol_io_hdr_t *hdr, int fd);
