@@ -37,6 +37,7 @@
 #include <mgmt_conn.h>
 #include <data_conn.h>
 #include <uzfs_mgmt.h>
+#include <sys/epoll.h>
 
 char *ds_name;
 char *pool;
@@ -251,6 +252,7 @@ TEST(uZFS, Setup) {
 
 	mutex_init(&conn_list_mtx, NULL, MUTEX_DEFAULT, NULL);
 	SLIST_INIT(&uzfs_mgmt_conns);
+	mutex_init(&async_tasks_mtx, NULL, MUTEX_DEFAULT, NULL);
 	mgmt_eventfd = -1;
 
 	zinfo_create_hook = &zinfo_create_cb;
@@ -280,6 +282,94 @@ uzfs_mgmt_conn_list_count(struct uzfs_mgmt_conn_list *list)
 		count++;
 
 	return count;
+}
+
+static void 
+test_alloc_async_task_and_add_to_list(zvol_info_t *zinfo,
+    uzfs_mgmt_conn_t *conn, boolean_t finished, boolean_t conn_closed)
+{
+	async_task_t *arg;
+
+	uzfs_zinfo_take_refcnt(zinfo, B_TRUE);
+	arg = (async_task_t *)kmem_zalloc(sizeof (async_task_t), KM_SLEEP);
+	arg->conn = conn;
+	arg->zinfo = zinfo;
+	arg->payload_length = 0;
+	arg->payload = NULL;
+	arg->finished = finished;
+	arg->conn_closed = conn_closed;
+	mutex_enter(&async_tasks_mtx);
+	SLIST_INSERT_HEAD(&async_tasks, arg, task_next);
+	mutex_exit(&async_tasks_mtx);
+	return;
+}
+
+static int
+async_tasks_count()
+{
+	int count = 0;
+	async_task_t *async_task = NULL;
+
+	mutex_enter(&async_tasks_mtx);
+
+	SLIST_FOREACH(async_task, &async_tasks, task_next)
+		count++;
+
+	mutex_exit(&async_tasks_mtx);
+
+	return count;
+}
+
+TEST(uZFS, asyncTaskProps) {
+
+	async_task_t *arg;
+	uzfs_mgmt_conn_t *conn;
+
+
+	conn = SLIST_FIRST(&uzfs_mgmt_conns);
+
+	/*
+	 * Create async_task and mark it un-finished so
+	 * that finish_async_tasks() should not process it.
+	 */
+	test_alloc_async_task_and_add_to_list(zinfo, conn, B_FALSE, B_FALSE);
+	finish_async_tasks();
+
+	EXPECT_EQ(1, async_tasks_count());
+
+	/*
+	 * Mark async_task finished to true, so that
+	 * finish_async_task process it. Since conn_clossed
+	 * set to false, it should able to send reply too.
+	 * Reply would be failed because of fd is -1.
+	 * It should error out after freeing task.
+	 */
+	arg = SLIST_FIRST(&async_tasks);
+	arg->finished = B_TRUE;
+	finish_async_tasks();
+
+	EXPECT_EQ(0, async_tasks_count());
+
+	kmem_free(conn->conn_buf, sizeof (zvol_io_hdr_t));
+	conn->conn_buf = NULL;
+
+	/*
+	 * Create async_task and mark it finished as well as
+	 * conn closed so that that finish_async_tasks()
+	 * should process it, free it.
+	 */
+	test_alloc_async_task_and_add_to_list(zinfo, conn, B_TRUE, B_TRUE);
+
+	/*
+	 * Create async_task and mark it finished as well as
+	 * conn closed so that that finish_async_tasks()
+	 *  should process it, free it.
+	 */
+	test_alloc_async_task_and_add_to_list(zinfo, conn, B_TRUE, B_TRUE);
+	EXPECT_EQ(2, async_tasks_count());
+
+	finish_async_tasks();
+	EXPECT_EQ(0, async_tasks_count());
 }
 
 TEST(uZFS, EmptyCreateProps) {
