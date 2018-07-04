@@ -165,3 +165,69 @@ void GtestUtils::Zrepl::kill() {
 		m_pid = 0;
 	}
 }
+
+/*
+ * Copies src to the dstsize buffer at dst. The copy will never
+ * overflow the destination buffer and the buffer will always be null
+ * terminated.
+ *
+ * This function should be used instead of strncpy to silence errors
+ * from coverity about possibly unterminated string. The definition is
+ * taken from SPL lib.
+ */
+size_t
+GtestUtils::strlcpy(char *dst, const char *src, size_t len)
+{
+        size_t slen = strlen(src);
+        size_t copied;
+
+        if (len == 0)
+                return (slen);
+
+        if (slen >= len)
+                copied = len - 1;
+        else
+                copied = slen;
+        (void) memcpy(dst, src, copied);
+        dst[copied] = '\0';
+        return (slen);
+}
+
+int
+GtestUtils::SocketFd::fd()
+{
+	return m_fd;
+}
+
+bool
+GtestUtils::SocketFd::opened()
+{
+	return m_fd;
+}
+
+GtestUtils::SocketFd&
+GtestUtils::SocketFd::operator=(int other)
+{
+	m_fd = other;
+	return *this;
+}
+
+/*
+ * We have to wait for the other end to close the connection, because the
+ * next test case could initiate a new connection before this one is
+ * fully closed and cause a handshake error. Or it could result in EBUSY
+ * error when destroying zpool if it is not released in time by zrepl.
+ */
+void
+GtestUtils::SocketFd::graceful_close()
+{
+	char val;
+	int rc;
+
+	if (m_fd >= 0) {
+		shutdown(m_fd, SHUT_WR);
+		rc = read(m_fd, &val, sizeof (val));
+		close(m_fd);
+		m_fd = -1;
+	}
+}

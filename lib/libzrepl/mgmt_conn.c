@@ -36,6 +36,7 @@
 #include <sys/dsl_destroy.h>
 #include <sys/dsl_dir.h>
 #include <sys/dmu_objset.h>
+#include <string.h>
 #include <zrepl_prot.h>
 #include <uzfs_mgmt.h>
 
@@ -253,16 +254,16 @@ zinfo_create_cb(zvol_info_t *zinfo, nvlist_t *create_props)
 	/* if zvol is being created the zvol property does not exist yet */
 	if (create_props != NULL &&
 	    nvlist_lookup_string(create_props, ZFS_PROP_TARGET_IP, &ip) == 0) {
-		strncpy(target_host, ip, sizeof (target_host));
+		strlcpy(target_host, ip, sizeof (target_host));
 	} else {
 		/* get it from zvol properties */
 		if (zv->zv_target_host[0] == 0) {
 			/* in case of missing property take the default IP */
-			strncpy(target_host, "127.0.0.1", sizeof ("127.0.0.1"));
+			strlcpy(target_host, "127.0.0.1", sizeof ("127.0.0.1"));
 			target_port = TARGET_PORT;
 		}
 		else
-			strncpy(target_host, zv->zv_target_host, MAXNAMELEN);
+			strlcpy(target_host, zv->zv_target_host, MAXNAMELEN);
 	}
 
 	delim = strchr(target_host, ':');
@@ -296,7 +297,7 @@ zinfo_create_cb(zvol_info_t *zinfo, nvlist_t *create_props)
 	new_mgmt_conn->conn_fd = -1;
 	new_mgmt_conn->conn_refcount = 1;
 	new_mgmt_conn->conn_port = target_port;
-	strncpy(new_mgmt_conn->conn_host, target_host,
+	strlcpy(new_mgmt_conn->conn_host, target_host,
 	    sizeof (new_mgmt_conn->conn_host));
 
 	zinfo->mgmt_conn = new_mgmt_conn;
@@ -304,7 +305,7 @@ zinfo_create_cb(zvol_info_t *zinfo, nvlist_t *create_props)
 	/* signal the event loop thread */
 	if (mgmt_eventfd >= 0) {
 		rc = write(mgmt_eventfd, &val, sizeof (val));
-		ASSERT3P(rc, ==, sizeof (val));
+		ASSERT3S(rc, ==, sizeof (val));
 	}
 	mutex_exit(&conn_list_mtx);
 }
@@ -330,9 +331,9 @@ zinfo_destroy_cb(zvol_info_t *zinfo)
 
 	if (--conn->conn_refcount == 0) {
 		/* signal the event loop thread to close FD and destroy conn */
-		ASSERT3P(mgmt_eventfd, >=, 0);
+		ASSERT3S(mgmt_eventfd, >=, 0);
 		rc = write(mgmt_eventfd, &val, sizeof (val));
-		ASSERT3P(rc, ==, sizeof (val));
+		ASSERT3S(rc, ==, sizeof (val));
 	}
 	mutex_exit(&conn_list_mtx);
 }
@@ -463,7 +464,7 @@ uzfs_zvol_mgmt_do_handshake(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp,
 		    hdrp->io_seq));
 	}
 
-	strncpy(mgmt_ack.volname, name, sizeof (mgmt_ack.volname));
+	strlcpy(mgmt_ack.volname, name, sizeof (mgmt_ack.volname));
 	mgmt_ack.port = (hdrp->opcode == ZVOL_OPCODE_PREPARE_FOR_REBUILD) ?
 	    REBUILD_IO_SERVER_PORT : IO_SERVER_PORT;
 	mgmt_ack.pool_guid = spa_guid(zv->zv_spa);
@@ -540,7 +541,7 @@ uzfs_zvol_stats(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp, zvol_info_t *zinfo)
 	zvol_io_hdr_t	hdr;
 	zvol_op_stat_t	stat;
 
-	strncpy(stat.label, "used", sizeof (stat.label));
+	strlcpy(stat.label, "used", sizeof (stat.label));
 	stat.value = dsl_dir_phys(
 	    zinfo->zv->zv_objset->os_dsl_dataset->ds_dir)->dd_used_bytes;
 
@@ -665,7 +666,7 @@ uzfs_zvol_execute_async_command(void *arg)
 
 		async_task->finished = B_TRUE;
 		rc = write(mgmt_eventfd, &val, sizeof (val));
-		ASSERT3P(rc, ==, sizeof (val));
+		ASSERT3S(rc, ==, sizeof (val));
 	}
 	mutex_exit(&async_tasks_mtx);
 }
@@ -891,7 +892,7 @@ process_message(uzfs_mgmt_conn_t *conn)
 			    hdrp->opcode, hdrp->io_seq);
 			break;
 		}
-		strncpy(zvol_name, payload, payload_size);
+		strlcpy(zvol_name, payload, payload_size);
 		zvol_name[payload_size] = '\0';
 
 		if ((zinfo = uzfs_zinfo_lookup(zvol_name)) == NULL) {
@@ -945,7 +946,7 @@ process_message(uzfs_mgmt_conn_t *conn)
 			    hdrp->opcode, hdrp->io_seq);
 			break;
 		}
-		strncpy(zvol_name, payload, payload_size);
+		strlcpy(zvol_name, payload, payload_size);
 		zvol_name[payload_size] = '\0';
 		snap = strchr(zvol_name, '@');
 		if (snap == NULL) {
@@ -1043,7 +1044,7 @@ move_to_next_state(uzfs_mgmt_conn_t *conn)
 	uint16_t vers;
 	int rc = 0;
 
-	ASSERT3P(conn->conn_bufsiz, ==, conn->conn_procn);
+	ASSERT3U(conn->conn_bufsiz, ==, conn->conn_procn);
 
 	switch (conn->conn_state) {
 	case CS_CONNECT:
@@ -1182,7 +1183,7 @@ uzfs_zvol_mgmt_thread(void *arg)
 				do_scan = B_TRUE;
 				/* consume the event */
 				rc = read(mgmt_eventfd, &value, sizeof (value));
-				ASSERT3P(rc, ==, sizeof (value));
+				ASSERT3S(rc, ==, sizeof (value));
 				if (finish_async_tasks() != 0) {
 					goto exit;
 				}

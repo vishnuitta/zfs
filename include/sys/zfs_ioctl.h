@@ -28,7 +28,6 @@
 #ifndef	_SYS_ZFS_IOCTL_H
 #define	_SYS_ZFS_IOCTL_H
 
-#include <sys/cred.h>
 #include <sys/dmu.h>
 #include <sys/zio.h>
 #include <sys/dsl_deleg.h>
@@ -36,6 +35,7 @@
 #include <sys/zfs_stat.h>
 
 #ifdef _KERNEL
+#include <sys/cred.h>
 #include <sys/nvpair.h>
 #endif	/* _KERNEL */
 

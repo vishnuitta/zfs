@@ -9,7 +9,7 @@ DEFAULT_INCLUDES += \
 sbin_PROGRAMS = test_uzfsserver test_uzfs test_zfs test_zrepl_prot
 
 test_uzfsserver_SOURCES = test_uzfsserver.cc
-test_uzfs_SOURCES = test_uzfs.cc
+test_uzfs_SOURCES = test_uzfs.cc gtest_utils.cc
 test_zrepl_prot_SOURCES = test_zrepl_prot.cc gtest_utils.cc
 test_zfs_SOURCES = test_zfs.cc gtest_utils.cc
 

@@ -39,6 +39,8 @@
 #include <uzfs_mgmt.h>
 #include <sys/epoll.h>
 
+#include "gtest_utils.h"
+
 char *ds_name;
 char *ds_name2;
 char *pool;
@@ -240,12 +242,12 @@ TEST(uZFS, Setup) {
 	path = (char *)malloc(MAXNAMELEN);
 	pool = (char *)malloc(MAXNAMELEN);
 
-	strncpy(path, "/tmp/uztest.1a", MAXNAMELEN);
-	strncpy(pool, "pool1", MAXNAMELEN);
-	strncpy(ds_name, "vol1", MAXNAMELEN);
-	strncpy(ds_name2, "vol3", MAXNAMELEN);
-	strncpy(pool_ds, "pool1/vol1", MAXNAMELEN);
-	strncpy(pool_ds2, "pool1/vol3", MAXNAMELEN);
+	GtestUtils::strlcpy(path, "/tmp/uztest.1a", MAXNAMELEN);
+	GtestUtils::strlcpy(pool, "pool1", MAXNAMELEN);
+	GtestUtils::strlcpy(ds_name, "vol1", MAXNAMELEN);
+	GtestUtils::strlcpy(ds_name2, "vol3", MAXNAMELEN);
+	GtestUtils::strlcpy(pool_ds, "pool1/vol1", MAXNAMELEN);
+	GtestUtils::strlcpy(pool_ds2, "pool1/vol3", MAXNAMELEN);
 	signal(SIGPIPE, SIG_IGN);
 
 	uzfs_init();
@@ -412,31 +414,31 @@ TEST(uZFS, TestZInfoRefcnt) {
 	uzfs_zinfo_drop_refcnt(zinfo, B_FALSE);
 	EXPECT_EQ(1, zinfo->refcnt);
 
-	strncpy(ds1, "vol1 ", MAXNAMELEN);
+	GtestUtils::strlcpy(ds1, "vol1 ", MAXNAMELEN);
 	zinfo1 = uzfs_zinfo_lookup(ds1);
 	EXPECT_EQ(NULL, zinfo1);
 
-	strncpy(ds1, "vol2", MAXNAMELEN);
+	GtestUtils::strlcpy(ds1, "vol2", MAXNAMELEN);
 	zinfo1 = uzfs_zinfo_lookup(ds1);
 	EXPECT_EQ(NULL, zinfo1);
 
-	strncpy(ds1, "vol", MAXNAMELEN);
+	GtestUtils::strlcpy(ds1, "vol", MAXNAMELEN);
 	zinfo1 = uzfs_zinfo_lookup(ds1);
 	EXPECT_EQ(NULL, zinfo1);
 
-	strncpy(ds1, "pool1/vol", MAXNAMELEN);
+	GtestUtils::strlcpy(ds1, "pool1/vol", MAXNAMELEN);
 	zinfo1 = uzfs_zinfo_lookup(ds1);
 	EXPECT_EQ(NULL, zinfo1);
 
-	strncpy(ds1, "pool1/vol1 ", MAXNAMELEN);
+	GtestUtils::strlcpy(ds1, "pool1/vol1 ", MAXNAMELEN);
 	zinfo1 = uzfs_zinfo_lookup(ds1);
 	EXPECT_EQ(NULL, zinfo1);
 
-	strncpy(ds1, "pool1/vol1/", MAXNAMELEN);
+	GtestUtils::strlcpy(ds1, "pool1/vol1/", MAXNAMELEN);
 	zinfo1 = uzfs_zinfo_lookup(ds1);
 	EXPECT_EQ(NULL, zinfo1);
 
-	strncpy(ds1, "pool1/vol1", MAXNAMELEN);
+	GtestUtils::strlcpy(ds1, "pool1/vol1", MAXNAMELEN);
 	zinfo1 = uzfs_zinfo_lookup(ds1);
 	EXPECT_EQ(NULL, !zinfo1);
 	EXPECT_EQ(2, zinfo->refcnt);
@@ -444,7 +446,7 @@ TEST(uZFS, TestZInfoRefcnt) {
 	zinfo1 = uzfs_zinfo_lookup(NULL);
 	EXPECT_EQ(NULL, zinfo1);
 
-	strncpy(ds1, "vol1", MAXNAMELEN);
+	GtestUtils::strlcpy(ds1, "vol1", MAXNAMELEN);
 	zinfo1 = uzfs_zinfo_lookup(ds1);
 	EXPECT_EQ(NULL, !zinfo1);
 	EXPECT_EQ(3, zinfo->refcnt);
@@ -456,15 +458,15 @@ TEST(uZFS, TestZInfoRefcnt) {
 void
 set_start_rebuild_mgmt_ack(mgmt_ack_t *mack, const char *dw_name, const char *volname)
 {
-	strncpy(mack->dw_volname, dw_name, MAXNAMELEN);
+	GtestUtils::strlcpy(mack->dw_volname, dw_name, MAXNAMELEN);
 	if (volname != NULL)
-		strncpy(mack->volname, volname, MAXNAMELEN);
+		GtestUtils::strlcpy(mack->volname, volname, MAXNAMELEN);
 }
 
 void
 set_mgmt_ack_ip_port(mgmt_ack_t *mack, const char *ip, uint16_t port)
 {
-	strncpy(mack->ip, ip, MAX_IP_LEN);
+	GtestUtils::strlcpy(mack->ip, ip, MAX_IP_LEN);
 	mack->port = port;
 }
 
@@ -629,7 +631,7 @@ create_rebuild_args(rebuild_thread_arg_t **r)
 	rc = uzfs_zvol_get_ip(rebuild_args->ip, MAX_IP_LEN);
 	EXPECT_NE(rc, -1);
 	
-	strncpy(rebuild_args->zvol_name, "vol2", MAXNAMELEN);
+	GtestUtils::strlcpy(rebuild_args->zvol_name, "vol2", MAXNAMELEN);
 	*r = rebuild_args;
 }
 
