@@ -25,6 +25,7 @@
 #include <sys/fm/util.h>
 #include <sys/fm/protocol.h>
 #include <sys/fm/fs/zfs.h>
+#include <sys/txg.h>
 #include <libzfs.h>
 #include <zrepl_mgmt.h>
 
@@ -54,6 +55,34 @@ print_state_change(nvlist_t *event)
 		    vdev_name, pool_name,
 		    zpool_state_to_name(old_state, VDEV_AUX_NONE),
 		    zpool_state_to_name(new_state, VDEV_AUX_NONE));
+	}
+}
+
+static void
+print_slow_sync(nvlist_t *event)
+{
+	char	*pool_name;
+
+	if (nvlist_lookup_string(event,
+	    FM_EREPORT_PAYLOAD_ZFS_POOL, &pool_name) != 0) {
+		LOG_ERR("Invalid content of ZFS slow sync event");
+	} else {
+		LOG_ERR("Pool %s took more than %d seconds to sync",
+		    pool_name, sync_threshold);
+	}
+}
+
+static void
+print_slow_quiesce(nvlist_t *event)
+{
+	char	*pool_name;
+
+	if (nvlist_lookup_string(event,
+	    FM_EREPORT_PAYLOAD_ZFS_POOL, &pool_name) != 0) {
+		LOG_ERR("Invalid content of ZFS slow quiesce event");
+	} else {
+		LOG_ERR("Pool %s took more than %d seconds to quiesce",
+		    pool_name, quiesce_threshold);
 	}
 }
 
@@ -89,6 +118,14 @@ print_zfs_event(nvlist_t *event)
 	} else if (strcmp(class, FM_RSRC_RESOURCE "." ZFS_ERROR_CLASS "."
 	    FM_RESOURCE_STATECHANGE) == 0) {
 		print_state_change(event);
+		skip = B_TRUE;
+	} else if (strcmp(class, FM_EREPORT_CLASS "." ZFS_ERROR_CLASS "."
+	    FM_EREPORT_ZFS_SYNC_SLOW) == 0) {
+		print_slow_sync(event);
+		skip = B_TRUE;
+	} else if (strcmp(class, FM_EREPORT_CLASS "." ZFS_ERROR_CLASS "."
+	    FM_EREPORT_ZFS_QUIESCE_SLOW) == 0) {
+		print_slow_quiesce(event);
 		skip = B_TRUE;
 	}
 

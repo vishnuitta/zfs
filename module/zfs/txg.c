@@ -34,6 +34,7 @@
 #include <sys/zil.h>
 #include <sys/callb.h>
 #include <sys/trace_txg.h>
+#include <sys/fm/fs/zfs.h>
 
 /*
  * ZFS Transaction Groups
@@ -112,6 +113,9 @@ static void txg_sync_thread(dsl_pool_t *dp);
 static void txg_quiesce_thread(dsl_pool_t *dp);
 
 int zfs_txg_timeout = 5;	/* max seconds worth of delta per txg */
+/* max thresholds are in seconds */
+volatile int sync_threshold = 15;
+volatile int quiesce_threshold = 15;
 
 /*
  * Prepare the txg subsystem.
@@ -493,6 +497,7 @@ txg_sync_thread(dsl_pool_t *dp)
 		clock_t timer;
 		uint64_t txg;
 		txg_stat_t *ts;
+		hrtime_t timestamp;
 
 		/*
 		 * We sync when we're scanning, there's someone waiting
@@ -543,8 +548,14 @@ txg_sync_thread(dsl_pool_t *dp)
 		mutex_exit(&tx->tx_sync_lock);
 
 		start = ddi_get_lbolt();
+		timestamp = gethrtime();
 		spa_sync(spa, txg);
 		delta = ddi_get_lbolt() - start;
+		timestamp = (gethrtime() - timestamp) / 1000000000;
+		if (timestamp > sync_threshold) {
+			zfs_ereport_post(FM_EREPORT_ZFS_SYNC_SLOW, spa,
+			    NULL, NULL, 0, 0);
+		}
 
 		mutex_enter(&tx->tx_sync_lock);
 		tx->tx_synced_txg = txg;
@@ -570,6 +581,7 @@ txg_quiesce_thread(dsl_pool_t *dp)
 
 	for (;;) {
 		uint64_t txg;
+		hrtime_t timestamp;
 
 		/*
 		 * We quiesce when there's someone waiting on us.
@@ -591,7 +603,14 @@ txg_quiesce_thread(dsl_pool_t *dp)
 		    txg, tx->tx_quiesce_txg_waiting,
 		    tx->tx_sync_txg_waiting);
 		mutex_exit(&tx->tx_sync_lock);
+		timestamp = gethrtime();
 		txg_quiesce(dp, txg);
+		/* Generate ereport if quiescing takes too long */
+		timestamp = (gethrtime() - timestamp) / 1000000000;
+		if (timestamp > quiesce_threshold) {
+			zfs_ereport_post(FM_EREPORT_ZFS_QUIESCE_SLOW,
+			    dp->dp_spa, NULL, NULL, 0, 0);
+		}
 		mutex_enter(&tx->tx_sync_lock);
 
 		/*

@@ -165,7 +165,7 @@ extern int create_and_bind(const char *port, int bind_needed,
  * API to drop refcnt on zinfo. If refcnt
  * dropped to zero then free zinfo.
  */
-inline void
+static inline void
 uzfs_zinfo_drop_refcnt(zvol_info_t *zinfo)
 {
 	atomic_dec_64(&zinfo->refcnt);
@@ -174,7 +174,7 @@ uzfs_zinfo_drop_refcnt(zvol_info_t *zinfo)
 /*
  * API to take refcount on zinfo.
  */
-inline void
+static inline void
 uzfs_zinfo_take_refcnt(zvol_info_t *zinfo)
 {
 	atomic_inc_64(&zinfo->refcnt);

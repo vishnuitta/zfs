@@ -66,6 +66,10 @@ typedef struct txg_list {
 
 struct dsl_pool;
 
+/* Based on these thresholds are generated ereports */
+extern volatile int sync_threshold;
+extern volatile int quiesce_threshold;
+
 extern void txg_init(struct dsl_pool *dp, uint64_t txg);
 extern void txg_fini(struct dsl_pool *dp);
 extern void txg_sync_start(struct dsl_pool *dp);
