@@ -99,14 +99,10 @@ typedef struct zvol_info_s {
 	pthread_mutex_t	zinfo_mutex;
 	pthread_cond_t	io_ack_cond;
 
-//	pthread_t 	io_receiver_thread;
-//	pthread_t 	io_ack_sender_thread;
-
 	/* All cmds after execution will go here for ack */
 	STAILQ_HEAD(, zvol_io_cmd_s)	complete_queue;
 
 	uint8_t		io_ack_waiting;
-//	uint8_t		error_count;
 
 	/* Will be used to singal ack-sender to exit */
 	uint8_t		conn_closed;
