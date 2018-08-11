@@ -216,7 +216,8 @@ uzfs_zvol_io_receiver(void *arg)
 		}
 	}
 
-	LOG_INFO("Data connection associated with zvol %s fd: %d", zinfo->name, fd);
+	LOG_INFO("Data connection associated with zvol %s fd: %d",
+	    zinfo->name, fd);
 
 	while ((rc = uzfs_zvol_socket_read(fd, (char *)&hdr, sizeof (hdr))) ==
 	    0) {
@@ -461,7 +462,8 @@ uzfs_zvol_io_ack_sender(void *arg)
 exit:
 	zinfo->zio_cmd_in_ack = NULL;
 	shutdown(fd, SHUT_RDWR);
-	LOG_INFO("Data connection for zvol %s closed on fd: %d", zinfo->name, fd);
+	LOG_INFO("Data connection for zvol %s closed on fd: %d",
+	    zinfo->name, fd);
 
 	(void) pthread_mutex_lock(&zinfo->zinfo_mutex);
 	while (!STAILQ_EMPTY(&zinfo->complete_queue)) {
