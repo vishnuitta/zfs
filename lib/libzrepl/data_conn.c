@@ -615,6 +615,7 @@ remove_pending_cmds_to_ack(int fd, zvol_info_t *zinfo)
 	while ((zinfo->zio_cmd_in_ack != NULL) &&
 	    (((zvol_io_cmd_t *)(zinfo->zio_cmd_in_ack))->conn == fd)) {
 		(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
+		LOG_INFO("Waiting for IO to send off on vol %s", zinfo->name);
 		sleep(1);
 		(void) pthread_mutex_lock(&zinfo->zinfo_mutex);
 	}

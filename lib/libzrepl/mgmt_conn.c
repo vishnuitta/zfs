@@ -66,12 +66,12 @@
  */
 
 /* log wrappers which prefix log message by iscsi target address */
-#define	DBGCONN(c, fmt, ...)	LOG_DEBUG("[tgt %s:%u]: " fmt, \
-				(c)->conn_host, (c)->conn_port, ##__VA_ARGS__)
-#define	LOGCONN(c, fmt, ...)	LOG_INFO("[tgt %s:%u]: " fmt, \
-				(c)->conn_host, (c)->conn_port, ##__VA_ARGS__)
-#define	LOGERRCONN(c, fmt, ...)	LOG_ERR("[tgt %s:%u]: " fmt, \
-				(c)->conn_host, (c)->conn_port, ##__VA_ARGS__)
+#define	DBGCONN(c, fmt, ...)	LOG_DEBUG("[tgt %s:%u:%d]: " fmt, \
+				(c)->conn_host, (c)->conn_port, c->conn_fd, ##__VA_ARGS__)
+#define	LOGCONN(c, fmt, ...)	LOG_INFO("[tgt %s:%u:%d]: " fmt, \
+				(c)->conn_host, (c)->conn_port, c->conn_fd, ##__VA_ARGS__)
+#define	LOGERRCONN(c, fmt, ...)	LOG_ERR("[tgt %s:%u:%d]: " fmt, \
+				(c)->conn_host, (c)->conn_port, c->conn_fd, ##__VA_ARGS__)
 
 /* Max # of events from epoll processed at once */
 #define	MAX_EVENTS	10

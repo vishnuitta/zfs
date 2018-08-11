@@ -474,6 +474,7 @@ uzfs_zvol_create_cb(const char *ds_name, void *arg)
 		return (0);
 	}
 
+//	error = uzfs_dataset_zv_create(ds_name, &zv);
 	error = uzfs_own_dataset(ds_name, &zv);
 	if (error) {
 		/* happens normally for all non-zvol-type datasets */
