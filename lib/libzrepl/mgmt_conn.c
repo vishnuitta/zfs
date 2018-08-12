@@ -1133,6 +1133,7 @@ uzfs_zvol_mgmt_thread(void *arg)
 	int			nfds, i, rc;
 	boolean_t		do_scan;
 	async_task_t		*async_task;
+	struct timespec diff_time, now, last_time;
 
 	SLIST_INIT(&uzfs_mgmt_conns);
 	mutex_init(&conn_list_mtx, NULL, MUTEX_DEFAULT, NULL);
@@ -1156,6 +1157,7 @@ uzfs_zvol_mgmt_thread(void *arg)
 	}
 
 	prctl(PR_SET_NAME, "mgmt_conn", 0, 0, 0);
+	clock_gettime(CLOCK_MONOTONIC, &last_time);
 
 	/*
 	 * The only reason to break from this loop is a failure to update FDs
@@ -1260,10 +1262,17 @@ uzfs_zvol_mgmt_thread(void *arg)
 		 * Scan the list either if signalled or timed out waiting
 		 * for event
 		 */
+		if (nfds != 0 && !do_scan) {
+			timesdiff(CLOCK_MONOTONIC, last_time, now, diff_time);
+			if (diff_time.tv_sec >= (RECONNECT_DELAY / 2))
+				do_scan = 1;
+		}
+
 		if (nfds == 0 || do_scan) {
 			if (scan_conn_list() != 0) {
 				goto exit;
 			}
+			clock_gettime(CLOCK_MONOTONIC, &last_time);
 		}
 	}
 

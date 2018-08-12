@@ -81,30 +81,36 @@ set_socket_keepalive(int sfd)
 	}
 
 	if (setsockopt(sfd, SOL_SOCKET, SO_KEEPALIVE, &val, sizeof (val)) < 0) {
-		LOG_ERR("Failed to set SO_KEEPALIVE for fd(%d) err(%d)\n", sfd, errno);
+		LOG_ERR("Failed to set SO_KEEPALIVE for fd(%d) err(%d)\n",
+		    sfd, errno);
 		ret = errno;
 		goto out;
 	}
 
 	if (setsockopt(sfd, SOL_TCP, TCP_KEEPCNT, &max_try, sizeof (max_try))) {
-		LOG_ERR("Failed to set TCP_KEEPCNT for fd(%d) err(%d)\n", sfd, errno);
+		LOG_ERR("Failed to set TCP_KEEPCNT for fd(%d) err(%d)\n",
+		    sfd, errno);
 		ret = errno;
 		goto out;
 	}
 
-	if (setsockopt(sfd, SOL_TCP, TCP_KEEPIDLE, &max_idle_time, sizeof (max_idle_time))) {
-		LOG_ERR("Failed to set TCP_KEEPIDLE for fd(%d) err(%d)\n", sfd, errno);
+	if (setsockopt(sfd, SOL_TCP, TCP_KEEPIDLE, &max_idle_time,
+	    sizeof (max_idle_time))) {
+		LOG_ERR("Failed to set TCP_KEEPIDLE for fd(%d) err(%d)\n",
+		    sfd, errno);
 		ret = errno;
 		goto out;
 	}
 
-	if (setsockopt(sfd, SOL_TCP, TCP_KEEPINTVL, &probe_interval, sizeof (probe_interval))) {
-		LOG_ERR("Failed to set TCP_KEEPINTVL for fd(%d) err(%d)\n", sfd, errno);
+	if (setsockopt(sfd, SOL_TCP, TCP_KEEPINTVL, &probe_interval,
+	    sizeof (probe_interval))) {
+		LOG_ERR("Failed to set TCP_KEEPINTVL for fd(%d) err(%d)\n",
+		    sfd, errno);
 		ret = errno;
 	}
 
 out:
-	return ret;
+	return (ret);
 }
 
 int

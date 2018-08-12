@@ -783,7 +783,7 @@ uzfs_zvol_io_conn_acceptor(void *arg)
 			rc = set_socket_keepalive(new_fd);
 			if (rc != 0)
 				LOG_ERR("Failed to set keepalive on "
-				   "accepted fd %d", new_fd);
+				    "accepted fd %d", new_fd);
 			rc = 0;
 
 			if (events[i].data.fd == io_sfd) {
