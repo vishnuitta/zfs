@@ -186,6 +186,7 @@ connect_to_tgt(uzfs_mgmt_conn_t *conn)
 		    conn->conn_port);
 		return (-1);
 	}
+
 	return (sfd);
 }
 
@@ -1048,6 +1049,10 @@ move_to_next_state(uzfs_mgmt_conn_t *conn)
 	switch (conn->conn_state) {
 	case CS_CONNECT:
 		LOGCONN(conn, "Connected");
+		rc = set_socket_keepalive(conn->conn_fd);
+		if (rc != 0)
+			LOGERRCONN(conn, "Failed to set keepalive");
+		rc = 0;
 		/* Fall-through */
 	case CS_INIT:
 		DBGCONN(conn, "Reading version..");
