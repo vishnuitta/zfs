@@ -135,8 +135,7 @@ open_zvol(int fd, zvol_info_t **zinfopp)
 			hdr.status = ZVOL_OP_STATUS_FAILED;
 			goto open_reply;
 		}
-		else
-			rele_dataset_on_error = 1;
+		rele_dataset_on_error = 1;
 	}
 	if (uzfs_update_metadata_granularity(zv,
 	    open_data.tgt_block_size) != 0) {
