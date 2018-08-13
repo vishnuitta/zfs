@@ -1034,20 +1034,7 @@ TEST_F(ZreplDataTest, ReadMetaDataFlag) {
 
 	/* write a data block with known ionum */
 	write_data_and_verify_resp(m_datasock1.fd(), m_ioseq1, 0, 654);
-#if 0
-	/* read the block without ZVOL_OP_FLAG_READ_METADATA flag */
-	read_data_start(m_datasock1.fd(), m_ioseq1, 0, sizeof (buf), &hdr_in, 0);
-	ASSERT_EQ(hdr_in.status, ZVOL_OP_STATUS_OK);
-	ASSERT_EQ(hdr_in.len, sizeof (read_hdr) + sizeof (buf));
-	rc = read(m_datasock1.fd(), &read_hdr, sizeof (read_hdr));
-	ASSERT_ERRNO("read", rc >= 0);
-	ASSERT_EQ(rc, sizeof (read_hdr));
-	ASSERT_EQ(read_hdr.io_num, 0);
-	ASSERT_EQ(read_hdr.len, sizeof (buf));
-	rc = read(m_datasock1.fd(), buf, sizeof (buf));
-	ASSERT_ERRNO("read", rc >= 0);
-	ASSERT_EQ(rc, sizeof (buf));
-#endif
+
 	/* read the block with ZVOL_OP_FLAG_READ_METADATA flag */
 	read_data_start(m_datasock1.fd(), m_ioseq1, 0, sizeof (buf), &hdr_in, ZVOL_OP_FLAG_READ_METADATA);
 	ASSERT_EQ(hdr_in.status, ZVOL_OP_STATUS_OK);

@@ -392,6 +392,7 @@ free_ret:
 
 	/* On boot, mark zvol status health */
 	uzfs_zvol_set_status(zv, ZVOL_STATUS_DEGRADED);
+	uzfs_zvol_set_rebuild_status(zv, ZVOL_REBUILDING_INIT);
 
 	if (spa_writeable(dmu_objset_spa(os))) {
 //		if (zil_replay_disable)

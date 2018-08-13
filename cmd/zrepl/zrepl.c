@@ -42,8 +42,11 @@ reinitialize_zv_state(zvol_state_t *zv)
 	if (zv == NULL)
 		return;
 	zv->zv_metavolblocksize = 0;
-	zv->zv_status = ZVOL_STATUS_DEGRADED;
+
+	uzfs_zvol_set_status(zv, ZVOL_STATUS_DEGRADED);
 	bzero(&zv->rebuild_info, sizeof (zvol_rebuild_info_t));
+
+	uzfs_zvol_set_rebuild_status(zv, ZVOL_REBUILDING_INIT);
 }
 
 /*
