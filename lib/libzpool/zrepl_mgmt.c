@@ -342,6 +342,7 @@ uzfs_zinfo_init(void *zv, const char *ds_name, nvlist_t *create_props)
 
 	strlcpy(zinfo->name, ds_name, MAXNAMELEN);
 	zinfo->zv = zv;
+	zinfo->state = ZVOL_INFO_STATE_ONLINE;
 	/* iSCSI target will overwrite this value during handshake */
 	zinfo->update_ionum_interval = 6000;
 	/* Update zvol list */
