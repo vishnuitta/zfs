@@ -252,6 +252,11 @@ TEST(uZFS, Setup) {
 	GtestUtils::strlcpy(pool_ds2, "pool1/vol3", MAXNAMELEN);
 	signal(SIGPIPE, SIG_IGN);
 
+	mutex_init(&conn_list_mtx, NULL, MUTEX_DEFAULT, NULL);
+	SLIST_INIT(&uzfs_mgmt_conns);
+	mutex_init(&async_tasks_mtx, NULL, MUTEX_DEFAULT, NULL);
+	mgmt_eventfd = -1;
+
 	uzfs_init();
 	init_zrepl();
 	setup_unit_test(path);
@@ -261,11 +266,6 @@ TEST(uZFS, Setup) {
 	uzfs_create_dataset(spa, ds_name, 1024*1024*1024, 512, &zv);
 	uzfs_hold_dataset(zv);
 	uzfs_update_metadata_granularity(zv, 512);
-
-	mutex_init(&conn_list_mtx, NULL, MUTEX_DEFAULT, NULL);
-	SLIST_INIT(&uzfs_mgmt_conns);
-	mutex_init(&async_tasks_mtx, NULL, MUTEX_DEFAULT, NULL);
-	mgmt_eventfd = -1;
 
 	zinfo_create_hook = &zinfo_create_cb;
 	zinfo_destroy_hook = &zinfo_destroy_cb;
@@ -888,8 +888,9 @@ next_step:
 	if (rebuild_test_case == 6) {
 		hdr.offset = -1;
 		rc = uzfs_zvol_socket_write(sfd, (char *)&hdr, sizeof (hdr));
-		rc = -1;
-		goto exit;
+		if (rc != 0) {
+			goto exit;
+		}
 	} else if (rebuild_test_case == 7) {
 		/*
 		 * Set offline state on vol3
@@ -900,6 +901,15 @@ next_step:
 			goto exit;
 		}
 	} else if (rebuild_test_case == 8) {
+		/*
+		 * Set io_ack_sender_created as B_FALSE
+		 */
+		zinfo2->is_io_ack_sender_created = B_FALSE;
+		rc = uzfs_zvol_socket_write(sfd, (char *)&hdr, sizeof (hdr));
+		if (rc != 0) {
+			goto exit;
+		}
+	} else if (rebuild_test_case == 9) {
 		hdr.opcode = ZVOL_OPCODE_REBUILD_COMPLETE;
 		rc = uzfs_zvol_socket_write(sfd, (char *)&hdr, sizeof (hdr));
 		if (rc != 0) {
@@ -1079,6 +1089,7 @@ TEST(uZFS, TestRebuild) {
 TEST(RebuildScanner, AbruptClose) {
 	rebuild_scanner = &uzfs_zvol_rebuild_scanner;
 	zvol_rebuild_step_size = (1024ULL * 1024ULL * 100);
+	zinfo2->state = ZVOL_INFO_STATE_ONLINE;
 
 	/* Rebuild thread exits abruptly just after connect */
 	execute_rebuild_test_case("Rebuild abrupt", 1,
@@ -1141,11 +1152,38 @@ TEST(RebuildScanner, VolumeOffline) {
 	rebuild_scanner = &uzfs_zvol_rebuild_scanner;
 	zvol_rebuild_step_size = (1024ULL * 1024ULL * 1);
 
-	/* Rebuild thread sending handshake again on same volume */
+	/* Set offline state on vol3 */
+	zinfo2->state = ZVOL_INFO_STATE_ONLINE;
+	zinfo2->is_io_ack_sender_created = B_TRUE;
 	execute_rebuild_test_case("Volume offline", 7,
 	    ZVOL_REBUILDING_IN_PROGRESS, B_FALSE, B_TRUE);
 	EXPECT_EQ(ZVOL_REBUILDING_FAILED, uzfs_zvol_get_rebuild_status(zinfo->zv));
+	zinfo2->state = ZVOL_INFO_STATE_ONLINE;
 }
+
+TEST(RebuildScanner, AckSenderCreatedFalse) {
+	rebuild_scanner = &uzfs_zvol_rebuild_scanner;
+	zvol_rebuild_step_size = (1024ULL * 1024ULL * 1);
+
+	/* Set io_ack_sender_created as B_FALSE */
+	execute_rebuild_test_case("Ack Sender Created False", 8,
+	    ZVOL_REBUILDING_IN_PROGRESS, B_FALSE, B_TRUE);
+	EXPECT_EQ(ZVOL_REBUILDING_FAILED, uzfs_zvol_get_rebuild_status(zinfo->zv));
+	zinfo2->is_io_ack_sender_created = B_TRUE;
+}
+
+#if 0
+TEST(RebuildScanner, ErrDuringRebuildCallback) {
+	rebuild_scanner = &uzfs_zvol_rebuild_scanner;
+	zvol_rebuild_step_size = (1024ULL * 1024ULL * 1);
+
+	/* Set offline during rebuild callback */
+	execute_rebuild_test_case("Err During Rebuild Callback", 9,
+	    ZVOL_REBUILDING_IN_PROGRESS, B_FALSE, B_TRUE);
+	EXPECT_EQ(ZVOL_REBUILDING_FAILED, uzfs_zvol_get_rebuild_status(zinfo->zv));
+	zinfo2->state = ZVOL_INFO_STATE_ONLINE;
+}
+#endif
 
 TEST(RebuildScanner, RebuildSuccess) {
 	rebuild_scanner = &uzfs_zvol_rebuild_scanner;
@@ -1153,7 +1191,7 @@ TEST(RebuildScanner, RebuildSuccess) {
 	zvol_rebuild_step_size = (1024ULL * 1024ULL * 100);
 
 	/* Rebuild thread sendinc complete opcode */
-	execute_rebuild_test_case("complete rebuild", 8,
+	execute_rebuild_test_case("complete rebuild", 9,
 	    ZVOL_REBUILDING_IN_PROGRESS, B_TRUE, B_TRUE);
 	EXPECT_EQ(ZVOL_STATUS_HEALTHY, uzfs_zvol_get_status(zinfo->zv));
 

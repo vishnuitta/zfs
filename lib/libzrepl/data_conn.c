@@ -842,7 +842,9 @@ uzfs_zvol_rebuild_scanner_callback(off_t offset, size_t len,
 	hdr.len = len;
 	hdr.flags = ZVOL_OP_FLAG_REBUILD;
 	hdr.status = ZVOL_OP_STATUS_OK;
-	if (zinfo->state == ZVOL_INFO_STATE_OFFLINE)
+
+	if ((zinfo->state == ZVOL_INFO_STATE_OFFLINE) ||
+	    (zinfo->is_io_ack_sender_created == B_FALSE))
 		return (-1);
 
 	LOG_DEBUG("IO number for rebuild %ld", metadata->io_num);
@@ -871,13 +873,13 @@ uzfs_zvol_rebuild_scanner(void *arg)
 	zvol_info_t	*zinfo = NULL;
 	zvol_io_hdr_t	hdr;
 	int 		rc = 0;
-	zvol_rebuild_t  warg;
+	zvol_rebuild_t	warg;
 	char 		*name;
 	blk_metadata_t	metadata;
 	uint64_t	rebuild_req_offset;
 	uint64_t	rebuild_req_len;
 	zvol_io_cmd_t	*zio_cmd;
-	struct linger lo = { 1, 0 };
+	struct linger	lo = { 1, 0 };
 
 	if ((rc = setsockopt(fd, SOL_SOCKET, SO_LINGER, &lo, sizeof (lo)))
 	    != 0) {
@@ -886,8 +888,10 @@ uzfs_zvol_rebuild_scanner(void *arg)
 	}
 read_socket:
 	rc = uzfs_zvol_read_header(fd, &hdr);
-	if ((rc != 0) || ((zinfo != NULL) &&
-	    (zinfo->state == ZVOL_INFO_STATE_OFFLINE)))
+	if ((rc != 0) ||
+	    ((zinfo != NULL) &&
+	    ((zinfo->state == ZVOL_INFO_STATE_OFFLINE) ||
+	    (zinfo->is_io_ack_sender_created == B_FALSE))))
 		goto exit;
 
 	LOG_DEBUG("op_code=%d io_seq=%ld", hdr.opcode, hdr.io_seq);

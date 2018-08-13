@@ -467,15 +467,13 @@ exit:
 	LOG_INFO("Data connection for zvol %s closed on fd: %d",
 	    zinfo->name, fd);
 
+	remove_pending_cmds_to_ack(fd, zinfo);
+
 	(void) pthread_mutex_lock(&zinfo->zinfo_mutex);
-	while (!STAILQ_EMPTY(&zinfo->complete_queue)) {
-		zio_cmd = STAILQ_FIRST(&zinfo->complete_queue);
-		STAILQ_REMOVE_HEAD(&zinfo->complete_queue, cmd_link);
-		zio_cmd_free(&zio_cmd);
-	}
 	zinfo->conn_closed = B_FALSE;
 	zinfo->is_io_ack_sender_created = B_FALSE;
 	(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
+
 	uzfs_zinfo_drop_refcnt(zinfo);
 
 	zk_thread_exit();
