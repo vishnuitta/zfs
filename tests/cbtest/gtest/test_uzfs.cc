@@ -1172,19 +1172,6 @@ TEST(RebuildScanner, AckSenderCreatedFalse) {
 	zinfo2->is_io_ack_sender_created = B_TRUE;
 }
 
-#if 0
-TEST(RebuildScanner, ErrDuringRebuildCallback) {
-	rebuild_scanner = &uzfs_zvol_rebuild_scanner;
-	zvol_rebuild_step_size = (1024ULL * 1024ULL * 1);
-
-	/* Set offline during rebuild callback */
-	execute_rebuild_test_case("Err During Rebuild Callback", 9,
-	    ZVOL_REBUILDING_IN_PROGRESS, B_FALSE, B_TRUE);
-	EXPECT_EQ(ZVOL_REBUILDING_FAILED, uzfs_zvol_get_rebuild_status(zinfo->zv));
-	zinfo2->state = ZVOL_INFO_STATE_ONLINE;
-}
-#endif
-
 TEST(RebuildScanner, RebuildSuccess) {
 	rebuild_scanner = &uzfs_zvol_rebuild_scanner;
 
