@@ -378,6 +378,11 @@ uzfs_zvol_rebuild_dw_replica(void *arg)
 		goto exit;
 	}
 
+	rc = set_socket_keepalive(sfd);
+	if (rc != 0)
+		LOG_ERR("keepalive errored on connected rebuild fd %d", sfd);
+	rc = 0;
+
 	/* Set state in-progess state now */
 	checkpointed_ionum = uzfs_zvol_get_last_committed_io_no(zinfo->zv);
 	zvol_state = zinfo->zv;
@@ -777,6 +782,13 @@ uzfs_zvol_io_conn_acceptor(void *arg)
 			kmem_free(hbuf, NI_MAXHOST);
 			kmem_free(sbuf, NI_MAXSERV);
 #endif
+
+			rc = set_socket_keepalive(new_fd);
+			if (rc != 0)
+				LOG_ERR("Failed to set keepalive on "
+				    "accepted fd %d", new_fd);
+			rc = 0;
+
 			if (events[i].data.fd == io_sfd) {
 				LOG_INFO("New data connection");
 				thrd_info = zk_thread_create(NULL, 0,
