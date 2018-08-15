@@ -938,12 +938,6 @@ next_step:
 
 		if ((rebuild_test_case == 7) || (rebuild_test_case == 8) || (rebuild_test_case == 9))
 		{
-#if 0
-#if DEBUG
-			if ((rebuild_test_case == 7) || (rebuild_test_case == 8))
-				inject_error.delay.helping_replica_rebuild_step = 1;
-#endif
-#endif
 			sleep(1);
 			if (rebuild_test_case == 7)
 				zinfo2->state = ZVOL_INFO_STATE_OFFLINE;
@@ -1063,13 +1057,8 @@ void execute_rebuild_test_case(const char *s, int test_case,
 	uzfs_zinfo_take_refcnt(zinfo);
 	uzfs_zvol_set_rebuild_status(zinfo->zv, status);
 
-//	if (!is_rebuild_scanner)
-//		thrd = zk_thread_create(NULL, 0, uzfs_zvol_rebuild_dw_replica,
-		thrd = zk_thread_create(NULL, 0, dw_replica_fn,
-		    rebuild_args, 0, NULL, TS_RUN, 0, 0);
-//	else
-//		thrd = zk_thread_create(NULL, 0, uzfs_mock_zvol_rebuild_dw_replica,
-//		    rebuild_args, 0, NULL, TS_RUN, 0, 0);
+	thrd = zk_thread_create(NULL, 0, dw_replica_fn,
+	    rebuild_args, 0, NULL, TS_RUN, 0, 0);
 	zk_thread_join(thrd->t_tid);
 
 	/* wait for rebuild thread to exit */
@@ -1082,11 +1071,7 @@ void execute_rebuild_test_case(const char *s, int test_case,
 
 	EXPECT_EQ(2, zinfo->refcnt);
 
-//	if (!is_test_positive)
-//		EXPECT_EQ(ZVOL_REBUILDING_FAILED, uzfs_zvol_get_rebuild_status(zinfo->zv));
-		EXPECT_EQ(verify_status, uzfs_zvol_get_rebuild_status(zinfo->zv));
-//	else
-//		EXPECT_EQ(ZVOL_REBUILDING_DONE, uzfs_zvol_get_rebuild_status(zinfo->zv));
+	EXPECT_EQ(verify_status, uzfs_zvol_get_rebuild_status(zinfo->zv));
 }
 
 TEST(uZFS, TestRebuildAbrupt) {
@@ -1123,13 +1108,9 @@ TEST(uZFS, TestRebuildExitAfterValidWrite) {
 	execute_rebuild_test_case("rebuild exit after valid write", 5, ZVOL_REBUILDING_IN_PROGRESS, ZVOL_REBUILDING_FAILED);
 }
 
-#if 0
-TEST(uZFS, TestRebuildExitAfterValidWriteAndRebuildStep) {
-	/* thread helping rebuild will exit after writng valid write IO and REBUILD_STEP_DONE */
-	execute_rebuild_test_case("rebuild exit after valid write and rebuild_step", 6, ZVOL_REBUILDING_IN_PROGRESS, B_FALSE, B_FALSE);
-}
-#endif
-
+/*
+ * THIS IS COPIED FROM test_zrepl_prot.cc
+ */
 /*
  * This fn does data conn for a host:ip and volume, and fills data fd
  *
