@@ -358,7 +358,7 @@ uzfs_zvol_append_to_fd_list(zvol_info_t *zinfo, int fd)
 	}
 #endif
 	STAILQ_INSERT_TAIL(&zinfo->fd_list, new_zinfo_fd, fd_link);
-	LOG_INFO("Appending fd %d for %s\n", fd, zinfo->name);
+	LOG_DEBUG("Appending fd %d for zvol %s", fd, zinfo->name);
 	(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
 }
 
@@ -951,7 +951,7 @@ uzfs_zvol_rebuild_scanner(void *arg)
 		goto exit;
 	}
 read_socket:
-	if((zinfo != NULL) &&
+	if ((zinfo != NULL) &&
 	    ((zinfo->state == ZVOL_INFO_STATE_OFFLINE) ||
 	    (zinfo->is_io_ack_sender_created == B_FALSE)))
 		goto exit;
@@ -967,7 +967,7 @@ read_socket:
 
 	/* Handshake yet to happen */
 	if ((hdr.opcode != ZVOL_OPCODE_HANDSHAKE) && (zinfo == NULL)) {
-		LOG_DEBUG("Wrong opcode:%d, expecting handshake\n", hdr.opcode);
+		LOG_DEBUG("Wrong opcode:%d, expecting handshake", hdr.opcode);
 		rc = -1;
 		goto exit;
 	}
@@ -1019,7 +1019,8 @@ read_socket:
 			    metadata.io_num, rebuild_req_offset,
 			    rebuild_req_len);
 #if DEBUG
-			if (inject_error.delay.helping_replica_rebuild_step == 1)
+			if (inject_error.delay.helping_replica_rebuild_step
+			    == 1)
 				sleep(5);
 #endif
 			rc = uzfs_get_io_diff(zinfo->zv, &metadata,
@@ -1167,8 +1168,7 @@ uzfs_zvol_io_ack_sender(void *arg)
 
 	prctl(PR_SET_NAME, "ack_sender", 0, 0, 0);
 
-	LOG_INFO("Started ack sender for Data connection associated with zvol %s fd: %d======================================",
-	    zinfo->name, fd);
+	LOG_INFO("Started ack sender for zvol %s fd: %d", zinfo->name, fd);
 
 	while (1) {
 		int rc = 0;
@@ -1327,7 +1327,8 @@ open_zvol(int fd, zvol_info_t **zinfopp)
 		goto open_reply;
 	}
 	if (zinfo->is_io_ack_sender_created != B_FALSE) {
-		LOG_ERR("zvol %s ack sender already present", open_data.volname);
+		LOG_ERR("zvol %s ack sender already present",
+		    open_data.volname);
 		hdr.status = ZVOL_OP_STATUS_FAILED;
 		goto open_reply;
 	}

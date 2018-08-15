@@ -189,7 +189,8 @@ shutdown_fds_related_to_zinfo(zvol_info_t *zinfo)
 	(void) pthread_mutex_lock(&zinfo->zinfo_mutex);
 	while (1) {
 		STAILQ_FOREACH(zinfo_fd, &zinfo->fd_list, fd_link) {
-			LOG_ERR("shutting down %d on %s\n", zinfo_fd->fd, zinfo->name);
+			LOG_INFO("shutting down %d on %s", zinfo_fd->fd,
+			    zinfo->name);
 			shutdown(zinfo_fd->fd, SHUT_RDWR);
 		}
 		(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);

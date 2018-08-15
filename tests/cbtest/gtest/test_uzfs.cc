@@ -201,8 +201,6 @@ uzfs_mock_rebuild_scanner(void *arg)
 	EXPECT_NE(rc, -1);
 
 	if (rebuild_test_case == 6) {
-//		shutdown_fds_related_to_zinfo(zinfo);
-		LOG_ERR("closing here..");
 		close(data_conn_fd);
 		sleep(5);
 	}
@@ -213,7 +211,6 @@ uzfs_mock_rebuild_scanner(void *arg)
 		if (rc != -1)
 			rc = uzfs_zvol_socket_read(fd, (char *)&hdr, sizeof (hdr));
 		EXPECT_EQ(rc, -1);
-		LOG_ERR("sleeping here..");
 		sleep(3);
 		goto exit;
 	}
@@ -953,7 +950,6 @@ next_step:
 			else if (rebuild_test_case == 8)
 				zinfo2->is_io_ack_sender_created = B_FALSE;
 			else {
-				LOG_ERR("closing here1..");
 				close(data_conn_fd);
 				sleep(5);
 			}
@@ -967,7 +963,6 @@ next_step:
 			if (rc != -1)
 				rc = uzfs_zvol_socket_read(sfd, (char *)&hdr, sizeof (hdr));
 			EXPECT_EQ(rc, -1);
-			LOG_ERR("sleeping here..");
 			sleep(3);
 			goto exit;
 		}
