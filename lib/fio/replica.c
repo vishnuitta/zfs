@@ -525,7 +525,8 @@ static int fio_repl_open_file(struct thread_data *td, struct fio_file *f)
 	// send volume name we want to open to replica
 	if (open_zvol(td, f->fd, f->file_name) != 0) {
 		close(f->fd);
-		return (1);
+		sleep(2);
+		goto again;
 	}
 
 	return (0);
@@ -545,6 +546,8 @@ static int fio_repl_close_file(struct thread_data *td, struct fio_file *f)
 
 static void fio_repl_terminate(struct thread_data *td)
 {
+	if (f->fd != -1)
+		rc = close(f->fd);
 	kill(td->pid, SIGTERM);
 }
 

@@ -1081,6 +1081,7 @@ reinitialize_zv_state(zvol_state_t *zv)
 	zv->zv_metavolblocksize = 0;
 
 	uzfs_zvol_set_status(zv, ZVOL_STATUS_DEGRADED);
+	uzfs_zvol_set_rebuild_status(zv, ZVOL_REBUILDING_INIT);
 }
 
 /*
@@ -1165,6 +1166,9 @@ uzfs_zvol_io_ack_sender(void *arg)
 	kmem_free(arg, sizeof (thread_args_t));
 
 	prctl(PR_SET_NAME, "ack_sender", 0, 0, 0);
+
+	LOG_INFO("Started ack sender for Data connection associated with zvol %s fd: %d======================================",
+	    zinfo->name, fd);
 
 	while (1) {
 		int rc = 0;
@@ -1322,6 +1326,11 @@ open_zvol(int fd, zvol_info_t **zinfopp)
 		hdr.status = ZVOL_OP_STATUS_FAILED;
 		goto open_reply;
 	}
+	if (zinfo->is_io_ack_sender_created != B_FALSE) {
+		LOG_ERR("zvol %s ack sender already present", open_data.volname);
+		hdr.status = ZVOL_OP_STATUS_FAILED;
+		goto open_reply;
+	}
 
 	zv = zinfo->zv;
 	ASSERT3P(zv, !=, NULL);
@@ -1387,22 +1396,17 @@ open_zvol(int fd, zvol_info_t **zinfopp)
 	zinfo->timeout = open_data.timeout;
 	*zinfopp = zinfo;
 
-	if (!zinfo->is_io_ack_sender_created) {
-		zinfo->conn_closed = B_FALSE;
-		zinfo->is_io_ack_sender_created = B_TRUE;
-		(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
-		thrd_arg = kmem_alloc(sizeof (thread_args_t), KM_SLEEP);
-		thrd_arg->fd = fd;
-		thrd_arg->zinfo = zinfo;
-		uzfs_zinfo_take_refcnt(zinfo);
-		thrd_info = zk_thread_create(NULL, 0,
-		    (thread_func_t)uzfs_zvol_io_ack_sender,
-		    (void *)thrd_arg, 0, NULL, TS_RUN, 0,
-		    PTHREAD_CREATE_DETACHED);
-		VERIFY3P(thrd_info, !=, NULL);
-	} else {
-		(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
-	}
+	zinfo->conn_closed = B_FALSE;
+	zinfo->is_io_ack_sender_created = B_TRUE;
+	(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
+	thrd_arg = kmem_alloc(sizeof (thread_args_t), KM_SLEEP);
+	thrd_arg->fd = fd;
+	thrd_arg->zinfo = zinfo;
+	uzfs_zinfo_take_refcnt(zinfo);
+	thrd_info = zk_thread_create(NULL, 0,
+	    (thread_func_t)uzfs_zvol_io_ack_sender, (void *)thrd_arg, 0, NULL,
+	    TS_RUN, 0, PTHREAD_CREATE_DETACHED);
+	VERIFY3P(thrd_info, !=, NULL);
 
 	hdr.status = ZVOL_OP_STATUS_OK;
 
