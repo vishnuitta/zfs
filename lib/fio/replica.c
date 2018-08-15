@@ -550,8 +550,6 @@ static int fio_repl_close_file(struct thread_data *td, struct fio_file *f)
 
 static void fio_repl_terminate(struct thread_data *td)
 {
-	if (f->fd != -1)
-		rc = close(f->fd);
 	kill(td->pid, SIGTERM);
 }
 
