@@ -599,6 +599,67 @@ finish_async_tasks(void)
 }
 
 /*
+ * Take a snapshot and update snapshot IO to ZAP.
+ */
+int
+uzfs_zvol_create_snapshot_update_zap(zvol_info_t *zinfo,
+    char *snapname, uint64_t snapshot_io_num)
+{
+	int ret = 0;
+
+	if (uzfs_zvol_get_status(zinfo->zv) != ZVOL_STATUS_HEALTHY) {
+		return (ret = -1);
+	}
+
+	if (zinfo->running_ionum > snapshot_io_num -1)
+		return (ret = -1);
+
+	mutex_enter(&zvol_list_mutex);
+
+	uzfs_zvol_store_last_committed_io_no(zinfo->zv,
+	    snapshot_io_num -1);
+	zinfo->checkpointed_ionum = snapshot_io_num -1;
+	zinfo->checkpointed_time = time(NULL);
+
+	mutex_exit(&zvol_list_mutex);
+	ret = dmu_objset_snapshot_one(zinfo->name, snapname);
+	return (ret);
+}
+
+/*
+ * For a given snap name, get snap dataset and IO number stored in ZAP
+ * Input: zinfo, snap
+ * Output: snapshot_io_num, snap_zv
+ */
+int
+uzfs_zvol_get_snap_dataset_with_io(zvol_info_t *zinfo,
+    char *snapname, uint64_t *snapshot_io_num, zvol_state_t **snap_zv)
+{
+	int ret = 0;
+
+	char *longsnap = kmem_asprintf("%s@%s",
+	    strchr(zinfo->name, '/') + 1, snapname);
+	ret = uzfs_open_dataset(zinfo->zv->zv_spa, longsnap, snap_zv);
+	if (ret != 0) {
+		LOG_ERR("Failed to get info about %s", longsnap);
+		strfree(longsnap);
+		return (ret);
+	}
+
+	strfree(longsnap);
+	ret = uzfs_hold_dataset(*snap_zv);
+	if (ret != 0) {
+		LOG_ERR("Failed to hold snapshot: %d", ret);
+		uzfs_close_dataset(*snap_zv);
+		*snap_zv = NULL;
+		return (ret);
+	}
+
+	(*snapshot_io_num) = uzfs_zvol_get_last_committed_io_no(*snap_zv);
+	return (ret);
+}
+
+/*
  * Perform the command (in async context).
  *
  * Currently we have only snapshot commands which are async. We might need to
