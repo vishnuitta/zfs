@@ -1321,27 +1321,30 @@ open_zvol(int fd, zvol_info_t **zinfopp)
 		hdr.status = ZVOL_OP_STATUS_FAILED;
 		goto open_reply;
 	}
+	(void) pthread_mutex_lock(&zinfo->zinfo_mutex);
 	if (zinfo->state != ZVOL_INFO_STATE_ONLINE) {
 		LOG_ERR("zvol %s is not online", open_data.volname);
 		hdr.status = ZVOL_OP_STATUS_FAILED;
+		(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
 		goto open_reply;
 	}
 	if (zinfo->is_io_ack_sender_created != B_FALSE) {
 		LOG_ERR("zvol %s ack sender already present",
 		    open_data.volname);
 		hdr.status = ZVOL_OP_STATUS_FAILED;
+		(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
+		goto open_reply;
+	}
+	if (zinfo->is_io_receiver_created != B_FALSE) {
+		LOG_ERR("zvol %s io receiver already present",
+		    open_data.volname);
+		hdr.status = ZVOL_OP_STATUS_FAILED;
+		(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
 		goto open_reply;
 	}
 
 	zv = zinfo->zv;
 	ASSERT3P(zv, !=, NULL);
-
-	if (zv->zv_metavolblocksize != 0) {
-		LOG_ERR("there might be already a data connection for %s",
-		    open_data.volname);
-		hdr.status = ZVOL_OP_STATUS_FAILED;
-		goto open_reply;
-	}
 
 	ASSERT3P(zv->zv_status, ==, ZVOL_STATUS_DEGRADED);
 	ASSERT3P(zv->rebuild_info.zv_rebuild_status, ==, ZVOL_REBUILDING_INIT);
@@ -1353,6 +1356,7 @@ open_zvol(int fd, zvol_info_t **zinfopp)
 		    open_data.volname, zv->zv_status,
 		    zv->rebuild_info.zv_rebuild_status);
 		hdr.status = ZVOL_OP_STATUS_FAILED;
+		(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
 		goto open_reply;
 	}
 	// validate block size (only one bit is set in the number)
@@ -1360,10 +1364,10 @@ open_zvol(int fd, zvol_info_t **zinfopp)
 	    (open_data.tgt_block_size & (open_data.tgt_block_size - 1)) != 0) {
 		LOG_ERR("Invalid block size");
 		hdr.status = ZVOL_OP_STATUS_FAILED;
+		(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
 		goto open_reply;
 	}
 
-	(void) pthread_mutex_lock(&zinfo->zinfo_mutex);
 	/*
 	 * Hold objset if this is the first query for the zvol. This can happen
 	 * in case that the target creates data connection directly without
@@ -1375,6 +1379,7 @@ open_zvol(int fd, zvol_info_t **zinfopp)
 			(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
 			LOG_ERR("Failed to hold zvol during open");
 			hdr.status = ZVOL_OP_STATUS_FAILED;
+			(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
 			goto open_reply;
 		}
 		rele_dataset_on_error = 1;
@@ -1386,6 +1391,7 @@ open_zvol(int fd, zvol_info_t **zinfopp)
 			uzfs_rele_dataset(zv);
 		LOG_ERR("Failed to set granularity of metadata");
 		hdr.status = ZVOL_OP_STATUS_FAILED;
+		(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
 		goto open_reply;
 	}
 	/*
@@ -1399,6 +1405,7 @@ open_zvol(int fd, zvol_info_t **zinfopp)
 
 	zinfo->conn_closed = B_FALSE;
 	zinfo->is_io_ack_sender_created = B_TRUE;
+	zinfo->is_io_receiver_created = B_TRUE;
 	(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
 	thrd_arg = kmem_alloc(sizeof (thread_args_t), KM_SLEEP);
 	thrd_arg->fd = fd;
@@ -1526,6 +1533,7 @@ exit:
 	zinfo->io_ack_waiting = 0;
 
 	reinitialize_zv_state(zinfo->zv);
+	zinfo->is_io_receiver_created = B_FALSE;
 	uzfs_zinfo_drop_refcnt(zinfo);
 thread_exit:
 	close(fd);

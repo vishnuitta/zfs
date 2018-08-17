@@ -1263,6 +1263,8 @@ TEST(Misc, ZreplCheckpointInterval) {
 	ASSERT_NE(ionum_slow, 888);
 	ASSERT_EQ(ionum_fast, 888);
 
+	do_data_connection(datasock_slow.fd(), host_slow, port_slow, zvol_name_slow,
+	    4096, 1000);
 	datasock_slow.graceful_close();
 	datasock_fast.graceful_close();
 	graceful_close(control_fd);
