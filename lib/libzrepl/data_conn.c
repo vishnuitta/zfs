@@ -1336,13 +1336,6 @@ open_zvol(int fd, zvol_info_t **zinfopp)
 	zv = zinfo->zv;
 	ASSERT3P(zv, !=, NULL);
 
-	if (zv->zv_metavolblocksize != 0) {
-		LOG_ERR("there might be already a data connection for %s",
-		    open_data.volname);
-		hdr.status = ZVOL_OP_STATUS_FAILED;
-		goto open_reply;
-	}
-
 	ASSERT3P(zv->zv_status, ==, ZVOL_STATUS_DEGRADED);
 	ASSERT3P(zv->rebuild_info.zv_rebuild_status, ==, ZVOL_REBUILDING_INIT);
 
