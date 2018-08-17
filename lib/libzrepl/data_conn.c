@@ -1379,14 +1379,12 @@ open_zvol(int fd, zvol_info_t **zinfopp)
 			(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
 			LOG_ERR("Failed to hold zvol during open");
 			hdr.status = ZVOL_OP_STATUS_FAILED;
-			(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
 			goto open_reply;
 		}
 		rele_dataset_on_error = 1;
 	}
 	if (uzfs_update_metadata_granularity(zv,
 	    open_data.tgt_block_size) != 0) {
-		(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
 		if (rele_dataset_on_error == 1)
 			uzfs_rele_dataset(zv);
 		LOG_ERR("Failed to set granularity of metadata");
