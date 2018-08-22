@@ -48,6 +48,13 @@ uint16_t rebuild_io_server_port = REBUILD_IO_SERVER_PORT;
 kcondvar_t timer_cv;
 kmutex_t timer_mtx;
 
+typedef struct singly_node_list_s {
+	void *node;
+	SLIST_ENTRY(singly_node_list_s) node_next;
+} singly_node_list_t;
+
+SLIST_HEAD(singly_node_list, singly_node_list_s);
+
 /*
  * Allocate zio command along with
  * buffer needed for IO completion.
@@ -434,7 +441,8 @@ uzfs_zvol_rebuild_dw_replica(void *arg)
 	rc = 0;
 
 	/* Set state in-progess state now */
-	checkpointed_ionum = uzfs_zvol_get_last_committed_io_no(zinfo->zv);
+	checkpointed_ionum = uzfs_zvol_get_last_committed_io_no(zinfo->zv,
+	    HEALTHY_IO_SEQNUM);
 	zvol_state = zinfo->zv;
 	bzero(&hdr, sizeof (hdr));
 	hdr.status = ZVOL_OP_STATUS_OK;
@@ -591,19 +599,38 @@ uzfs_zvol_timer_thread(void)
 	zvol_info_t *zinfo;
 	time_t min_interval;
 	time_t now, next_check;
+	struct singly_node_list zvol_node_list, free_node_list;
+	singly_node_list_t *n_zinfo, *t_zinfo;
 
 	init_zrepl();
 	prctl(PR_SET_NAME, "zvol_timer", 0, 0, 0);
+	SLIST_INIT(&zvol_node_list);
+	SLIST_INIT(&free_node_list);
 
 	mutex_enter(&timer_mtx);
 	while (1) {
-		min_interval = 600;  // we check intervals at least every 10mins
+		min_interval = 5;  // we check intervals at least every 5 sec
 
 		mutex_enter(&zvol_list_mutex);
-		now = time(NULL);
 		SLIST_FOREACH(zinfo, &zvol_list, zinfo_next) {
+			if (!SLIST_EMPTY(&free_node_list)) {
+				n_zinfo = SLIST_FIRST(&free_node_list);
+				SLIST_REMOVE_HEAD(&free_node_list, node_next);
+			} else {
+				n_zinfo = kmem_alloc(sizeof (*n_zinfo),
+				    KM_SLEEP);
+			}
+			uzfs_zinfo_take_refcnt(zinfo);
+			n_zinfo->node = (void *) zinfo;
+			SLIST_INSERT_HEAD(&zvol_node_list, n_zinfo, node_next);
+		}
+		mutex_exit(&zvol_list_mutex);
+
+		next_check = now = time(NULL);
+		SLIST_FOREACH(n_zinfo, &zvol_node_list, node_next) {
+			zinfo = (zvol_info_t *)n_zinfo->node;
 			if (uzfs_zvol_get_status(zinfo->zv) ==
-			    ZVOL_STATUS_HEALTHY) {
+			    ZVOL_STATUS_HEALTHY && zinfo->zv->zv_objset) {
 				next_check = zinfo->checkpointed_time +
 				    zinfo->update_ionum_interval;
 				if (next_check <= now) {
@@ -613,25 +640,65 @@ uzfs_zvol_timer_thread(void)
 					    zinfo->name);
 					uzfs_zvol_store_last_committed_io_no(
 					    zinfo->zv,
-					    zinfo->checkpointed_ionum);
+					    zinfo->checkpointed_ionum,
+					    HEALTHY_IO_SEQNUM);
 					zinfo->checkpointed_ionum =
 					    zinfo->running_ionum;
 					zinfo->checkpointed_time = now;
 					next_check = now +
 					    zinfo->update_ionum_interval;
 				}
-				if (min_interval > next_check - now)
-					min_interval = next_check - now;
+			} else if (uzfs_zvol_get_status(zinfo->zv) ==
+			    ZVOL_STATUS_DEGRADED && zinfo->zv->zv_objset) {
+				next_check = zinfo->degraded_checkpointed_time
+				    + DEGRADED_IO_UPDATE_INTERVAL;
+				if (next_check <= now &&
+				    zinfo->degraded_checkpointed_ionum !=
+				    zinfo->running_ionum) {
+					zinfo->degraded_checkpointed_ionum =
+					    zinfo->running_ionum;
+					LOG_DEBUG("Checkpointing ionum "
+					    "%lu on %s for degraded mode",
+					    zinfo->degraded_checkpointed_ionum,
+					    zinfo->name);
+					uzfs_zvol_store_last_committed_io_no(
+					    zinfo->zv,
+					    zinfo->degraded_checkpointed_ionum,
+					    DEGRADED_IO_SEQNUM);
+					zinfo->degraded_checkpointed_time =
+					    now;
+					next_check = now +
+					    DEGRADED_IO_UPDATE_INTERVAL;
+				}
 			}
+
+			if (next_check > now &&
+			    (min_interval > next_check - now))
+				min_interval = next_check - now;
 		}
-		mutex_exit(&zvol_list_mutex);
 
 		(void) cv_timedwait(&timer_cv, &timer_mtx, ddi_get_lbolt() +
 		    SEC_TO_TICK(min_interval));
+
+		SLIST_FOREACH_SAFE(n_zinfo, &zvol_node_list,
+		    node_next, t_zinfo) {
+			SLIST_REMOVE(&zvol_node_list, n_zinfo,
+			    singly_node_list_s, node_next);
+			zinfo = (zvol_info_t *)n_zinfo->node;
+			uzfs_zinfo_drop_refcnt(zinfo);
+			SLIST_INSERT_HEAD(&free_node_list, n_zinfo, node_next);
+		}
 	}
+
 	mutex_exit(&timer_mtx);
 	mutex_destroy(&timer_mtx);
 	cv_destroy(&timer_cv);
+
+	SLIST_FOREACH_SAFE(n_zinfo, &free_node_list, node_next, t_zinfo) {
+		SLIST_REMOVE(&free_node_list, n_zinfo, singly_node_list_s,
+		    node_next);
+		kmem_free(n_zinfo, sizeof (*n_zinfo));
+	}
 }
 
 /*

@@ -21,11 +21,6 @@ void (*zinfo_destroy_hook)(zvol_info_t *);
 
 struct zvol_list zvol_list;
 
-#define	SLIST_FOREACH_SAFE(var, head, field, tvar)			\
-	for ((var) = SLIST_FIRST((head));				\
-	    (var) && ((tvar) = SLIST_NEXT((var), field), 1);		\
-	    (var) = (tvar))
-
 static int uzfs_zinfo_free(zvol_info_t *zinfo);
 
 enum zrepl_log_level zrepl_log_level;
@@ -392,10 +387,10 @@ uzfs_zinfo_free(zvol_info_t *zinfo)
 }
 
 uint64_t
-uzfs_zvol_get_last_committed_io_no(zvol_state_t *zv)
+uzfs_zvol_get_last_committed_io_no(zvol_state_t *zv, char *key)
 {
 	uzfs_zap_kv_t zap;
-	zap.key = "io_seq";
+	zap.key = key;
 	zap.value = 0;
 	zap.size = sizeof (uint64_t);
 
@@ -404,11 +399,12 @@ uzfs_zvol_get_last_committed_io_no(zvol_state_t *zv)
 }
 
 void
-uzfs_zvol_store_last_committed_io_no(zvol_state_t *zv, uint64_t io_seq)
+uzfs_zvol_store_last_committed_io_no(zvol_state_t *zv, uint64_t io_seq,
+    char *key)
 {
 	uzfs_zap_kv_t *kv_array[0];
 	uzfs_zap_kv_t zap;
-	zap.key = "io_seq";
+	zap.key = key;
 	zap.value = io_seq;
 	zap.size = sizeof (io_seq);
 
