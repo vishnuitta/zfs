@@ -202,6 +202,8 @@ uzfs_mock_rebuild_scanner(void *arg)
 
 	if (rebuild_test_case == 6) {
 		close(data_conn_fd);
+		while (zinfo->is_io_receiver_created == B_TRUE)
+			sleep(2);
 		sleep(5);
 	}
 
@@ -236,8 +238,10 @@ uzfs_mock_rebuild_scanner(void *arg)
 exit:
 	shutdown(fd, SHUT_RDWR);
 exit1:
-	rebuild_test_case = 0;
 	close(fd);
+
+	rebuild_test_case = 0;
+
 	zk_thread_exit();
 }
 
@@ -1045,7 +1049,8 @@ exit:
 }
 
 void execute_rebuild_test_case(const char *s, int test_case,
-    zvol_rebuild_status_t status, zvol_rebuild_status_t verify_status)
+    zvol_rebuild_status_t status, zvol_rebuild_status_t verify_status,
+    int verify_refcnt = 2)
 {
 	kthread_t *thrd;
 	rebuild_thread_arg_t *rebuild_args;
@@ -1070,7 +1075,7 @@ void execute_rebuild_test_case(const char *s, int test_case,
 			break;
 	}
 
-	EXPECT_EQ(2, zinfo->refcnt);
+	EXPECT_EQ(verify_refcnt, zinfo->refcnt);
 
 	EXPECT_EQ(verify_status, uzfs_zvol_get_rebuild_status(zinfo->zv));
 }
@@ -1179,10 +1184,16 @@ TEST(uZFS, TestRebuildCompleteWithDataConn) {
 }
 
 TEST(uZFS, TestRebuildComplete) {
+	uzfs_zvol_set_rebuild_status(zv, ZVOL_REBUILDING_INIT);
+	do_data_connection(data_conn_fd, "127.0.0.1", IO_SERVER_PORT, "vol1");
 	/* thread helping rebuild will exit after writing valid write IO and REBUILD_STEP_DONE, and reads REBUILD_STEP, writes REBUILD_STEP_DONE */
-	execute_rebuild_test_case("complete rebuild", 7, ZVOL_REBUILDING_IN_PROGRESS, ZVOL_REBUILDING_DONE);
+	execute_rebuild_test_case("complete rebuild", 7, ZVOL_REBUILDING_IN_PROGRESS, ZVOL_REBUILDING_DONE, 4);
 	EXPECT_EQ(ZVOL_STATUS_HEALTHY, uzfs_zvol_get_status(zinfo->zv));
 
+	close(data_conn_fd);
+	while (zinfo->is_io_receiver_created == B_TRUE)
+		sleep(2);
+	sleep(5);
 	memset(&zinfo->zv->rebuild_info, 0, sizeof (zvol_rebuild_info_t));
 }
 
