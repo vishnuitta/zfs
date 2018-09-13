@@ -11,6 +11,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <uzfs_rebuilding.h>
 
 #define	ZVOL_THREAD_STACKSIZE (2 * 1024 * 1024)
 
@@ -300,7 +301,9 @@ uzfs_zinfo_destroy(const char *name, spa_t *spa)
 	zvol_info_t	*zinfo = NULL;
 	zvol_info_t    *zt = NULL;
 	int namelen = ((name) ? strlen(name) : 0);
-	zvol_state_t  *zv;
+	zvol_state_t  *clone_zv = NULL;
+	zvol_state_t  *snap_zv = NULL;
+	zvol_state_t  *main_zv;
 	int destroyed = 0;
 
 	mutex_enter(&zvol_list_mutex);
@@ -309,14 +312,18 @@ uzfs_zinfo_destroy(const char *name, spa_t *spa)
 	if (name == NULL) {
 		SLIST_FOREACH_SAFE(zinfo, &zvol_list, zinfo_next, zt) {
 			if (strcmp(spa_name(spa),
-			    spa_name(zinfo->zv->zv_spa)) == 0) {
+			    spa_name(zinfo->main_zv->zv_spa)) == 0) {
 				SLIST_REMOVE(&zvol_list, zinfo, zvol_info_s,
 				    zinfo_next);
 
 				mutex_exit(&zvol_list_mutex);
-				zv = zinfo->zv;
+				main_zv = zinfo->main_zv;
+				clone_zv = zinfo->clone_zv;
+				snap_zv = zinfo->snap_zv;
 				uzfs_mark_offline_and_free_zinfo(zinfo);
-				uzfs_close_dataset(zv);
+				(void) uzfs_zvol_release_internal_clone(
+				    main_zv, &snap_zv, &clone_zv);
+				uzfs_close_dataset(main_zv);
 				destroyed++;
 				mutex_enter(&zvol_list_mutex);
 			}
@@ -331,9 +338,13 @@ uzfs_zinfo_destroy(const char *name, spa_t *spa)
 				    zinfo_next);
 
 				mutex_exit(&zvol_list_mutex);
-				zv = zinfo->zv;
+				main_zv = zinfo->main_zv;
+				clone_zv = zinfo->clone_zv;
+				snap_zv = zinfo->snap_zv;
 				uzfs_mark_offline_and_free_zinfo(zinfo);
-				uzfs_close_dataset(zv);
+				(void) uzfs_zvol_release_internal_clone(
+				    main_zv, &snap_zv, &clone_zv);
+				uzfs_close_dataset(main_zv);
 				destroyed++;
 				goto end;
 			}
@@ -354,6 +365,8 @@ uzfs_zinfo_init(void *zv, const char *ds_name, nvlist_t *create_props)
 	zinfo =	kmem_zalloc(sizeof (zvol_info_t), KM_SLEEP);
 	bzero(zinfo, sizeof (zvol_info_t));
 	ASSERT(zinfo != NULL);
+	ASSERT(zinfo->clone_zv == NULL);
+	ASSERT(zinfo->snap_zv == NULL);
 
 	zinfo->uzfs_zvol_taskq = taskq_create("replica", boot_ncpus,
 	    defclsyspri, boot_ncpus, INT_MAX,
@@ -364,7 +377,7 @@ uzfs_zinfo_init(void *zv, const char *ds_name, nvlist_t *create_props)
 	uzfs_zinfo_init_mutex(zinfo);
 
 	strlcpy(zinfo->name, ds_name, MAXNAMELEN);
-	zinfo->zv = zv;
+	zinfo->main_zv = zv;
 	zinfo->state = ZVOL_INFO_STATE_ONLINE;
 	/* iSCSI target will overwrite this value during handshake */
 	zinfo->update_ionum_interval = 6000;

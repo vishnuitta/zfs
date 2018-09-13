@@ -29,6 +29,7 @@
 #include <uzfs_mgmt.h>
 #include <uzfs_io.h>
 #include <uzfs_zap.h>
+#include <uzfs_rebuilding.h>
 
 static int uzfs_fd_rand = -1;
 kmutex_t zvol_list_mutex;
@@ -462,6 +463,26 @@ ret:
 	return (error);
 }
 
+/*
+ * This function is checked if volume is internally
+ * created cloned volume for rebuild purpose.
+ * Input: Volume name [pool/volume_name].
+ * Output: 0 if volume is internally created cloned volume.
+ * Otherwise non-zero value.
+ */
+int
+is_internally_created_clone_volume(const char *ds_name)
+{
+	size_t ds_len  = strlen(ds_name);
+	size_t pattern_len = strlen(REBUILD_SNAPSHOT_CLONENAME);
+
+	if (ds_len < pattern_len)
+		return (-1);
+
+	return (strcmp(ds_name + (ds_len - pattern_len),
+	    REBUILD_SNAPSHOT_CLONENAME));
+}
+
 /* uZFS Zvol create call back function */
 int
 uzfs_zvol_create_cb(const char *ds_name, void *arg)
@@ -474,6 +495,14 @@ uzfs_zvol_create_cb(const char *ds_name, void *arg)
 	if (strrchr(ds_name, '@') != NULL) {
 		return (0);
 	}
+
+	/*
+	 * Internally created cloned volume do not have target IP stored
+	 * infact they do not need to have zinfo and connection to target
+	 * as these are not meant for client/application.
+	 */
+	if (is_internally_created_clone_volume(ds_name) == 0)
+		return (0);
 
 	error = uzfs_dataset_zv_create(ds_name, &zv);
 	if (error) {

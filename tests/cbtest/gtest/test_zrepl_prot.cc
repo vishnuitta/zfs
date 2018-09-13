@@ -793,6 +793,9 @@ TEST_F(ZreplDataTest, WriteAndReadBlocksWithIonum) {
 	write_data_and_verify_resp(m_datasock2.fd(), m_ioseq2, 0, 123);
 	write_two_chunks_and_verify_resp(m_datasock2.fd(), m_ioseq2, 4096);
 	read_data_and_verify_resp(m_datasock2.fd(), m_ioseq2);
+	m_datasock1.graceful_close();
+	m_datasock2.graceful_close();
+	sleep(5);
 }
 
 /* Read two blocks without metadata from the end of zvol */
@@ -818,6 +821,9 @@ TEST_F(ZreplDataTest, ReadBlockWithoutMeta) {
 		ASSERT_EQ(rc, read_hdr.len);
 		offset += sizeof (buf);
 	}
+	m_datasock1.graceful_close();
+	m_datasock2.graceful_close();
+	sleep(5);
 }
 
 /*
@@ -855,6 +861,9 @@ TEST_F(ZreplDataTest, WriteAndSync) {
 	EXPECT_EQ(hdr_in.io_seq, m_ioseq1);
 	EXPECT_EQ(hdr_in.offset, 0);
 	EXPECT_EQ(hdr_in.len, 0);
+	m_datasock1.graceful_close();
+	m_datasock2.graceful_close();
+	sleep(5);
 }
 
 TEST_F(ZreplDataTest, UnknownOpcode) {
@@ -876,6 +885,9 @@ TEST_F(ZreplDataTest, UnknownOpcode) {
 	EXPECT_EQ(hdr_in.opcode, 255);
 	EXPECT_EQ(hdr_in.status, ZVOL_OP_STATUS_FAILED);
 	EXPECT_EQ(hdr_in.io_seq, m_ioseq1);
+	m_datasock1.graceful_close();
+	m_datasock2.graceful_close();
+	sleep(5);
 }
 
 TEST_F(ZreplDataTest, ReadInvalidOffset) {
@@ -891,6 +903,9 @@ TEST_F(ZreplDataTest, ReadInvalidOffset) {
 	read_data_start(m_datasock1.fd(), m_ioseq1, ZVOL_SIZE + 4096, 4096, &hdr_in);
 	ASSERT_EQ(hdr_in.status, ZVOL_OP_STATUS_FAILED);
 	ASSERT_EQ(hdr_in.len, 0);
+	m_datasock1.graceful_close();
+	m_datasock2.graceful_close();
+	sleep(5);
 }
 
 TEST_F(ZreplDataTest, ReadInvalidLength) {
@@ -906,6 +921,9 @@ TEST_F(ZreplDataTest, ReadInvalidLength) {
 	read_data_start(m_datasock1.fd(), m_ioseq1, ZVOL_SIZE - 4096, 2 * 4096, &hdr_in);
 	ASSERT_EQ(hdr_in.status, ZVOL_OP_STATUS_FAILED);
 	ASSERT_EQ(hdr_in.len, 0);
+	m_datasock1.graceful_close();
+	m_datasock2.graceful_close();
+	sleep(5);
 }
 
 TEST_F(ZreplDataTest, WriteInvalidOffset) {
@@ -931,6 +949,9 @@ TEST_F(ZreplDataTest, WriteInvalidOffset) {
 	EXPECT_EQ(hdr_in.opcode, ZVOL_OPCODE_WRITE);
 	EXPECT_EQ(hdr_in.io_seq, m_ioseq1);
 	EXPECT_EQ(hdr_in.status, ZVOL_OP_STATUS_FAILED);
+	m_datasock1.graceful_close();
+	m_datasock2.graceful_close();
+	sleep(5);
 }
 
 TEST_F(ZreplDataTest, WriteInvalidLength) {
@@ -947,6 +968,9 @@ TEST_F(ZreplDataTest, WriteInvalidLength) {
 	EXPECT_EQ(hdr_in.opcode, ZVOL_OPCODE_WRITE);
 	EXPECT_EQ(hdr_in.io_seq, m_ioseq1);
 	EXPECT_EQ(hdr_in.status, ZVOL_OP_STATUS_FAILED);
+	m_datasock1.graceful_close();
+	m_datasock2.graceful_close();
+	sleep(5);
 }
 
 /*
@@ -1000,6 +1024,9 @@ TEST_F(ZreplDataTest, RebuildFlag) {
 	rc = read(m_datasock1.fd(), buf, sizeof (buf));
 	ASSERT_ERRNO("read", rc >= 0);
 	ASSERT_EQ(rc, sizeof (buf));
+	m_datasock1.graceful_close();
+	m_datasock2.graceful_close();
+	sleep(5);
 }
 
 /*
@@ -1030,6 +1057,9 @@ TEST_F(ZreplDataTest, ReadMetaDataFlag) {
 	rc = read(m_datasock1.fd(), buf, sizeof (buf));
 	ASSERT_ERRNO("read", rc >= 0);
 	ASSERT_EQ(rc, sizeof (buf));
+	m_datasock1.graceful_close();
+	m_datasock2.graceful_close();
+	sleep(5);
 }
 
 /*
@@ -1257,9 +1287,10 @@ TEST(Misc, ZreplCheckpointInterval) {
 
 	do_data_connection(datasock_slow.fd(), host_slow, port_slow, zvol_name_slow,
 	    4096, 1000);
-	datasock_slow.graceful_close();
 	datasock_fast.graceful_close();
+	datasock_slow.graceful_close();
 	graceful_close(control_fd);
+	sleep(5);
 }
 
 class ZreplBlockSizeTest : public testing::Test {
@@ -1332,8 +1363,11 @@ TEST_F(ZreplBlockSizeTest, SetMetaBlockSize) {
 	do_data_connection(datasock1.fd(), m_host, m_port, m_zvol_name, 4096);
 	write_data_and_verify_resp(datasock1.fd(), m_ioseq, 0, 1);
 	datasock1.graceful_close();
+	sleep(5);
 	do_data_connection(datasock2.fd(), m_host, m_port, m_zvol_name, 4096);
 	write_data_and_verify_resp(datasock2.fd(), m_ioseq, 0, 1);
+	datasock2.graceful_close();
+	sleep(5);
 }
 
 TEST_F(ZreplBlockSizeTest, SetMetaBlockSizeSmallerThanBlockSize) {
@@ -1341,6 +1375,8 @@ TEST_F(ZreplBlockSizeTest, SetMetaBlockSizeSmallerThanBlockSize) {
 
 	do_data_connection(datasock.fd(), m_host, m_port, m_zvol_name, 512);
 	write_data_and_verify_resp(datasock.fd(), m_ioseq, 0, 1, 512);
+	datasock.graceful_close();
+	sleep(5);
 }
 
 TEST_F(ZreplBlockSizeTest, SetMetaBlockSizeBiggerThanBlockSize) {
@@ -1348,6 +1384,8 @@ TEST_F(ZreplBlockSizeTest, SetMetaBlockSizeBiggerThanBlockSize) {
 
 	do_data_connection(datasock.fd(), m_host, m_port, m_zvol_name, 8192);
 	write_data_and_verify_resp(datasock.fd(), m_ioseq, 0, 1, 8192);
+	datasock.graceful_close();
+	sleep(5);
 }
 
 TEST_F(ZreplBlockSizeTest, SetMetaBlockSizeUnaligned) {
@@ -1355,6 +1393,8 @@ TEST_F(ZreplBlockSizeTest, SetMetaBlockSizeUnaligned) {
 
 	do_data_connection(datasock.fd(), m_host, m_port, m_zvol_name, 513, 120,
 	    ZVOL_OP_STATUS_FAILED);
+	datasock.graceful_close();
+	sleep(5);
 }
 
 TEST_F(ZreplBlockSizeTest, SetDifferentMetaBlockSizes) {
@@ -1363,8 +1403,11 @@ TEST_F(ZreplBlockSizeTest, SetDifferentMetaBlockSizes) {
 	do_data_connection(datasock1.fd(), m_host, m_port, m_zvol_name, 4096);
 	write_data_and_verify_resp(datasock1.fd(), m_ioseq, 0, 1);
 	datasock1.graceful_close();
+	sleep(5);
 	do_data_connection(datasock2.fd(), m_host, m_port, m_zvol_name, 512, 120,
 	    ZVOL_OP_STATUS_FAILED);
+	datasock2.graceful_close();
+	sleep(5);
 }
 
 /*
@@ -1424,6 +1467,7 @@ TEST(DiskReplaceTest, SpareReplacement) {
 
 	datasock.graceful_close();
 	graceful_close(control_fd);
+	sleep(5);
 }
 
 /*
@@ -1684,6 +1728,7 @@ TEST(ZvolStatsTest, StatsZvol) {
 		write_data_and_verify_resp(datasock.fd(), ioseq, 4096 * i, i + 1);
 	}
 	datasock.graceful_close();
+	sleep(5);
 
 	// get "used" after
 	get_used(control_fd, zvolname, &val2);
