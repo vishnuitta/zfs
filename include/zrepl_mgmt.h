@@ -109,6 +109,7 @@ typedef struct zvol_info_s {
 	uint32_t	timeout;	/* iSCSI timeout val for this zvol */
 	uint64_t	zvol_guid;
 	uint64_t	running_ionum;
+	uint64_t	stored_healthy_ionum; /* healthy_io_num stored in zap */
 	uint64_t	checkpointed_ionum;
 	uint64_t	degraded_checkpointed_ionum;
 	time_t		checkpointed_time;	/* time of the last chkpoint */
@@ -129,6 +130,7 @@ typedef struct zvol_info_s {
 	 */
 	pthread_mutex_t	zinfo_mutex;
 	pthread_cond_t	io_ack_cond;
+	pthread_mutex_t	zinfo_ionum_mutex;
 
 	/* All cmds after execution will go here for ack */
 	STAILQ_HEAD(, zvol_io_cmd_s)	complete_queue;
@@ -192,8 +194,10 @@ extern zvol_info_t *uzfs_zinfo_lookup(const char *name);
 extern void uzfs_zinfo_replay_zil_all(void);
 extern int uzfs_zinfo_destroy(const char *ds_name, spa_t *spa);
 uint64_t uzfs_zvol_get_last_committed_io_no(zvol_state_t *zv, char *key);
-void uzfs_zvol_store_last_committed_io_no(zvol_state_t *zv,
-    char *key, uint64_t io_seq);
+void uzfs_zvol_store_last_committed_healthy_io_no(zvol_info_t *zinfo,
+    uint64_t io_seq);
+void uzfs_zvol_store_last_committed_degraded_io_no(zvol_info_t *zv,
+    uint64_t io_seq);
 extern int set_socket_keepalive(int sfd);
 extern int create_and_bind(const char *port, int bind_needed,
     boolean_t nonblocking);

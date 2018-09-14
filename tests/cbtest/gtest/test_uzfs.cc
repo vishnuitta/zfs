@@ -611,25 +611,8 @@ TEST(SnapCreate, SnapCreateFailureHigherIO) {
 	    snapname, snapshot_io_num));
 }
 
-/* Snap create failure */
-TEST(SnapCreate, SnapCreateFailure) {
-
-	/*
-	 * By default volume state is marked downgraded
-	 * so updation of ZAP attribute would fail
-	 */
-	uzfs_zvol_set_rebuild_status(zinfo->main_zv, ZVOL_REBUILDING_INIT);
-	uzfs_zvol_set_status(zinfo->main_zv, ZVOL_STATUS_DEGRADED);
-
-	zinfo->running_ionum = snapshot_io_num -1;
-	/* Create snapshot */
-	EXPECT_EQ(-1, uzfs_zvol_create_snapshot_update_zap(zinfo,
-	    snapname, snapshot_io_num));
-}
-
 /* Snap create success */
 TEST(SnapCreate, SnapCreateSuccess) {
-
 	/*
 	 * Set volume state to healthy so that we can
 	 * update ZAP attribute and take snapshot
