@@ -619,6 +619,12 @@ exit:
 	zk_thread_exit();
 }
 
+#define	STORE_LAST_COMMITTED_HEALTHY_IO_NO	\
+    uzfs_zvol_store_last_committed_healthy_io_no
+
+#define	STORE_LAST_COMMITTED_DEGRADED_IO_NO	\
+    uzfs_zvol_store_last_committed_degraded_io_no
+
 void
 uzfs_zvol_timer_thread(void)
 {
@@ -665,10 +671,8 @@ uzfs_zvol_timer_thread(void)
 					    "%lu on %s",
 					    zinfo->checkpointed_ionum,
 					    zinfo->name);
-					uzfs_zvol_store_last_committed_io_no(
-					    zinfo->main_zv,
-					    HEALTHY_IO_SEQNUM,
-					    zinfo->checkpointed_ionum);
+					STORE_LAST_COMMITTED_HEALTHY_IO_NO(
+					    zinfo, zinfo->checkpointed_ionum);
 					zinfo->checkpointed_ionum =
 					    zinfo->running_ionum;
 					zinfo->checkpointed_time = now;
@@ -681,7 +685,7 @@ uzfs_zvol_timer_thread(void)
 				next_check = zinfo->degraded_checkpointed_time
 				    + DEGRADED_IO_UPDATE_INTERVAL;
 				if (next_check <= now &&
-				    zinfo->degraded_checkpointed_ionum !=
+				    zinfo->degraded_checkpointed_ionum <
 				    zinfo->running_ionum) {
 					zinfo->degraded_checkpointed_ionum =
 					    zinfo->running_ionum;
@@ -689,9 +693,8 @@ uzfs_zvol_timer_thread(void)
 					    "%lu on %s for degraded mode",
 					    zinfo->degraded_checkpointed_ionum,
 					    zinfo->name);
-					uzfs_zvol_store_last_committed_io_no(
-					    zinfo->main_zv,
-					    DEGRADED_IO_SEQNUM,
+					STORE_LAST_COMMITTED_DEGRADED_IO_NO(
+					    zinfo,
 					    zinfo->degraded_checkpointed_ionum);
 					zinfo->degraded_checkpointed_time =
 					    now;

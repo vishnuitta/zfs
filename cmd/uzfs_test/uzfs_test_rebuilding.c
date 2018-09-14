@@ -380,6 +380,25 @@ rebuild_replica_thread(void *arg)
 }
 
 static void
+uzfs_zvol_store_last_committed_io_no(zvol_state_t *zv, char *key,
+    uint64_t io_seq)
+{
+	uzfs_zap_kv_t *kv_array[0];
+	uzfs_zap_kv_t zap;
+
+	if (io_seq == 0)
+		return;
+
+	zap.key = key;
+	zap.value = io_seq;
+	zap.size = sizeof (io_seq);
+
+	kv_array[0] = &zap;
+	VERIFY0(uzfs_update_zap_entries(zv,
+	    (const uzfs_zap_kv_t **) kv_array, 1));
+}
+
+static void
 replica_writer_thread(void *arg)
 {
 	worker_args_t *warg = (worker_args_t *)arg;
