@@ -685,7 +685,7 @@ uzfs_zvol_timer_thread(void)
 				next_check = zinfo->degraded_checkpointed_time
 				    + DEGRADED_IO_UPDATE_INTERVAL;
 				if (next_check <= now &&
-				    zinfo->degraded_checkpointed_ionum !=
+				    zinfo->degraded_checkpointed_ionum <
 				    zinfo->running_ionum) {
 					zinfo->degraded_checkpointed_ionum =
 					    zinfo->running_ionum;

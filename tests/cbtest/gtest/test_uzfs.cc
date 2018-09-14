@@ -624,6 +624,8 @@ TEST(SnapCreate, SnapCreateSuccess) {
 	/* Create snapshot */
 	EXPECT_EQ(0, uzfs_zvol_create_snapshot_update_zap(zinfo,
 	    snapname, snapshot_io_num));
+	EXPECT_EQ(999, uzfs_zvol_get_last_committed_io_no(zinfo->main_zv,
+	    (char *)HEALTHY_IO_SEQNUM));
 }
 
 /* Retrieve Snap dataset and IO number */

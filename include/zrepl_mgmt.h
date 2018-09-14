@@ -108,10 +108,24 @@ typedef struct zvol_info_s {
 
 	uint32_t	timeout;	/* iSCSI timeout val for this zvol */
 	uint64_t	zvol_guid;
+
+	/* Highest IO num of received write IOs */
 	uint64_t	running_ionum;
-	uint64_t	stored_healthy_ionum; /* healthy_io_num stored in zap */
+
+	/* IO num that is stored to ZAP as healthy_ionum when vol is healthy */
+	uint64_t	stored_healthy_ionum;
+
+	/*
+	 * IO num that will be written to ZAP as healthy_ionum
+	 * This tells that all IOs lesser than this are committed to replica
+	 * So, running_ionum will be made as checkpointed_ionum and will be
+	 * stored to ZAP after 'update_ionum_interval' time period.
+	 */
 	uint64_t	checkpointed_ionum;
+
+	/* running_ionum that is stored to ZAP when vol is degraded */
 	uint64_t	degraded_checkpointed_ionum;
+
 	time_t		checkpointed_time;	/* time of the last chkpoint */
 	uint64_t	rebuild_cmd_queued_cnt;
 	uint64_t	rebuild_cmd_acked_cnt;

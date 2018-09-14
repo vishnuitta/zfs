@@ -462,7 +462,7 @@ uzfs_zvol_store_last_committed_healthy_io_no(zvol_info_t *zinfo,
 		return;
 	}
 	zinfo->stored_healthy_ionum = io_seq;
-	pthread_mutex_unlock(&zinfo->zinfo_ionum_mutex);
 	uzfs_zvol_store_last_committed_io_no(zinfo->main_zv,
 	    HEALTHY_IO_SEQNUM, io_seq);
+	pthread_mutex_unlock(&zinfo->zinfo_ionum_mutex);
 }
