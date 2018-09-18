@@ -271,7 +271,7 @@ uzfs_zvol_worker(void *arg)
 {
 	zvol_io_cmd_t	*zio_cmd;
 	zvol_info_t	*zinfo;
-	zvol_state_t	*zvol_state;
+	zvol_state_t	*zvol_state, *read_zv;
 	zvol_io_hdr_t 	*hdr;
 	metadata_desc_t	**metadata_desc;
 	int		rc = 0;
@@ -318,7 +318,21 @@ uzfs_zvol_worker(void *arg)
 	}
 	switch (hdr->opcode) {
 		case ZVOL_OPCODE_READ:
-			rc = uzfs_read_data(zinfo->main_zv,
+			read_zv = zinfo->main_zv;
+			if (rebuild_cmd_req) {
+				/*
+				 * if we are rebuilding, we have
+				 * to read the data from the snapshot
+				 */
+				if (zinfo->rebuild_zv) {
+					read_zv = zinfo->rebuild_zv;
+				} else {
+					rc = -1;
+					break;
+				}
+			}
+
+			rc = uzfs_read_data(read_zv,
 			    (char *)zio_cmd->buf,
 			    hdr->offset, hdr->len,
 			    metadata_desc);
@@ -419,6 +433,45 @@ uzfs_zvol_remove_from_fd_list(zvol_info_t *zinfo, int fd)
 		zinfo_fd = STAILQ_NEXT(zinfo_fd, fd_link);
 	}
 	(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
+}
+
+static int
+uzfs_zvol_handle_rebuild_snap_done(zvol_io_hdr_t *hdrp,
+    int sfd, zvol_info_t *zinfo)
+{
+	int rc = 0;
+	char *snap;
+	char zvol_name[MAX_NAME_LEN + 1];
+
+	if (hdrp->len == 0 || hdrp->len > MAX_NAME_LEN) {
+		LOG_ERR("Unexpected hdr.len:%ld on volume: %s",
+		    hdrp->len, zinfo->name);
+		return (rc = -1);
+	}
+
+	if ((rc = uzfs_zvol_socket_read(sfd, zvol_name, hdrp->len)) != 0)
+		return (rc);
+
+	zvol_name[hdrp->len] = '\0';
+	snap = strchr(zvol_name, '@');
+	if (snap == NULL) {
+		LOG_ERR("Invalid snapshot name: %s", zvol_name);
+		return (rc = -1);
+	}
+
+	*snap++ = '\0';
+
+	if (strcmp(zinfo->name, zvol_name) != 0) {
+		LOG_ERR("Wrong volume, Received name: %s, Expected:%s",
+		    zvol_name, zinfo->name);
+		return (rc = -1);
+	}
+
+	rc = uzfs_zvol_create_snapshot_update_zap(zinfo, snap, hdrp->io_seq);
+	if (rc != 0) {
+		LOG_ERR("Failed to create %s@%s: %d", zinfo->name, snap, rc);
+	}
+	return (rc);
 }
 
 void
@@ -554,6 +607,34 @@ next_step:
 			goto next_step;
 		}
 
+		/* One more snapshot has been transferred */
+		if (hdr.opcode == ZVOL_OPCODE_REBUILD_SNAP_DONE) {
+			rc = uzfs_zvol_handle_rebuild_snap_done(&hdr,
+			    sfd, zinfo);
+			if (rc != 0) {
+				LOG_ERR("Rebuild snap_done failed.. for %s",
+				    zinfo->name);
+				goto exit;
+			}
+			offset = 0;
+			checkpointed_ionum = uzfs_zvol_get_last_committed_io_no(
+			    zinfo->main_zv, HEALTHY_IO_SEQNUM);
+			goto next_step;
+		}
+
+		/* All snapshots has been transferred */
+		if (hdr.opcode == ZVOL_OPCODE_REBUILD_ALL_SNAP_DONE) {
+			/*
+			 * Change rebuild state to mark that all
+			 * snapshots has been transferred now
+			 */
+			uzfs_zvol_set_rebuild_status(zinfo->main_zv,
+			    ZVOL_REBUILDING_AFS);
+			offset = 0;
+			checkpointed_ionum = uzfs_zvol_get_last_committed_io_no(
+			    zinfo->main_zv, HEALTHY_IO_SEQNUM);
+			goto next_step;
+		}
 		ASSERT((hdr.opcode == ZVOL_OPCODE_READ) &&
 		    (hdr.flags & ZVOL_OP_FLAG_REBUILD));
 		hdr.opcode = ZVOL_OPCODE_WRITE;
@@ -1021,6 +1102,7 @@ uzfs_zvol_rebuild_scanner_callback(off_t offset, size_t len,
 	/* Take refcount for uzfs_zvol_worker to work on it */
 	uzfs_zinfo_take_refcnt(zinfo);
 	zio_cmd->zinfo = zinfo;
+	zinfo->rebuild_zv = zv;
 
 	/*
 	 * Any error in uzfs_zvol_worker will send FAILURE status to degraded
