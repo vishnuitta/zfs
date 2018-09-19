@@ -519,8 +519,13 @@ uzfs_zvol_rebuild_dw_replica(void *arg)
 	rc = 0;
 
 	/* Set state in-progess state now */
-	checkpointed_ionum = uzfs_zvol_get_last_committed_io_no(
-	    zinfo->main_zv, HEALTHY_IO_SEQNUM);
+	rc = uzfs_zvol_get_last_committed_io_no(
+	    zinfo->main_zv, HEALTHY_IO_SEQNUM, &checkpointed_ionum);
+	if (rc != 0) {
+		LOG_ERR("unable to get checkpointed num");
+		goto exit;
+	}
+
 	zvol_state = zinfo->main_zv;
 	bzero(&hdr, sizeof (hdr));
 	hdr.status = ZVOL_OP_STATUS_OK;
@@ -617,8 +622,13 @@ next_step:
 				goto exit;
 			}
 			offset = 0;
-			checkpointed_ionum = uzfs_zvol_get_last_committed_io_no(
-			    zinfo->main_zv, HEALTHY_IO_SEQNUM);
+			rc = uzfs_zvol_get_last_committed_io_no(zinfo->main_zv,
+			    HEALTHY_IO_SEQNUM, &checkpointed_ionum);
+			if (rc != 0) {
+				LOG_ERR("unable to get checkpointed num on "
+				    "snap done");
+				goto exit;
+			}
 			goto next_step;
 		}
 
@@ -631,8 +641,13 @@ next_step:
 			uzfs_zvol_set_rebuild_status(zinfo->main_zv,
 			    ZVOL_REBUILDING_AFS);
 			offset = 0;
-			checkpointed_ionum = uzfs_zvol_get_last_committed_io_no(
-			    zinfo->main_zv, HEALTHY_IO_SEQNUM);
+			rc = uzfs_zvol_get_last_committed_io_no(zinfo->main_zv,
+			    HEALTHY_IO_SEQNUM, &checkpointed_ionum);
+			if (rc != 0) {
+				LOG_ERR("unable to get checkpointed num on "
+				    "all snap done");
+				goto exit;
+			}
 			goto next_step;
 		}
 		ASSERT((hdr.opcode == ZVOL_OPCODE_READ) &&
