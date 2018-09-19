@@ -640,9 +640,11 @@ uzfs_zvol_create_snapshot_update_zap(zvol_info_t *zinfo,
 /*
  * Returns zv of snap that is just higher than given ionum
  * If no such snap exists, it returns NULL
+ * Note: caller should do uzfs_close_dataset of zv, and,
+ * caller need to take care of any ongoing snap requests
  */
 zvol_state_t *
-uzfs_zvol_get_snap_zv(zvol_info_t *zinfo, uint64_t ionum)
+uzfs_get_snap_zv_ionum(zvol_info_t *zinfo, uint64_t ionum)
 {
 	if ((zinfo == NULL) || (zinfo->main_zv == NULL) ||
 	    (zinfo->main_zv->zv_objset == NULL))
