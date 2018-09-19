@@ -727,22 +727,22 @@ TEST(GetSnapFromIO, GetDestroySnap) {
 	zvol_state_t *zv;
 	int ret;
 
-	zv = uzfs_zvol_get_snap_zv(zinfo, 1998);
+	zv = uzfs_get_snap_zv_ionum(zinfo, 1998);
 	ret = strcmp(zv->zv_name, "pool1/vol1@snapa");
 	EXPECT_EQ(ret, 0);
 	uzfs_close_dataset(zv);
 
-	zv = uzfs_zvol_get_snap_zv(zinfo, 1999);
+	zv = uzfs_get_snap_zv_ionum(zinfo, 1999);
 	ret = strcmp(zv->zv_name, "pool1/vol1@snapb");
 	EXPECT_EQ(ret, 0);
 	uzfs_close_dataset(zv);
 
-	zv = uzfs_zvol_get_snap_zv(zinfo, 3000);
+	zv = uzfs_get_snap_zv_ionum(zinfo, 3000);
 	ret = strcmp(zv->zv_name, "pool1/vol1@snapc");
 	EXPECT_EQ(ret, 0);
 	uzfs_close_dataset(zv);
 
-	zv = uzfs_zvol_get_snap_zv(zinfo, 3999);
+	zv = uzfs_get_snap_zv_ionum(zinfo, 3999);
 	ret = (zv == NULL) ? 0 : 1;
 	EXPECT_EQ(ret, 0);
 
