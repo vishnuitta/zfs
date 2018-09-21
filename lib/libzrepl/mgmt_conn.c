@@ -464,6 +464,7 @@ uzfs_zvol_mgmt_do_handshake(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp,
 	zvol_state_t	*zv = zinfo->main_zv;
 	mgmt_ack_t 	mgmt_ack;
 	zvol_io_hdr_t	hdr;
+	int error1, error2;
 
 	bzero(&mgmt_ack, sizeof (mgmt_ack));
 	if (uzfs_zvol_get_ip(mgmt_ack.ip, MAX_IP_LEN) == -1) {
@@ -489,6 +490,16 @@ uzfs_zvol_mgmt_do_handshake(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp,
 		}
 	}
 
+	error1 = uzfs_zvol_get_last_committed_io_no(zv, HEALTHY_IO_SEQNUM,
+	    &zinfo->checkpointed_ionum);
+	error2 = uzfs_zvol_get_last_committed_io_no(zv, DEGRADED_IO_SEQNUM,
+	    &zinfo->degraded_checkpointed_ionum);
+	if ((error1 != 0) || (error2 != 0)) {
+		LOG_ERR("Failed to read io_seqnum %s", zinfo->name);
+		return (reply_nodata(conn, ZVOL_OP_STATUS_FAILED,
+		    hdrp->opcode, hdrp->io_seq));
+	}
+
 	/*
 	 * We don't use fsid_guid because that one is not guaranteed
 	 * to stay the same (it is changed in case of conflicts).
@@ -506,10 +517,6 @@ uzfs_zvol_mgmt_do_handshake(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp,
 	hdr.len = sizeof (mgmt_ack);
 	hdr.status = ZVOL_OP_STATUS_OK;
 
-	zinfo->checkpointed_ionum =
-	    uzfs_zvol_get_last_committed_io_no(zv, HEALTHY_IO_SEQNUM);
-	zinfo->degraded_checkpointed_ionum =
-	    uzfs_zvol_get_last_committed_io_no(zv, DEGRADED_IO_SEQNUM);
 	zinfo->stored_healthy_ionum = zinfo->checkpointed_ionum;
 	zinfo->running_ionum = zinfo->degraded_checkpointed_ionum;
 	LOG_INFO("IO sequence number:%lu Degraded IO sequence number:%lu",
@@ -818,12 +825,13 @@ uzfs_zvol_create_snapshot_update_zap(zvol_info_t *zinfo,
  * Note: caller should do uzfs_close_dataset of zv, and,
  * caller need to take care of any ongoing snap requests
  */
-zvol_state_t *
-uzfs_get_snap_zv_ionum(zvol_info_t *zinfo, uint64_t ionum)
+int
+uzfs_get_snap_zv_ionum(zvol_info_t *zinfo, uint64_t ionum,
+    zvol_state_t **psnapzv)
 {
 	if ((zinfo == NULL) || (zinfo->main_zv == NULL) ||
 	    (zinfo->main_zv->zv_objset == NULL))
-		return (NULL);
+		return (-1);
 
 	uint64_t obj = 0, cookie = 0;
 	zvol_state_t *zv = zinfo->main_zv;
@@ -848,8 +856,10 @@ uzfs_get_snap_zv_ionum(zvol_info_t *zinfo, uint64_t ionum)
 		error = get_snapshot_zv(zv, snapname, &snap_zv);
 		if (error)
 			break;
-		healthy_ionum = uzfs_zvol_get_last_committed_io_no(snap_zv,
-		    HEALTHY_IO_SEQNUM);
+		error = uzfs_zvol_get_last_committed_io_no(snap_zv,
+		    HEALTHY_IO_SEQNUM, &healthy_ionum);
+		if (error)
+			break;
 		if ((healthy_ionum > ionum) &&
 		    ((smallest_higher_snapzv == NULL) ||
 		    (smallest_higher_ionum > healthy_ionum))) {
@@ -860,7 +870,15 @@ uzfs_get_snap_zv_ionum(zvol_info_t *zinfo, uint64_t ionum)
 		} else
 			uzfs_close_dataset(snap_zv);
 	}
-	return (smallest_higher_snapzv);
+	if (error) {
+		if (smallest_higher_snapzv != NULL) {
+			uzfs_close_dataset(smallest_higher_snapzv);
+			smallest_higher_snapzv = NULL;
+		}
+	} else if (psnapzv != NULL)
+		*psnapzv = smallest_higher_snapzv;
+
+	return (error);
 }
 
 /*
@@ -892,8 +910,8 @@ uzfs_zvol_get_snap_dataset_with_io(zvol_info_t *zinfo,
 		return (ret);
 	}
 
-	(*snapshot_io_num) = uzfs_zvol_get_last_committed_io_no(*snap_zv,
-	    HEALTHY_IO_SEQNUM);
+	ret = uzfs_zvol_get_last_committed_io_no(*snap_zv,
+	    HEALTHY_IO_SEQNUM, snapshot_io_num);
 	return (ret);
 }
 

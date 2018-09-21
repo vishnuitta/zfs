@@ -405,17 +405,21 @@ uzfs_zinfo_free(zvol_info_t *zinfo)
 	return (0);
 }
 
-uint64_t
-uzfs_zvol_get_last_committed_io_no(zvol_state_t *zv, char *key)
+int
+uzfs_zvol_get_last_committed_io_no(zvol_state_t *zv, char *key, uint64_t *ionum)
 {
 	uzfs_zap_kv_t zap;
+	int error;
 
 	zap.key = key;
 	zap.value = 0;
 	zap.size = sizeof (uint64_t);
 
-	uzfs_read_zap_entry(zv, &zap);
-	return (zap.value);
+	error = uzfs_read_zap_entry(zv, &zap);
+	if (ionum != NULL)
+		*ionum = zap.value;
+
+	return (error);
 }
 
 static void

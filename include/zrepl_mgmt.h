@@ -208,7 +208,7 @@ extern int uzfs_zinfo_init(void *zv, const char *ds_name,
 extern zvol_info_t *uzfs_zinfo_lookup(const char *name);
 extern void uzfs_zinfo_replay_zil_all(void);
 extern int uzfs_zinfo_destroy(const char *ds_name, spa_t *spa);
-uint64_t uzfs_zvol_get_last_committed_io_no(zvol_state_t *zv, char *key);
+int uzfs_zvol_get_last_committed_io_no(zvol_state_t *, char *, uint64_t *);
 void uzfs_zvol_store_last_committed_healthy_io_no(zvol_info_t *zinfo,
     uint64_t io_seq);
 void uzfs_zvol_store_last_committed_degraded_io_no(zvol_info_t *zv,
