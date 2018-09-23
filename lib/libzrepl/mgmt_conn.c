@@ -522,8 +522,9 @@ uzfs_zvol_mgmt_do_handshake(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp,
 	LOG_INFO("IO sequence number:%lu Degraded IO sequence number:%lu",
 	    zinfo->checkpointed_ionum, zinfo->degraded_checkpointed_ionum);
 
-	hdr.checkpointed_io_seq = zinfo->checkpointed_ionum;
-	hdr.checkpointed_degraded_io_seq = zinfo->degraded_checkpointed_ionum;
+	mgmt_ack.checkpointed_io_seq = zinfo->checkpointed_ionum;
+	mgmt_ack.checkpointed_degraded_io_seq =
+	    zinfo->degraded_checkpointed_ionum;
 
 	return (reply_data(conn, &hdr, &mgmt_ack, sizeof (mgmt_ack)));
 }
@@ -1159,18 +1160,12 @@ handle_start_rebuild_req(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp,
 		goto end;
 	}
 
-	memset(&zinfo->main_zv->rebuild_info, 0,
-	    sizeof (zvol_rebuild_info_t));
-	int rebuild_op_cnt = (payload_size / sizeof (mgmt_ack_t));
-	/* Track # of rebuilds we are initializing on replica */
-	zinfo->main_zv->rebuild_info.rebuild_cnt = rebuild_op_cnt;
-
 	/*
 	 * Case where just one replica is being used by customer
 	 */
 	if ((strcmp(mack->volname, "")) == 0) {
-		zinfo->main_zv->rebuild_info.rebuild_cnt = 0;
-		zinfo->main_zv->rebuild_info.rebuild_done_cnt = 0;
+		memset(&zinfo->main_zv->rebuild_info, 0,
+		    sizeof (zvol_rebuild_info_t));
 		/* Mark replica healthy now */
 		uzfs_zvol_set_rebuild_status(zinfo->main_zv,
 		    ZVOL_REBUILDING_DONE);
@@ -1185,8 +1180,40 @@ handle_start_rebuild_req(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp,
 		    hdrp->opcode, hdrp->io_seq);
 		goto end;
 	}
-	uzfs_zvol_set_rebuild_status(zinfo->main_zv,
-	    ZVOL_REBUILDING_SNAP);
+
+	int rebuild_op_cnt = (payload_size / sizeof (mgmt_ack_t));
+	int loop_cnt;
+	uint64_t max_ioseq;
+	for (loop_cnt = 0, max_ioseq = 0, mack = payload;
+	    loop_cnt < rebuild_op_cnt; loop_cnt++, mack++)
+		if (max_ioseq < mack->checkpointed_io_seq)
+			max_ioseq = mack->checkpointed_io_seq;
+
+	if (zinfo->checkpointed_ionum >= max_ioseq) {
+		uzfs_zvol_set_rebuild_status(zinfo->main_zv,
+		    ZVOL_REBUILDING_AFS);
+	} else {
+		if (rebuild_op_cnt != 1) {
+			mutex_exit(&zinfo->main_zv->rebuild_mtx);
+			uzfs_zinfo_drop_refcnt(zinfo);
+			LOG_ERR("rebuilding failed for %s due to rebuild_op_cnt"
+			    "(%d) is not one when checkpointed num (%lu) is "
+			    "less than max_ioseq(%lu)", zinfo->name,
+			    rebuild_op_cnt, zinfo->checkpointed_ionum,
+			    max_ioseq);
+			rc = reply_nodata(conn, ZVOL_OP_STATUS_FAILED,
+			    hdrp->opcode, hdrp->io_seq);
+			goto end;
+		}
+		uzfs_zvol_set_rebuild_status(zinfo->main_zv,
+		    ZVOL_REBUILDING_SNAP);
+	}
+
+	memset(&zinfo->main_zv->rebuild_info, 0,
+	    sizeof (zvol_rebuild_info_t));
+	/* Track # of rebuilds we are initializing on replica */
+	zinfo->main_zv->rebuild_info.rebuild_cnt = rebuild_op_cnt;
+
 	mutex_exit(&zinfo->main_zv->rebuild_mtx);
 
 	DBGCONN(conn, "Rebuild start command");

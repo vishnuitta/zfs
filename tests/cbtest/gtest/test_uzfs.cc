@@ -438,7 +438,7 @@ uzfs_mock_rebuild_scanner_snap_rebuild_related(void *arg)
 		EXPECT_EQ(hdr.opcode, ZVOL_OPCODE_REBUILD_STEP);
 		EXPECT_EQ(hdr.status, ZVOL_OP_STATUS_OK);
 		EXPECT_EQ(hdr.len, zvol_rebuild_step_size);
-		EXPECT_EQ(hdr.checkpointed_io_seq, 9999);
+		EXPECT_EQ(hdr.io_seq, 9999);
 		goto exit;
 	}
 
@@ -454,7 +454,7 @@ uzfs_mock_rebuild_scanner_snap_rebuild_related(void *arg)
 		EXPECT_EQ(hdr.opcode, ZVOL_OPCODE_REBUILD_STEP);
 		EXPECT_EQ(hdr.status, ZVOL_OP_STATUS_OK);
 		EXPECT_EQ(hdr.len, zvol_rebuild_step_size);
-		EXPECT_EQ(hdr.checkpointed_io_seq, 9999);
+		EXPECT_EQ(hdr.io_seq, 9999);
 		EXPECT_EQ(hdr.offset, 0);
 	}
 
@@ -923,11 +923,12 @@ TEST(SnapCreate, SnapRetrieve) {
 }
 
 void
-set_start_rebuild_mgmt_ack(mgmt_ack_t *mack, const char *dw_name, const char *volname)
+set_start_rebuild_mgmt_ack(mgmt_ack_t *mack, const char *dw_name, const char *volname, uint64_t ioseq=0)
 {
 	GtestUtils::strlcpy(mack->dw_volname, dw_name, MAXNAMELEN);
 	if (volname != NULL)
 		GtestUtils::strlcpy(mack->volname, volname, MAXNAMELEN);
+	mack->checkpointed_io_seq = ioseq;
 }
 
 void
@@ -1044,12 +1045,13 @@ TEST(uZFSRebuildStart, TestStartRebuild) {
 			break;
 	}
 
-	/* rebuild in three replicas case with 'connect' failing */
+	/* rebuild in three replicas case with 'connect' failing and mesh rebuild */
 	conn->conn_buf = NULL;
 	uzfs_zvol_set_rebuild_status(zinfo->main_zv,
 	    ZVOL_REBUILDING_INIT);
-	set_start_rebuild_mgmt_ack(mack, "pool1/vol1", "vol3");
-	set_start_rebuild_mgmt_ack(mack + 1, "pool1/vol1", "vol3");
+	set_start_rebuild_mgmt_ack(mack, "pool1/vol1", "vol3", 1000);
+	set_start_rebuild_mgmt_ack(mack + 1, "pool1/vol1", "vol3", 2000);
+	zinfo->checkpointed_ionum = 3000;
 	handle_start_rebuild_req(conn, hdrp, payload, sizeof (mgmt_ack_t)*2);
 	EXPECT_EQ(ZVOL_OP_STATUS_OK, ((zvol_io_hdr_t *)conn->conn_buf)->status);
 	while (1) {
@@ -1057,6 +1059,23 @@ TEST(uZFSRebuildStart, TestStartRebuild) {
 		if (ZVOL_REBUILDING_FAILED != uzfs_zvol_get_rebuild_status(zinfo->main_zv))
 			sleep(1);
 		else if (2 != zinfo->refcnt)
+			sleep(1);
+		else
+			break;
+	}
+
+	/* rebuild in three replicas case with selecting replica of lower ioseq and mesh rebuild */
+	conn->conn_buf = NULL;
+	uzfs_zvol_set_rebuild_status(zinfo->main_zv,
+	    ZVOL_REBUILDING_INIT);
+	set_start_rebuild_mgmt_ack(mack, "pool1/vol1", "vol3", 1000);
+	set_start_rebuild_mgmt_ack(mack + 1, "pool1/vol1", "vol3", 2000);
+	zinfo->checkpointed_ionum = 300;
+	handle_start_rebuild_req(conn, hdrp, payload, sizeof (mgmt_ack_t)*2);
+	EXPECT_EQ(ZVOL_OP_STATUS_FAILED, ((zvol_io_hdr_t *)conn->conn_buf)->status);
+	while (1) {
+		/* Wait for refcnt to 2 */
+		if (2 != zinfo->refcnt)
 			sleep(1);
 		else
 			break;
@@ -1193,6 +1212,7 @@ uzfs_mock_zvol_rebuild_dw_replica(void *arg)
 	zvol_io_hdr_t 	hdr;
 	struct linger lo = { 1, 0 };
 	char zvol_name[MAXNAMELEN];
+	int writelen = 0;
 
 	strncpy(rebuild_args->zvol_name, "vol3", MAXNAMELEN);
 	sfd = rebuild_args->fd;
@@ -1228,13 +1248,18 @@ send_hdr_again:
 	zvol_state = zinfo->main_zv;
 	bzero(&hdr, sizeof (hdr));
 	hdr.status = ZVOL_OP_STATUS_OK;
-	hdr.version = REPLICA_VERSION;
-	hdr.opcode = ZVOL_OPCODE_HANDSHAKE;
-	hdr.len = strlen(rebuild_args->zvol_name) + 1;
-	if (rebuild_test_case == 2)
-		hdr.opcode = ZVOL_OPCODE_WRITE;
-
-	rc = uzfs_zvol_socket_write(sfd, (char *)&hdr, sizeof (hdr));
+	if (rebuild_test_case == 11) {
+		hdr.version = REPLICA_VERSION + 1;
+		writelen = 4;
+	} else {
+		hdr.version = REPLICA_VERSION;
+		hdr.opcode = ZVOL_OPCODE_HANDSHAKE;
+		hdr.len = strlen(rebuild_args->zvol_name) + 1;
+		if (rebuild_test_case == 2)
+			hdr.opcode = ZVOL_OPCODE_WRITE;
+		writelen = sizeof(hdr);
+	}
+	rc = uzfs_zvol_socket_write(sfd, (char *)&hdr, writelen);
 	if (rc != 0) {
 		LOG_ERR("Socket hdr write failed");
 		goto exit;
@@ -1264,7 +1289,7 @@ next_step:
 	hdr.status = ZVOL_OP_STATUS_OK;
 	hdr.version = REPLICA_VERSION;
 	hdr.opcode = ZVOL_OPCODE_REBUILD_STEP;
-	hdr.checkpointed_io_seq = checkpointed_ionum;
+	hdr.io_seq = checkpointed_ionum;
 	hdr.offset = 0;
 	hdr.len = zvol_rebuild_step_size;
 
@@ -1677,6 +1702,12 @@ TEST(RebuildScanner, AbruptClose) {
 
 	/* Rebuild thread exits abruptly just after connect */
 	execute_rebuild_test_case("Rebuild abrupt", 1,
+	    ZVOL_REBUILDING_SNAP, ZVOL_REBUILDING_FAILED);
+}
+
+TEST(RebuildScanner, WrongVersion) {
+	/* Rebuild thread sending wrong opcode after connectg */
+	execute_rebuild_test_case("Wrong version", 11,
 	    ZVOL_REBUILDING_SNAP, ZVOL_REBUILDING_FAILED);
 }
 

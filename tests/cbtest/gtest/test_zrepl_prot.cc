@@ -103,9 +103,9 @@ static void do_handshake(std::string zvol_name, std::string &host,
 	host = std::string(mgmt_ack.ip, sizeof (mgmt_ack.ip));
 	port = mgmt_ack.port;
 	if (ionum != NULL)
-		*ionum = hdr_in.checkpointed_io_seq;
+		*ionum = mgmt_ack.checkpointed_io_seq;
 	if (degraded_ionum != NULL)
-		*degraded_ionum = hdr_in.checkpointed_degraded_io_seq;
+		*degraded_ionum = mgmt_ack.checkpointed_degraded_io_seq;
 }
 
 /*
@@ -597,8 +597,8 @@ TEST_F(ZreplHandshakeTest, HandshakeWrongVersion) {
 	 */
 	memcpy(msgp.get(), &hdr_out, sizeof (hdr_out));
 	memcpy(msgp.get() + sizeof (hdr_out), m_zvol_name.c_str(), hdr_out.len);
-	rc = write(m_control_fd, msgp.get(), sizeof (hdr_out) + hdr_out.len);
-	ASSERT_EQ(rc, sizeof (hdr_out) + hdr_out.len);
+	rc = write(m_control_fd, msgp.get(), 2);
+	ASSERT_EQ(rc, 2);
 
 	rc = read(m_control_fd, &hdr_in, sizeof (hdr_in));
 	ASSERT_EQ(rc, sizeof (hdr_in));
@@ -608,6 +608,8 @@ TEST_F(ZreplHandshakeTest, HandshakeWrongVersion) {
 	EXPECT_EQ(hdr_in.io_seq, 0);
 	EXPECT_EQ(hdr_in.offset, 0);
 	ASSERT_EQ(hdr_in.len, 0);
+	rc = read(m_control_fd, &hdr_in, sizeof (hdr_in));
+	ASSERT_EQ(rc, 0);
 }
 
 TEST_F(ZreplHandshakeTest, HandshakeUnknownZvol) {
@@ -781,6 +783,23 @@ std::string ZreplDataTest::m_host2 = "";
 std::string ZreplDataTest::m_zvol_name2 = "";
 TestPool *ZreplDataTest::m_pool2 = nullptr;
 Zrepl *ZreplDataTest::m_zrepl = nullptr;
+
+TEST_F(ZreplDataTest, WrongVersion) {
+	zvol_io_hdr_t hdr_in, hdr_out = {0};
+	// use unique ptr to implicitly dealloc mem when exiting from func
+	int rc;
+
+	hdr_out.version = REPLICA_VERSION + 1;
+	hdr_out.opcode = ZVOL_OPCODE_HANDSHAKE;
+	hdr_out.status = ZVOL_OP_STATUS_OK;
+	hdr_out.len = 0;
+
+	rc = write(m_datasock1.fd(), &hdr_out, 2);
+	ASSERT_EQ(rc, 2);
+
+	rc = read(m_datasock1.fd(), &hdr_in, sizeof (hdr_in));
+	ASSERT_EQ(rc, 0);
+}
 
 /*
  * Write two blocks with the same io_num and third one with a different io_num
