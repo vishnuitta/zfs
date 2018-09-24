@@ -572,7 +572,7 @@ next_step:
 		hdr.status = ZVOL_OP_STATUS_OK;
 		hdr.version = REPLICA_VERSION;
 		hdr.opcode = ZVOL_OPCODE_REBUILD_STEP;
-		hdr.checkpointed_io_seq = checkpointed_ionum;
+		hdr.io_seq = checkpointed_ionum;
 		hdr.offset = offset;
 		if ((offset + zvol_rebuild_step_size) >
 		    ZVOL_VOLUME_SIZE(zvol_state))
@@ -1215,7 +1215,7 @@ read_socket:
 
 		case ZVOL_OPCODE_REBUILD_STEP:
 
-			metadata.io_num = hdr.checkpointed_io_seq;
+			metadata.io_num = hdr.io_seq;
 			rebuild_req_offset = hdr.offset;
 			rebuild_req_len = hdr.len;
 
@@ -1688,8 +1688,7 @@ uzfs_zvol_io_receiver(void *arg)
 	LOG_INFO("Data connection associated with zvol %s fd: %d",
 	    zinfo->name, fd);
 
-	while ((rc = uzfs_zvol_socket_read(fd, (char *)&hdr, sizeof (hdr))) ==
-	    0) {
+	while ((rc = uzfs_zvol_read_header(fd, &hdr)) == 0) {
 		if ((zinfo->state == ZVOL_INFO_STATE_OFFLINE))
 			break;
 

@@ -45,7 +45,7 @@ extern "C" {
  * properly aligned (and packed).
  */
 
-#define	REPLICA_VERSION	1
+#define	REPLICA_VERSION	2
 #define	MAX_NAME_LEN	256
 #define	MAX_IP_LEN	64
 #define	TARGET_PORT	6060
@@ -109,8 +109,6 @@ struct zvol_io_hdr {
 	 * meta data.
 	 */
 	uint64_t	len;
-	uint64_t	checkpointed_io_seq;
-	uint64_t	checkpointed_degraded_io_seq;
 } __attribute__((packed));
 
 typedef struct zvol_io_hdr zvol_io_hdr_t;
@@ -128,12 +126,16 @@ typedef struct zvol_op_open_data zvol_op_open_data_t;
  * IP, port where replica listens for data connection to zvol.
  */
 struct mgmt_ack {
-	uint64_t pool_guid;
-	uint64_t zvol_guid;
-	uint16_t port;
-	char	ip[MAX_IP_LEN];
-	char	volname[MAX_NAME_LEN]; // zvol helping rebuild
-	char	dw_volname[MAX_NAME_LEN]; // zvol being rebuilt
+	uint64_t	pool_guid;
+	uint64_t	zvol_guid;
+	uint16_t	port;
+	char		ip[MAX_IP_LEN];
+	char		volname[MAX_NAME_LEN]; // zvol helping rebuild
+	char		dw_volname[MAX_NAME_LEN]; // zvol being rebuilt
+	// checkpointed io_seq when vol is healthy
+	uint64_t	checkpointed_io_seq;
+	// checkpointed io_seq when vol is in degraded state
+	uint64_t	checkpointed_degraded_io_seq;
 } __attribute__((packed));
 
 typedef struct mgmt_ack mgmt_ack_t;

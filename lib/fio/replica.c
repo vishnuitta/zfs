@@ -66,6 +66,7 @@ typedef struct io_list_entry {
 struct netio_data {
 	io_list_entry_t *io_inprog;
 	struct io_u **io_completed;
+	pthread_mutex_t mtx;
 };
 
 // global because mgmt conn must be shared by all data connections
@@ -579,6 +580,7 @@ static int fio_repl_setup(struct thread_data *td)
 	memset(nd, 0, sizeof (*nd));
 	nd->io_inprog = NULL;
 	nd->io_completed = calloc(td->o.iodepth, sizeof (struct io_u *));
+	pthread_mutex_init(&nd->mtx, NULL);
 
 	// only create mgmt conn if it is needed
 	if (!o->port && mgmt_conn < 0) {
@@ -600,6 +602,7 @@ static void fio_repl_cleanup(struct thread_data *td)
 
 	if (nd) {
 		free(nd->io_completed);
+		pthread_mutex_destroy(&nd->mtx);
 		free(nd);
 	}
 	if (mgmt_conn >= 0) {
@@ -645,7 +648,7 @@ static enum fio_q_status fio_repl_queue(struct thread_data *td,
 	hdr.len = io_u->xfer_buflen;
 	hdr.status = 0;
 	hdr.flags = 0;
-	hdr.checkpointed_io_seq = 0;
+	hdr.version = REPLICA_VERSION;
 
 	if (io_u->ddir == DDIR_WRITE) {
 		hdr.opcode = ZVOL_OPCODE_WRITE;
@@ -688,8 +691,10 @@ end:
 		td_verror(td, io_u->error, "xfer");
 		return (FIO_Q_COMPLETED);
 	}
+	pthread_mutex_lock(&nd->mtx);
 	io_ent->io_next = nd->io_inprog;
 	nd->io_inprog = io_ent;
+	pthread_mutex_unlock(&nd->mtx);
 
 	return (FIO_Q_QUEUED);
 }
@@ -710,6 +715,7 @@ static io_list_entry_t *read_repl_reply(struct thread_data *td, int fd)
 		return (NULL);
 	}
 
+	pthread_mutex_lock(&nd->mtx);
 	iter = nd->io_inprog;
 	last = NULL;
 	while (iter != NULL) {
@@ -719,6 +725,7 @@ static io_list_entry_t *read_repl_reply(struct thread_data *td, int fd)
 		iter = iter->io_next;
 	}
 	if (iter == NULL) {
+		pthread_mutex_unlock(&nd->mtx);
 		td_verror(td, ENOENT, "unknown IO number");
 		return (NULL);
 	}
@@ -727,6 +734,7 @@ static io_list_entry_t *read_repl_reply(struct thread_data *td, int fd)
 	else
 		last->io_next = iter->io_next;
 	iter->io_next = NULL;
+	pthread_mutex_unlock(&nd->mtx);
 
 	if (hdr.status != ZVOL_OP_STATUS_OK) {
 		iter->io_u->error = EIO;

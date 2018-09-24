@@ -451,6 +451,72 @@ uzfs_zvol_get_ip(char *host, size_t host_len)
 	return (rc);
 }
 
+static int
+uzfs_zvol_mgmt_get_handshake_info(zvol_io_hdr_t *in_hdr, const char *name,
+    zvol_info_t *zinfo, zvol_io_hdr_t *out_hdr, mgmt_ack_t *mgmt_ack)
+{
+	zvol_state_t	*zv = zinfo->main_zv;
+	int error1, error2;
+	bzero(mgmt_ack, sizeof (*mgmt_ack));
+	if (uzfs_zvol_get_ip(mgmt_ack->ip, MAX_IP_LEN) == -1) {
+		LOG_ERRNO("Unable to get IP");
+		return (-1);
+	}
+
+	strlcpy(mgmt_ack->volname, name, sizeof (mgmt_ack->volname));
+	mgmt_ack->port = (in_hdr->opcode == ZVOL_OPCODE_PREPARE_FOR_REBUILD) ?
+	    REBUILD_IO_SERVER_PORT : IO_SERVER_PORT;
+	mgmt_ack->pool_guid = spa_guid(zv->zv_spa);
+
+	/*
+	 * hold dataset during handshake if objset is NULL
+	 * no critical section here as rebuild & handshake won't come at a time
+	 */
+	if (zv->zv_objset == NULL) {
+		if (uzfs_hold_dataset(zv) != 0) {
+			LOG_ERR("Failed to hold zvol %s", zinfo->name);
+			return (-1);
+		}
+	}
+
+	error1 = uzfs_zvol_get_last_committed_io_no(zv, HEALTHY_IO_SEQNUM,
+	    &zinfo->checkpointed_ionum);
+	error2 = uzfs_zvol_get_last_committed_io_no(zv, DEGRADED_IO_SEQNUM,
+	    &zinfo->degraded_checkpointed_ionum);
+	if ((error1 != 0) || (error2 != 0)) {
+		LOG_ERR("Failed to read io_seqnum %s", zinfo->name);
+		return (-1);
+	}
+
+	/*
+	 * We don't use fsid_guid because that one is not guaranteed
+	 * to stay the same (it is changed in case of conflicts).
+	 */
+	mgmt_ack->zvol_guid = dsl_dataset_phys(
+	    zv->zv_objset->os_dsl_dataset)->ds_guid;
+	if (zinfo->zvol_guid == 0)
+		zinfo->zvol_guid = mgmt_ack->zvol_guid;
+	LOG_INFO("Volume:%s has zvol_guid:%lu", zinfo->name, zinfo->zvol_guid);
+
+	bzero(out_hdr, sizeof (*out_hdr));
+	out_hdr->version = REPLICA_VERSION;
+	out_hdr->opcode = in_hdr->opcode; // HANDSHAKE or PREPARE_FOR_REBUILD
+	out_hdr->io_seq = in_hdr->io_seq;
+	out_hdr->len = sizeof (*mgmt_ack);
+	out_hdr->status = ZVOL_OP_STATUS_OK;
+
+	zinfo->stored_healthy_ionum = zinfo->checkpointed_ionum;
+	zinfo->running_ionum = zinfo->degraded_checkpointed_ionum;
+	LOG_INFO("IO sequence number:%lu Degraded IO sequence number:%lu",
+	    zinfo->checkpointed_ionum, zinfo->degraded_checkpointed_ionum);
+
+	mgmt_ack->checkpointed_io_seq = zinfo->checkpointed_ionum;
+	mgmt_ack->checkpointed_degraded_io_seq =
+	    zinfo->degraded_checkpointed_ionum;
+
+	return (0);
+}
+
 /*
  * This function suppose to lookup into zvol list to find if LUN presented for
  * identification is available/online or not. This function also need to send
@@ -461,70 +527,12 @@ static int
 uzfs_zvol_mgmt_do_handshake(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp,
     const char *name, zvol_info_t *zinfo)
 {
-	zvol_state_t	*zv = zinfo->main_zv;
 	mgmt_ack_t 	mgmt_ack;
 	zvol_io_hdr_t	hdr;
-	int error1, error2;
-
-	bzero(&mgmt_ack, sizeof (mgmt_ack));
-	if (uzfs_zvol_get_ip(mgmt_ack.ip, MAX_IP_LEN) == -1) {
-		LOG_ERRNO("Unable to get IP");
+	if (uzfs_zvol_mgmt_get_handshake_info(hdrp, name, zinfo, &hdr,
+	    &mgmt_ack) != 0)
 		return (reply_nodata(conn, ZVOL_OP_STATUS_FAILED, hdrp->opcode,
 		    hdrp->io_seq));
-	}
-
-	strlcpy(mgmt_ack.volname, name, sizeof (mgmt_ack.volname));
-	mgmt_ack.port = (hdrp->opcode == ZVOL_OPCODE_PREPARE_FOR_REBUILD) ?
-	    REBUILD_IO_SERVER_PORT : IO_SERVER_PORT;
-	mgmt_ack.pool_guid = spa_guid(zv->zv_spa);
-
-	/*
-	 * hold dataset during handshake if objset is NULL
-	 * no critical section here as rebuild & handshake won't come at a time
-	 */
-	if (zv->zv_objset == NULL) {
-		if (uzfs_hold_dataset(zv) != 0) {
-			LOG_ERR("Failed to hold zvol %s", zinfo->name);
-			return (reply_nodata(conn, ZVOL_OP_STATUS_FAILED,
-			    hdrp->opcode, hdrp->io_seq));
-		}
-	}
-
-	error1 = uzfs_zvol_get_last_committed_io_no(zv, HEALTHY_IO_SEQNUM,
-	    &zinfo->checkpointed_ionum);
-	error2 = uzfs_zvol_get_last_committed_io_no(zv, DEGRADED_IO_SEQNUM,
-	    &zinfo->degraded_checkpointed_ionum);
-	if ((error1 != 0) || (error2 != 0)) {
-		LOG_ERR("Failed to read io_seqnum %s", zinfo->name);
-		return (reply_nodata(conn, ZVOL_OP_STATUS_FAILED,
-		    hdrp->opcode, hdrp->io_seq));
-	}
-
-	/*
-	 * We don't use fsid_guid because that one is not guaranteed
-	 * to stay the same (it is changed in case of conflicts).
-	 */
-	mgmt_ack.zvol_guid = dsl_dataset_phys(
-	    zv->zv_objset->os_dsl_dataset)->ds_guid;
-	if (zinfo->zvol_guid == 0)
-		zinfo->zvol_guid = mgmt_ack.zvol_guid;
-	LOG_INFO("Volume:%s has zvol_guid:%lu", zinfo->name, zinfo->zvol_guid);
-
-	bzero(&hdr, sizeof (hdr));
-	hdr.version = REPLICA_VERSION;
-	hdr.opcode = hdrp->opcode; // HANDSHAKE or PREPARE_FOR_REBUILD
-	hdr.io_seq = hdrp->io_seq;
-	hdr.len = sizeof (mgmt_ack);
-	hdr.status = ZVOL_OP_STATUS_OK;
-
-	zinfo->stored_healthy_ionum = zinfo->checkpointed_ionum;
-	zinfo->running_ionum = zinfo->degraded_checkpointed_ionum;
-	LOG_INFO("IO sequence number:%lu Degraded IO sequence number:%lu",
-	    zinfo->checkpointed_ionum, zinfo->degraded_checkpointed_ionum);
-
-	hdr.checkpointed_io_seq = zinfo->checkpointed_ionum;
-	hdr.checkpointed_degraded_io_seq = zinfo->degraded_checkpointed_ionum;
-
 	return (reply_data(conn, &hdr, &mgmt_ack, sizeof (mgmt_ack)));
 }
 
@@ -1151,26 +1159,20 @@ handle_start_rebuild_req(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp,
 	if (uzfs_zvol_get_rebuild_status(zinfo->main_zv) !=
 	    ZVOL_REBUILDING_INIT) {
 		mutex_exit(&zinfo->main_zv->rebuild_mtx);
-		uzfs_zinfo_drop_refcnt(zinfo);
 		LOG_ERR("rebuilding failed for %s due to improper rebuild "
 		    "status", zinfo->name);
+		uzfs_zinfo_drop_refcnt(zinfo);
 		rc = reply_nodata(conn, ZVOL_OP_STATUS_FAILED,
 		    hdrp->opcode, hdrp->io_seq);
 		goto end;
 	}
 
-	memset(&zinfo->main_zv->rebuild_info, 0,
-	    sizeof (zvol_rebuild_info_t));
-	int rebuild_op_cnt = (payload_size / sizeof (mgmt_ack_t));
-	/* Track # of rebuilds we are initializing on replica */
-	zinfo->main_zv->rebuild_info.rebuild_cnt = rebuild_op_cnt;
-
 	/*
 	 * Case where just one replica is being used by customer
 	 */
 	if ((strcmp(mack->volname, "")) == 0) {
-		zinfo->main_zv->rebuild_info.rebuild_cnt = 0;
-		zinfo->main_zv->rebuild_info.rebuild_done_cnt = 0;
+		memset(&zinfo->main_zv->rebuild_info, 0,
+		    sizeof (zvol_rebuild_info_t));
 		/* Mark replica healthy now */
 		uzfs_zvol_set_rebuild_status(zinfo->main_zv,
 		    ZVOL_REBUILDING_DONE);
@@ -1185,8 +1187,49 @@ handle_start_rebuild_req(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp,
 		    hdrp->opcode, hdrp->io_seq);
 		goto end;
 	}
-	uzfs_zvol_set_rebuild_status(zinfo->main_zv,
-	    ZVOL_REBUILDING_SNAP);
+
+	int rebuild_op_cnt = (payload_size / sizeof (mgmt_ack_t));
+	int loop_cnt;
+	uint64_t max_ioseq;
+	for (loop_cnt = 0, max_ioseq = 0, mack = payload;
+	    loop_cnt < rebuild_op_cnt; loop_cnt++, mack++)
+		if (max_ioseq < mack->checkpointed_io_seq)
+			max_ioseq = mack->checkpointed_io_seq;
+#if 0
+	mack = malloc(payload_size + sizeof (mgmt_ack_t));
+	memcpy(mack, payload, payload_size);
+	self_mack = (char *)mack + payload_size;
+	hdr1.opcode = ZVOL_OPCODE_PREPARE_FOR_REBUILD;
+	hdr1.io_seq = 0;
+
+	uzfs_zvol_mgmt_get_handshake_info(&hdr1, name, zinfo, &hdr2, self_mack);
+#endif
+	if ((zinfo->checkpointed_ionum < max_ioseq) &&
+	    (rebuild_op_cnt != 1)) {
+		mutex_exit(&zinfo->main_zv->rebuild_mtx);
+		LOG_ERR("rebuilding failed for %s due to rebuild_op_cnt"
+		    "(%d) is not one when checkpointed num (%lu) is "
+		    "less than max_ioseq(%lu)", zinfo->name,
+		    rebuild_op_cnt, zinfo->checkpointed_ionum,
+		    max_ioseq);
+		uzfs_zinfo_drop_refcnt(zinfo);
+		rc = reply_nodata(conn, ZVOL_OP_STATUS_FAILED,
+		    hdrp->opcode, hdrp->io_seq);
+		goto end;
+	}
+
+	memset(&zinfo->main_zv->rebuild_info, 0,
+	    sizeof (zvol_rebuild_info_t));
+	if (zinfo->checkpointed_ionum >= max_ioseq)
+		uzfs_zvol_set_rebuild_status(zinfo->main_zv,
+		    ZVOL_REBUILDING_AFS);
+	else
+		uzfs_zvol_set_rebuild_status(zinfo->main_zv,
+		    ZVOL_REBUILDING_SNAP);
+
+	/* Track # of rebuilds we are initializing on replica */
+	zinfo->main_zv->rebuild_info.rebuild_cnt = rebuild_op_cnt;
+
 	mutex_exit(&zinfo->main_zv->rebuild_mtx);
 
 	DBGCONN(conn, "Rebuild start command");

@@ -21,7 +21,6 @@ char *tgt_port3 = "99161";
 char *ds1 = "ds1";
 char *ds2 = "ds2";
 char *ds3 = "ds3";
-static uint64_t last_io_seq_sent;
 
 struct data_io {
 	zvol_io_hdr_t hdr;
@@ -418,7 +417,7 @@ writer_thread(void *arg)
 	while (i < warg->max_iops) {
 		io->hdr.version = REPLICA_VERSION;
 		io->hdr.opcode = ZVOL_OPCODE_WRITE;
-		io->hdr.checkpointed_io_seq = io->hdr.io_seq = i + 1;
+		io->hdr.io_seq = i + 1;
 		io->hdr.len = sizeof (struct zvol_io_rw_hdr) +
 		    warg->io_block_size;
 		io->hdr.status = 0;
@@ -455,7 +454,6 @@ writer_thread(void *arg)
 		}
 		nbytes += warg->io_block_size;
 		i++;
-		last_io_seq_sent = io->hdr.checkpointed_io_seq;
 	}
 
 	io->hdr.version = REPLICA_VERSION;
