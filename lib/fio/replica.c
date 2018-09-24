@@ -580,7 +580,7 @@ static int fio_repl_setup(struct thread_data *td)
 	memset(nd, 0, sizeof (*nd));
 	nd->io_inprog = NULL;
 	nd->io_completed = calloc(td->o.iodepth, sizeof (struct io_u *));
-	pthread_mutex_init(&nd.mtx, NULL);
+	pthread_mutex_init(&nd->mtx, NULL);
 
 	// only create mgmt conn if it is needed
 	if (!o->port && mgmt_conn < 0) {
@@ -602,6 +602,7 @@ static void fio_repl_cleanup(struct thread_data *td)
 
 	if (nd) {
 		free(nd->io_completed);
+		pthread_mutex_destroy(&nd->mtx);
 		free(nd);
 	}
 	if (mgmt_conn >= 0) {

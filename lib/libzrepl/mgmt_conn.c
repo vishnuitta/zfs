@@ -452,19 +452,19 @@ uzfs_zvol_get_ip(char *host, size_t host_len)
 }
 
 static int
-uzfs_zvol_mgmt_get_handshake_info(zvol_io_hdr_t *hdrp, const char *name,
-    zvol_info_t *zinfo, zvol_io_hdr_t *hdr, mgmt_ack_t *mgmt_ack)
+uzfs_zvol_mgmt_get_handshake_info(zvol_io_hdr_t *in_hdr, const char *name,
+    zvol_info_t *zinfo, zvol_io_hdr_t *out_hdr, mgmt_ack_t *mgmt_ack)
 {
 	zvol_state_t	*zv = zinfo->main_zv;
 	int error1, error2;
-	bzero(mgmt_ack, sizeof (mgmt_ack_t));
+	bzero(mgmt_ack, sizeof (*mgmt_ack));
 	if (uzfs_zvol_get_ip(mgmt_ack->ip, MAX_IP_LEN) == -1) {
 		LOG_ERRNO("Unable to get IP");
 		return (-1);
 	}
 
 	strlcpy(mgmt_ack->volname, name, sizeof (mgmt_ack->volname));
-	mgmt_ack->port = (hdrp->opcode == ZVOL_OPCODE_PREPARE_FOR_REBUILD) ?
+	mgmt_ack->port = (in_hdr->opcode == ZVOL_OPCODE_PREPARE_FOR_REBUILD) ?
 	    REBUILD_IO_SERVER_PORT : IO_SERVER_PORT;
 	mgmt_ack->pool_guid = spa_guid(zv->zv_spa);
 
@@ -498,12 +498,12 @@ uzfs_zvol_mgmt_get_handshake_info(zvol_io_hdr_t *hdrp, const char *name,
 		zinfo->zvol_guid = mgmt_ack->zvol_guid;
 	LOG_INFO("Volume:%s has zvol_guid:%lu", zinfo->name, zinfo->zvol_guid);
 
-	bzero(hdr, sizeof (*hdr));
-	hdr->version = REPLICA_VERSION;
-	hdr->opcode = hdrp->opcode; // HANDSHAKE or PREPARE_FOR_REBUILD
-	hdr->io_seq = hdrp->io_seq;
-	hdr->len = sizeof (mgmt_ack_t);
-	hdr->status = ZVOL_OP_STATUS_OK;
+	bzero(out_hdr, sizeof (*out_hdr));
+	out_hdr->version = REPLICA_VERSION;
+	out_hdr->opcode = in_hdr->opcode; // HANDSHAKE or PREPARE_FOR_REBUILD
+	out_hdr->io_seq = in_hdr->io_seq;
+	out_hdr->len = sizeof (*mgmt_ack);
+	out_hdr->status = ZVOL_OP_STATUS_OK;
 
 	zinfo->stored_healthy_ionum = zinfo->checkpointed_ionum;
 	zinfo->running_ionum = zinfo->degraded_checkpointed_ionum;
@@ -1159,9 +1159,9 @@ handle_start_rebuild_req(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp,
 	if (uzfs_zvol_get_rebuild_status(zinfo->main_zv) !=
 	    ZVOL_REBUILDING_INIT) {
 		mutex_exit(&zinfo->main_zv->rebuild_mtx);
-		uzfs_zinfo_drop_refcnt(zinfo);
 		LOG_ERR("rebuilding failed for %s due to improper rebuild "
 		    "status", zinfo->name);
+		uzfs_zinfo_drop_refcnt(zinfo);
 		rc = reply_nodata(conn, ZVOL_OP_STATUS_FAILED,
 		    hdrp->opcode, hdrp->io_seq);
 		goto end;
@@ -1207,12 +1207,12 @@ handle_start_rebuild_req(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp,
 	if ((zinfo->checkpointed_ionum < max_ioseq) &&
 	    (rebuild_op_cnt != 1)) {
 		mutex_exit(&zinfo->main_zv->rebuild_mtx);
-		uzfs_zinfo_drop_refcnt(zinfo);
 		LOG_ERR("rebuilding failed for %s due to rebuild_op_cnt"
 		    "(%d) is not one when checkpointed num (%lu) is "
 		    "less than max_ioseq(%lu)", zinfo->name,
 		    rebuild_op_cnt, zinfo->checkpointed_ionum,
 		    max_ioseq);
+		uzfs_zinfo_drop_refcnt(zinfo);
 		rc = reply_nodata(conn, ZVOL_OP_STATUS_FAILED,
 		    hdrp->opcode, hdrp->io_seq);
 		goto end;

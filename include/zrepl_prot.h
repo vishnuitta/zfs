@@ -132,7 +132,9 @@ struct mgmt_ack {
 	char		ip[MAX_IP_LEN];
 	char		volname[MAX_NAME_LEN]; // zvol helping rebuild
 	char		dw_volname[MAX_NAME_LEN]; // zvol being rebuilt
+	// checkpointed io_seq when vol is healthy
 	uint64_t	checkpointed_io_seq;
+	// checkpointed io_seq when vol is in degraded state
 	uint64_t	checkpointed_degraded_io_seq;
 } __attribute__((packed));
 
