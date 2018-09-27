@@ -99,7 +99,9 @@ struct zvol_io_hdr {
 	uint8_t 	flags;
 	uint8_t 	padding[3];
 	union {
+		/* IOnum as sent from target */
 		uint64_t	io_seq;
+		/* IOnum from which rebuild need to be done */
 		uint64_t	checkpointed_io_seq;
 	};
 	/* only used for read/write */
