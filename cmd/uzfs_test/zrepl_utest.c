@@ -295,6 +295,7 @@ zrepl_utest_replica_rebuild_start(int fd, mgmt_ack_t *mgmt_ack,
 	return (0);
 }
 
+
 static void
 reader_thread(void *arg)
 {
@@ -1026,7 +1027,7 @@ check_status:
 		goto exit;
 	}
 	/*
-	 * Check rebuild status of of downgrade replica ds1.
+	 * Check rebuild status of downgrade replica ds1.
 	 */
 status_check:
 	count = zrepl_utest_get_replica_status(ds1, ds1_mgmt_fd, &status_ack);
@@ -1195,7 +1196,7 @@ status_check2:
 
 	/*
 	 * Start rebuild process on downgraded replica ds3
-	 * by sharing IP and rebuild_Port info with ds3.
+	 * by sharing IP and rebuild_port info with ds3.
 	 */
 	rc = zrepl_utest_replica_rebuild_start(ds3_mgmt_fd, mgmt_ack_ds3,
 	    sizeof (mgmt_ack_t) * 3);

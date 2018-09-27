@@ -97,11 +97,14 @@ typedef struct zvol_state zvol_state_t;
 #define	UZFS_IO_MREAD_FAIL	3
 
 #define	ZINFO_IS_DEGRADED(zinfo)	(ZVOL_IS_DEGRADED(zinfo->main_zv))
-#define	ZVOL_IS_DEGRADED(zv)	(zv->zv_status == ZVOL_STATUS_DEGRADED)
+#define	ZVOL_IS_DEGRADED(zv)		(zv->zv_status == ZVOL_STATUS_DEGRADED)
+#define	ZVOL_IS_HEALTHY(zv)		(zv->zv_status == ZVOL_STATUS_HEALTHY)
 
 #define	ZVOL_IS_REBUILDING(zv)		\
 	((zv->rebuild_info.zv_rebuild_status == ZVOL_REBUILDING_SNAP) || \
 	(zv->rebuild_info.zv_rebuild_status == ZVOL_REBUILDING_AFS))
+#define	ZVOL_IS_REBUILDING_AFS(zv)		\
+	(zv->rebuild_info.zv_rebuild_status == ZVOL_REBUILDING_AFS)
 #define	ZVOL_IS_REBUILDED(zv)		\
 	(zv->rebuild_info.zv_rebuild_status == ZVOL_REBUILDING_DONE)
 #define	ZVOL_IS_REBUILDING_ERRORED(zv)	\

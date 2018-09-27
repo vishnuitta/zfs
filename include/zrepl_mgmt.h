@@ -158,6 +158,11 @@ typedef struct zvol_info_s {
 
 	/* Will be used to singal ack-sender to exit */
 	uint8_t		conn_closed;
+
+	/* Rebuild flags to quiesce IOs */
+	uint8_t		quiesce_requested;
+	uint8_t		quiesce_done;
+
 	/* Pointer to mgmt connection for this zinfo */
 	void		*mgmt_conn;
 
