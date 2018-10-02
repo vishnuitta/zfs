@@ -236,6 +236,13 @@ uzfs_submit_writes(zvol_info_t *zinfo, zvol_io_cmd_t *zio_cmd)
 	uint64_t running_ionum;
 	is_rebuild = hdr->flags & ZVOL_OP_FLAG_REBUILD;
 
+#ifdef DEBUG
+	if (is_rebuild) {
+		ASSERT(ZVOL_IS_REBUILDING(zinfo->main_zv));
+		ASSERT(ZINFO_IS_DEGRADED(zinfo));
+	}
+#endif
+
 	while (remain > 0) {
 		if (remain < sizeof (*write_hdr))
 			return (-1);
@@ -251,7 +258,7 @@ uzfs_submit_writes(zvol_info_t *zinfo, zvol_io_cmd_t *zio_cmd)
 		 * Write to main_zv when volume is either
 		 * healthy or in REBUILD_AFS state of rebuild
 		 */
-		if (ZVOL_IS_REBUILDING_AFS(zinfo->main_zv) ||
+		if (is_rebuild || ZVOL_IS_REBUILDING_AFS(zinfo->main_zv) ||
 		    ZVOL_IS_HEALTHY(zinfo->main_zv)) {
 			rc = uzfs_write_data(zinfo->main_zv, datap, data_offset,
 			    write_hdr->len, &metadata, is_rebuild);

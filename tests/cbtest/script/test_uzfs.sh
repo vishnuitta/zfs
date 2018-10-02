@@ -114,8 +114,8 @@ stop_zrepl()
 
 wait_for_pids()
 {
-	for p in "$@"; do
-		wait $p
+	for (( i = 1; i <= $#; i++ )) do
+		wait -n $@
 		status=$?
 		if [ $status -ne 0 ] && [ $status -ne 127 ]; then
 			exit 1
