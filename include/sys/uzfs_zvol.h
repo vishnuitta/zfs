@@ -96,7 +96,8 @@ typedef struct zvol_state zvol_state_t;
 #define	UZFS_IO_READ_FAIL	2
 #define	UZFS_IO_MREAD_FAIL	3
 
-#define	ZINFO_IS_DEGRADED(zinfo)	(ZVOL_IS_DEGRADED(zinfo->main_zv))
+#define	ZINFO_IS_HEALTHY(zinfo)		(ZVOL_IS_HEALTHY(zinfo->main_zv))
+#define	ZINFO_IS_DEGRADED(zinfo)	(!(ZINFO_IS_HEALTHY(zinfo)))
 #define	ZVOL_IS_DEGRADED(zv)		(zv->zv_status == ZVOL_STATUS_DEGRADED)
 #define	ZVOL_IS_HEALTHY(zv)		(zv->zv_status == ZVOL_STATUS_HEALTHY)
 
