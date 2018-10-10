@@ -37,6 +37,7 @@
 #include <mgmt_conn.h>
 #include <data_conn.h>
 #include <uzfs_mgmt.h>
+#include <sys/eventfd.h>
 #include <sys/epoll.h>
 
 #include <uzfs_rebuilding.h>
@@ -45,14 +46,17 @@
 
 char *ds_name;
 char *ds_name2;
+char *ds_name_todelete;
 char *pool;
 spa_t *spa;
 zvol_state_t *zv;
 zvol_state_t *zv2;
+zvol_state_t *zv_todelete;
 zvol_info_t *zinfo;
 zvol_info_t *zinfo2;
 int rebuild_test_case = 0;
 int data_conn_fd = -1;
+int data_conn_fd_todelete = -1;
 
 extern void (*zinfo_create_hook)(zvol_info_t *, nvlist_t *);
 extern void (*zinfo_destroy_hook)(zvol_info_t *);
@@ -202,7 +206,7 @@ uzfs_mock_rebuild_scanner(void *arg)
 
 	if (rebuild_test_case == 6) {
 		close(data_conn_fd);
-		while (zinfo->is_io_receiver_created == B_TRUE)
+		while (zinfo->is_io_receiver_created)
 			sleep(2);
 		sleep(5);
 	}
@@ -257,10 +261,13 @@ TEST(uZFS, Setup) {
 	int ret;
 	char *pool_ds;
 	char *pool_ds2;
+	char *pool_ds_todelete;
 	ds_name = (char *)malloc(MAXNAMELEN);
 	ds_name2 = (char *)malloc(MAXNAMELEN);
+	ds_name_todelete = (char *)malloc(MAXNAMELEN);
 	pool_ds = (char *)malloc(MAXNAMELEN);
 	pool_ds2 = (char *)malloc(MAXNAMELEN);
+	pool_ds_todelete = (char *)malloc(MAXNAMELEN);
 	path = (char *)malloc(MAXNAMELEN);
 	pool = (char *)malloc(MAXNAMELEN);
 
@@ -268,14 +275,17 @@ TEST(uZFS, Setup) {
 	GtestUtils::strlcpy(pool, "pool1", MAXNAMELEN);
 	GtestUtils::strlcpy(ds_name, "vol1", MAXNAMELEN);
 	GtestUtils::strlcpy(ds_name2, "vol3", MAXNAMELEN);
+	GtestUtils::strlcpy(ds_name_todelete, "vol_todelete", MAXNAMELEN);
 	GtestUtils::strlcpy(pool_ds, "pool1/vol1", MAXNAMELEN);
 	GtestUtils::strlcpy(pool_ds2, "pool1/vol3", MAXNAMELEN);
+	GtestUtils::strlcpy(pool_ds_todelete, "pool1/vol_todelete", MAXNAMELEN);
 	signal(SIGPIPE, SIG_IGN);
 
 	mutex_init(&conn_list_mtx, NULL, MUTEX_DEFAULT, NULL);
 	SLIST_INIT(&uzfs_mgmt_conns);
 	mutex_init(&async_tasks_mtx, NULL, MUTEX_DEFAULT, NULL);
-	mgmt_eventfd = -1;
+
+	mgmt_eventfd = eventfd(0, EFD_NONBLOCK);
 
 	uzfs_init();
 	init_zrepl();
@@ -305,6 +315,12 @@ TEST(uZFS, Setup) {
 	uzfs_zinfo_init(zv2, pool_ds2, NULL);
 	zinfo2 = uzfs_zinfo_lookup(ds_name2);
 	EXPECT_EQ(0, !zinfo2);
+
+	uzfs_create_dataset(spa, ds_name_todelete, 1024*1024*1024, 512, &zv_todelete);
+	uzfs_hold_dataset(zv_todelete);
+	uzfs_update_metadata_granularity(zv_todelete, 512);
+	strncpy(zv_todelete->zv_target_host,"127.0.0.1:5959", MAXNAMELEN);
+	uzfs_zinfo_init(zv_todelete, pool_ds_todelete, NULL);
 
 	uzfs_zinfo_init(zv, pool_ds, NULL);
 	zinfo = uzfs_zinfo_lookup(ds_name);
@@ -416,12 +432,12 @@ TEST(uZFS, asyncTaskProps) {
 TEST(uZFS, EmptyCreateProps) {
 	uzfs_mgmt_conn_t *conn;
 
-	EXPECT_EQ(2, uzfs_mgmt_conn_list_count(&uzfs_mgmt_conns));
+	EXPECT_EQ(3, uzfs_mgmt_conn_list_count(&uzfs_mgmt_conns));
 	conn = SLIST_FIRST(&uzfs_mgmt_conns);
 	EXPECT_EQ(1, conn->conn_refcount);
 
 	zinfo_create_cb(zinfo, NULL);
-	EXPECT_EQ(2, uzfs_mgmt_conn_list_count(&uzfs_mgmt_conns));
+	EXPECT_EQ(3, uzfs_mgmt_conn_list_count(&uzfs_mgmt_conns));
 	conn = SLIST_FIRST(&uzfs_mgmt_conns);
 	EXPECT_EQ(2, conn->conn_refcount);
 }
@@ -514,7 +530,7 @@ TEST(uZFS, TestStartRebuild) {
 	rebuild_status[3] = ZVOL_REBUILDING_ERRORED;
 	rebuild_status[4] = ZVOL_REBUILDING_FAILED;
 
-	EXPECT_EQ(2, uzfs_mgmt_conn_list_count(&uzfs_mgmt_conns));
+	EXPECT_EQ(3, uzfs_mgmt_conn_list_count(&uzfs_mgmt_conns));
 	EXPECT_EQ(2, zinfo->refcnt);
 	conn = SLIST_FIRST(&uzfs_mgmt_conns);
 
@@ -1174,6 +1190,23 @@ retry:
 	data_fd = fd;
 }
 
+/*
+ * This testcase is to let ack sender to exit before io_receiver to detect any races
+ */
+TEST(uZFS, CreateAndDestroyDelayIOReceiverExit) {
+	io_receiver = &uzfs_zvol_io_receiver;
+	do_data_connection(data_conn_fd_todelete, "127.0.0.1", IO_SERVER_PORT, "vol_todelete");
+#if DEBUG
+	inject_error.delay.io_receiver_exit = 1;
+#endif
+	close(data_conn_fd_todelete);
+	uzfs_zinfo_destroy("pool1/vol_todelete", spa);
+#if DEBUG
+	sleep(5);
+	inject_error.delay.io_receiver_exit = 0;
+#endif
+}
+
 TEST(uZFS, TestRebuildCompleteWithDataConn) {
 	io_receiver = &uzfs_zvol_io_receiver;
 
@@ -1191,7 +1224,7 @@ TEST(uZFS, TestRebuildComplete) {
 	EXPECT_EQ(ZVOL_STATUS_HEALTHY, uzfs_zvol_get_status(zinfo->zv));
 
 	close(data_conn_fd);
-	while (zinfo->is_io_receiver_created == B_TRUE)
+	while (zinfo->is_io_receiver_created)
 		sleep(2);
 	sleep(5);
 	memset(&zinfo->zv->rebuild_info, 0, sizeof (zvol_rebuild_info_t));
