@@ -1095,7 +1095,8 @@ TEST(uZFSRebuildStart, TestStartRebuild) {
 		EXPECT_EQ(ZVOL_OP_STATUS_FAILED, ((zvol_io_hdr_t *)conn->conn_buf)->status);
 		EXPECT_EQ(2, zinfo->refcnt);
 	}
-
+	/* We are covering this code path from zrepl_rebuild test case */
+#if 0
 	/* rebuild for single replica case */
 	conn->conn_buf = NULL;
 	uzfs_zvol_set_rebuild_status(zinfo->main_zv,
@@ -1106,7 +1107,7 @@ TEST(uZFSRebuildStart, TestStartRebuild) {
 	EXPECT_EQ(ZVOL_REBUILDING_DONE, uzfs_zvol_get_rebuild_status(zinfo->main_zv));
 	EXPECT_EQ(ZVOL_STATUS_HEALTHY, uzfs_zvol_get_status(zinfo->main_zv));
 	EXPECT_EQ(2, zinfo->refcnt);
-
+#endif
 	/* rebuild in two replicas case with 'connect' failure */
 	conn->conn_buf = NULL;
 	uzfs_zvol_set_rebuild_status(zinfo->main_zv,
@@ -1770,7 +1771,12 @@ TEST(uZFSRebuild, TestRebuildSnapDoneFailureWrongSnapName) {
 	execute_rebuild_test_case("rebuild snap_done wrong snapname", 10,
 	    ZVOL_REBUILDING_SNAP, ZVOL_REBUILDING_FAILED);
 }
-
+#if 0
+/*
+ * TODO: Since we have removed volume name check from
+ * snap_done function, we have to live without it until
+ * we find a better way to make this check work
+ */
 TEST(uZFSRebuild, TestRebuildSnapDoneFailureWrongVolName) {
 	rebuild_scanner = &uzfs_mock_rebuild_scanner_snap_rebuild_related;
 	dw_replica_fn = &uzfs_zvol_rebuild_dw_replica;
@@ -1783,7 +1789,7 @@ TEST(uZFSRebuild, TestRebuildSnapDoneFailureWrongVolName) {
 	execute_rebuild_test_case("rebuild snap_done wrong volname", 11,
 	    ZVOL_REBUILDING_SNAP, ZVOL_REBUILDING_FAILED);
 }
-
+#endif
 TEST(uZFSRebuild, TestRebuildSnapDoneSuccess) {
 	rebuild_scanner = &uzfs_mock_rebuild_scanner_snap_rebuild_related;
 	dw_replica_fn = &uzfs_zvol_rebuild_dw_replica;
