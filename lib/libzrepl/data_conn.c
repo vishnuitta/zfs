@@ -1841,12 +1841,8 @@ open_zvol(int fd, zvol_info_t **zinfopp)
 	}
 	if (uzfs_update_metadata_granularity(zv,
 	    open_data.tgt_block_size) != 0) {
-		if (rele_dataset_on_error == 1)
-			uzfs_rele_dataset(zv);
 		LOG_ERR("Failed to set granularity of metadata");
-		hdr.status = ZVOL_OP_STATUS_FAILED;
-		(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
-		goto open_reply;
+		goto error_ret;
 	}
 
 	if (zinfo->snap_zv == NULL) {
@@ -1854,15 +1850,20 @@ open_zvol(int fd, zvol_info_t **zinfopp)
 		/* Create clone for rebuild */
 		if (uzfs_zvol_get_or_create_internal_clone(zinfo->main_zv,
 		    &zinfo->snap_zv, &zinfo->clone_zv, NULL) != 0) {
-			if (rele_dataset_on_error == 1)
-				uzfs_rele_dataset(zv);
 			LOG_ERR("Failed to create clone for rebuild");
-			hdr.status = ZVOL_OP_STATUS_FAILED;
-			(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
-			goto open_reply;
+			goto error_ret;
 		}
 	}
 	ASSERT3P(zinfo->clone_zv, !=, NULL);
+	if (zinfo->clone_zv == NULL) {
+		LOG_ERR("Failed to get clone");
+error_ret:
+		if (rele_dataset_on_error == 1)
+			uzfs_rele_dataset(zv);
+		hdr.status = ZVOL_OP_STATUS_FAILED;
+		(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
+		goto open_reply;
+	}
 	/*
 	 * TODO: Once we support multiple concurrent data connections for a
 	 * single zvol, we should probably check that the timeout is the same
