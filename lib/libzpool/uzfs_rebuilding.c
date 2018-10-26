@@ -378,7 +378,9 @@ uzfs_zvol_get_or_create_internal_clone(zvol_state_t *zv,
 					LOG_ERRNO("Rebuild_clone destroy "
 					    "failed on:%s with err:%d",
 					    zv->zv_name, ret);
+#endif
 				uzfs_close_dataset(*snap_zv);
+#if 0
 				destroy_snapshot_zv(zv,
 				    REBUILD_SNAPSHOT_SNAPNAME);
 #endif
