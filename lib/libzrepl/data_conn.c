@@ -1156,7 +1156,8 @@ uzfs_zvol_io_conn_acceptor(void *arg)
 			rc = 0;
 
 			if (events[i].data.fd == io_sfd) {
-				LOG_INFO("New data connection");
+				LOG_INFO("New data connection on fd %d",
+				    new_fd);
 				thrd_info = zk_thread_create(NULL, 0,
 				    (thread_func_t)io_receiver,
 				    (void *)new_fd, 0, NULL, TS_RUN, 0,
@@ -2029,14 +2030,14 @@ exit:
 
 	taskq_wait(zinfo->uzfs_zvol_taskq);
 	reinitialize_zv_state(zinfo->main_zv);
-	zinfo->is_io_receiver_created = 0;
 	(void) uzfs_zvol_release_internal_clone(zinfo->main_zv,
 	    &zinfo->snap_zv, &zinfo->clone_zv);
 
 	zinfo->quiesce_requested = 0;
 	zinfo->quiesce_done = 1;
-	uzfs_zinfo_drop_refcnt(zinfo);
+	zinfo->is_io_receiver_created = 0;
 	zinfo->io_fd = -1;
+	uzfs_zinfo_drop_refcnt(zinfo);
 thread_exit:
 	close(fd);
 	LOG_INFO("Data connection closed on fd: %d", fd);
