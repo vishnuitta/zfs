@@ -1331,6 +1331,10 @@ uzfs_zvol_rebuild_scanner(void *arg)
 		goto exit;
 	}
 read_socket:
+
+#if DEBUG
+	sleep(rand() % 3);
+#endif
 	if ((zinfo != NULL) &&
 	    ((zinfo->state == ZVOL_INFO_STATE_OFFLINE) ||
 	    (!zinfo->is_io_ack_sender_created)))
@@ -1413,6 +1417,11 @@ read_socket:
 					    " %s, err(%d)", zinfo->name, rc);
 					goto exit;
 				}
+#if DEBUG
+				if (snap_zv != NULL)
+					LOG_INFO("Rebuilding from zv:%s\n",
+					    snap_zv->zv_name);
+#endif
 			}
 
 			zvol_state_t *zv = zinfo->main_zv;
@@ -1479,6 +1488,7 @@ read_socket:
 				    checkpointed_io_seq + 1);
 				free(payload);
 				/* Close snapshot dataset */
+				LOG_INFO("closing snap %s", snap_zv->zv_name);
 				uzfs_close_dataset(snap_zv);
 				snap_zv = NULL;
 				goto read_socket;
@@ -1486,6 +1496,7 @@ read_socket:
 				if (snap_zv != NULL) {
 					snap_name = kmem_asprintf("%s",
 					    snap_zv->zv_name);
+					LOG_INFO("closing snap %s", snap_name);
 					uzfs_close_dataset(snap_zv);
 					(void) dsl_destroy_snapshot(snap_name,
 					    B_FALSE);
@@ -1503,6 +1514,23 @@ read_socket:
 	}
 
 exit:
+	if (snap_zv != NULL && all_snap_done == B_FALSE) {
+		LOG_INFO("closing snap on conn break %s", snap_zv->zv_name);
+		uzfs_close_dataset(snap_zv);
+		snap_zv = NULL;
+	} else {
+		if (snap_zv != NULL) {
+			snap_name = kmem_asprintf("%s",
+			    snap_zv->zv_name);
+			LOG_INFO("closing snap on conn break %s", snap_name);
+			uzfs_close_dataset(snap_zv);
+			(void) dsl_destroy_snapshot(snap_name,
+			    B_FALSE);
+			strfree(snap_name);
+		}
+		snap_zv = NULL;
+	}
+
 	if (zinfo != NULL) {
 		LOG_INFO("Closing rebuild connection for zvol %s", zinfo->name);
 		remove_pending_cmds_to_ack(fd, zinfo);

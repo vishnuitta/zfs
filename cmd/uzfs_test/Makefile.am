@@ -26,5 +26,5 @@ uzfs_test_LDADD = \
 	$(top_builddir)/lib/libzfs/libzfs.la \
 	$(top_builddir)/lib/libzfs_core/libzfs_core.la
 
-uzfs_test_LDADD += -lm
+uzfs_test_LDADD += -lm -ljson-c
 
