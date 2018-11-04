@@ -305,7 +305,7 @@ uzfs_zvol_destroy_internal_clone(zvol_state_t *zv,
 	/* Destroy clone */
 	ret = dsl_destroy_head(clonename);
 	if (ret != 0)
-		LOG_ERRNO("Rebuild_clone destroy failed on:%s"
+		LOG_ERR("Rebuild_clone destroy failed on:%s"
 		    " with err:%d", zv->zv_name, ret);
 
 	/* Close snapshot dataset */
@@ -313,7 +313,11 @@ uzfs_zvol_destroy_internal_clone(zvol_state_t *zv,
 	*snap_zv = NULL;
 
 	/* Destroy snapshot */
-	destroy_snapshot_zv(zv, REBUILD_SNAPSHOT_SNAPNAME);
+	ret = destroy_snapshot_zv(zv, REBUILD_SNAPSHOT_SNAPNAME);
+	if (ret != 0)
+		LOG_ERR("Rebuild_snap destroy failed on:%s"
+		    " with err:%d", zv->zv_name, ret);
+
 	strfree(clonename);
 
 	return (ret);
