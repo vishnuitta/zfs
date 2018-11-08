@@ -71,7 +71,8 @@ iszero(blk_metadata_t *md)
 		} while (0)
 
 int
-get_snapshot_zv(zvol_state_t *zv, char *snap_name, zvol_state_t **snap_zv)
+get_snapshot_zv(zvol_state_t *zv, char *snap_name, zvol_state_t **snap_zv,
+    boolean_t fail_exists, boolean_t fail_notexists)
 {
 	char *dataset;
 	int ret = 0;
@@ -81,10 +82,17 @@ get_snapshot_zv(zvol_state_t *zv, char *snap_name, zvol_state_t **snap_zv)
 
 	ret = uzfs_open_dataset(zv->zv_spa, dataset, snap_zv);
 	if (ret == ENOENT) {
+		if (fail_notexists) {
+			LOG_ERR("fail on unavailable snapshot %s",
+			    dataset);
+			strfree(dataset);
+			ret = SET_ERROR(ENOENT);
+			return (ret);
+		}
 		ret = dmu_objset_snapshot_one(zv->zv_name, snap_name);
 		if (ret) {
-			LOG_ERR("Failed to create snapshot %s@%s: %d",
-			    zv->zv_name, snap_name, ret);
+			LOG_ERR("Failed to create snapshot %s: %d",
+			    dataset, ret);
 			strfree(dataset);
 			return (ret);
 		}
@@ -93,27 +101,72 @@ get_snapshot_zv(zvol_state_t *zv, char *snap_name, zvol_state_t **snap_zv)
 		if (ret == 0) {
 			ret = uzfs_hold_dataset(*snap_zv);
 			if (ret != 0) {
-				LOG_ERR("Failed to hold snapshot: %d", ret);
+				LOG_ERR("Failed to hold snapshot: %s %d",
+				    dataset, ret);
 				uzfs_close_dataset(*snap_zv);
+				*snap_zv = NULL;
 			}
 		}
 		else
 			LOG_ERR("Failed to open snapshot: %d", ret);
 	} else if (ret == 0) {
-		LOG_INFO("holding already available snapshot %s@%s",
-		    zv->zv_name, snap_name);
-		ret = uzfs_hold_dataset(*snap_zv);
-		if (ret != 0) {
-			LOG_ERR("Failed to hold already existing snapshot: %d",
-			    ret);
+		if (fail_exists) {
+			LOG_ERR("fail on already available snapshot %s",
+			    dataset);
 			uzfs_close_dataset(*snap_zv);
+			*snap_zv = NULL;
+			ret = SET_ERROR(EEXIST);
+		} else {
+			LOG_INFO("holding already available snapshot %s",
+			    dataset);
+			ret = uzfs_hold_dataset(*snap_zv);
+			if (ret != 0) {
+				LOG_ERR("Failed to hold already existing "
+				    "snapshot %s: %d", dataset, ret);
+				uzfs_close_dataset(*snap_zv);
+				*snap_zv = NULL;
+			}
 		}
-	} else
+	} else {
 		LOG_ERR("Failed to open snapshot: %d", ret);
+	}
 
 	strfree(dataset);
 	return (ret);
 }
+
+/*
+ * Creates internal snapshot on given zv using current time as part of snapname.
+ * If snap already exists, waits and attempts to create again.
+ * Returns zv of snapshot in snap_zv.
+ */
+int
+uzfs_zvol_create_internal_snapshot(zvol_state_t *zv, zvol_state_t **snap_zv,
+    uint64_t io_num, char **snap)
+{
+	int ret = 0;
+	char *snap_name;
+	time_t now;
+again:
+	now = time(NULL);
+	snap_name = kmem_asprintf("%s%llu.%llu", IO_DIFF_SNAPNAME, io_num, now);
+	ret = get_snapshot_zv(zv, snap_name, snap_zv, B_TRUE, B_FALSE);
+	if (ret == EEXIST) {
+		strfree(snap_name);
+		sleep(1);
+		LOG_INFO("Waiting to create internal snapshot");
+		goto again;
+	}
+	if (ret != 0) {
+		LOG_ERR("Failed to get info about %s@%s",
+		    zv->zv_name, snap_name);
+		strfree(snap_name);
+	} else {
+		*snap = snap_name;
+	}
+	return (ret);
+}
+
 
 void
 destroy_snapshot_zv(zvol_state_t *zv, char *snap_name)
@@ -134,7 +187,7 @@ uzfs_get_io_diff(zvol_state_t *zv, blk_metadata_t *low,
 	uint64_t metaobjectsize = (zv->zv_volsize / zv->zv_metavolblocksize) *
 	    zv->zv_volmetadatasize;
 	uint64_t metadatasize = zv->zv_volmetadatasize;
-	char *buf, *snap_name;
+	char *buf, *snap_name = NULL;
 	uint64_t i, read;
 	uint64_t offset, len, end;
 	int ret = 0;
@@ -154,13 +207,12 @@ uzfs_get_io_diff(zvol_state_t *zv, blk_metadata_t *low,
 	if (end > metaobjectsize)
 		end = metaobjectsize;
 
-	snap_name = kmem_asprintf("%s%llu", IO_DIFF_SNAPNAME, low->io_num);
+	ret = uzfs_zvol_create_internal_snapshot(zv, &snap_zv,
+	    low->io_num, &snap_name);
 
-	ret = get_snapshot_zv(zv, snap_name, &snap_zv);
 	if (ret != 0) {
-		LOG_ERR("Failed to get info about %s@%s io_num %lu",
-		    zv->zv_name, snap_name, low->io_num);
-		strfree(snap_name);
+		LOG_ERR("Failed to create snapshot for vol %s io_num %lu",
+		    zv->zv_name, low->io_num);
 		return (ret);
 	}
 
@@ -352,7 +404,8 @@ uzfs_zvol_create_snaprebuild_clone(zvol_state_t *zv,
 	char *snapname = NULL;
 	char *clonename = NULL;
 
-	ret = get_snapshot_zv(zv, REBUILD_SNAPSHOT_SNAPNAME, snap_zv);
+	ret = get_snapshot_zv(zv, REBUILD_SNAPSHOT_SNAPNAME, snap_zv,
+	    B_FALSE, B_FALSE);
 	if (ret != 0) {
 		LOG_ERR("Failed to get info about %s@%s",
 		    zv->zv_name, REBUILD_SNAPSHOT_SNAPNAME);
