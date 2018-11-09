@@ -30,6 +30,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
+#include <sys/dsl_destroy.h>
 #include <uzfs_io.h>
 #include <uzfs_rebuilding.h>
 #include <zrepl_mgmt.h>

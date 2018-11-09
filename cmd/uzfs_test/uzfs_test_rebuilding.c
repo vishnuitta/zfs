@@ -23,6 +23,7 @@
 #include <sys/spa.h>
 #include <sys/uzfs_zvol.h>
 #include <uzfs_mgmt.h>
+#include <data_conn.h>
 #include <uzfs_io.h>
 #include <zrepl_mgmt.h>
 #include <uzfs_zap.h>
