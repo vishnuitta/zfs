@@ -135,39 +135,6 @@ get_snapshot_zv(zvol_state_t *zv, char *snap_name, zvol_state_t **snap_zv,
 	return (ret);
 }
 
-/*
- * Creates internal snapshot on given zv using current time as part of snapname.
- * If snap already exists, waits and attempts to create again.
- * Returns zv of snapshot in snap_zv.
- */
-int
-uzfs_zvol_create_internal_snapshot(zvol_state_t *zv, zvol_state_t **snap_zv,
-    uint64_t io_num, char **snap)
-{
-	int ret = 0;
-	char *snap_name;
-	time_t now;
-again:
-	now = time(NULL);
-	snap_name = kmem_asprintf("%s%llu.%llu", IO_DIFF_SNAPNAME, io_num, now);
-	ret = get_snapshot_zv(zv, snap_name, snap_zv, B_TRUE, B_FALSE);
-	if (ret == EEXIST) {
-		strfree(snap_name);
-		sleep(1);
-		LOG_INFO("Waiting to create internal snapshot");
-		goto again;
-	}
-	if (ret != 0) {
-		LOG_ERR("Failed to get info about %s@%s",
-		    zv->zv_name, snap_name);
-		strfree(snap_name);
-	} else {
-		*snap = snap_name;
-	}
-	return (ret);
-}
-
-
 void
 destroy_snapshot_zv(zvol_state_t *zv, char *snap_name)
 {
@@ -179,7 +146,7 @@ destroy_snapshot_zv(zvol_state_t *zv, char *snap_name)
 }
 
 int
-uzfs_get_io_diff(zvol_state_t *zv, blk_metadata_t *low,
+uzfs_get_io_diff(zvol_state_t *zv, blk_metadata_t *low, zvol_state_t *snap,
     uzfs_get_io_diff_cb_t *func, off_t lun_offset, size_t lun_len, void *arg)
 {
 	uint64_t blocksize = zv->zv_volmetablocksize;
@@ -187,7 +154,7 @@ uzfs_get_io_diff(zvol_state_t *zv, blk_metadata_t *low,
 	uint64_t metaobjectsize = (zv->zv_volsize / zv->zv_metavolblocksize) *
 	    zv->zv_volmetadatasize;
 	uint64_t metadatasize = zv->zv_volmetadatasize;
-	char *buf, *snap_name = NULL;
+	char *buf;
 	uint64_t i, read;
 	uint64_t offset, len, end;
 	int ret = 0;
@@ -197,7 +164,7 @@ uzfs_get_io_diff(zvol_state_t *zv, blk_metadata_t *low,
 	zvol_state_t *snap_zv;
 	metaobj_blk_offset_t snap_metablk;
 
-	if (!func || (lun_offset + lun_len) > zv->zv_volsize)
+	if (!func || (lun_offset + lun_len) > zv->zv_volsize || snap == NULL)
 		return (EINVAL);
 
 	get_zv_metaobj_block_details(&snap_metablk, zv, lun_offset, lun_len);
@@ -207,8 +174,7 @@ uzfs_get_io_diff(zvol_state_t *zv, blk_metadata_t *low,
 	if (end > metaobjectsize)
 		end = metaobjectsize;
 
-	ret = uzfs_zvol_create_internal_snapshot(zv, &snap_zv,
-	    low->io_num, &snap_name);
+	snap_zv = snap;
 
 	if (ret != 0) {
 		LOG_ERR("Failed to create snapshot for vol %s io_num %lu",
@@ -292,17 +258,8 @@ uzfs_get_io_diff(zvol_state_t *zv, blk_metadata_t *low,
 		}
 	}
 
-	uzfs_close_dataset(snap_zv);
-
-	/*
-	 * TODO: if we failed to destroy snapshot here then
-	 * this should be handled separately from application.
-	 */
-	if (end == metaobjectsize)
-		destroy_snapshot_zv(zv, snap_name);
 
 	umem_free(buf, metadata_read_chunk_size);
-	strfree(snap_name);
 	return (ret);
 }
 
