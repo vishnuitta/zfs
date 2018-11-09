@@ -21,6 +21,7 @@
 
 #include <sys/zfs_context.h>
 #include <sys/spa.h>
+#include <sys/dsl_destroy.h>
 #include <sys/uzfs_zvol.h>
 #include <uzfs_mgmt.h>
 #include <data_conn.h>
@@ -218,7 +219,9 @@ fetch_modified_data(void *arg)
 	off_t offset, end;
 	size_t len;
 	int max_count = 4;
-	zvol_state_t *snap_zv;
+	zvol_state_t *snap_zv = NULL;
+	char *snap_name;
+	int rc;
 
 	printf("fetching modified data\n");
 	md.io_num = repl_data->base_io;
@@ -242,6 +245,16 @@ fetch_modified_data(void *arg)
 		offset += len;
 		if (offset == r_data->zvol->zv_volsize)
 			break;
+	}
+
+	if (snap_zv != NULL) {
+		snap_name = kmem_asprintf("%s", snap_zv->zv_name);
+		uzfs_close_dataset(snap_zv);
+		rc = dsl_destroy_snapshot(snap_name, B_FALSE);
+		if (rc != 0)
+			LOG_ERR("snap destroy failed %s %d", snap_name, rc);
+		strfree(snap_name);
+		snap_zv = NULL;
 	}
 
 	if (err) {
