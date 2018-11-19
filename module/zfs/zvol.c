@@ -328,6 +328,23 @@ zvol_create_cb(objset_t *os, void *arg, cred_t *cr, dmu_tx_t *tx)
 }
 
 #if !defined(_KERNEL)
+
+static const char *
+status_to_str(zvol_info_t *zv)
+{
+	zvol_rebuild_status_t rebuild_status;
+	if ((zv->is_io_receiver_created == 0) ||
+	    (zv->is_io_ack_sender_created == 0))
+		return ("Offline");
+	if (ZINFO_IS_HEALTHY(zv))
+		return ("Healthy");
+	rebuild_status = zv->main_zv->rebuild_info.zv_rebuild_status;
+	if ((rebuild_status != ZVOL_REBUILDING_INIT) &&
+	    (rebuild_status != ZVOL_REBUILDING_DONE))
+		return ("RebuildDuringDegrade");
+	return ("DegradedPerformance");
+}
+
 int
 uzfs_ioc_stats(zfs_cmd_t *zc, nvlist_t *nvl)
 {
@@ -342,8 +359,7 @@ uzfs_ioc_stats(zfs_cmd_t *zc, nvlist_t *nvl)
 			fnvlist_add_string(innvl, "name", zv->name);
 
 			fnvlist_add_string(innvl, "status",
-			    ZINFO_IS_HEALTHY(zv) ?
-			    "healthy" : "degraded");
+			    status_to_str(zv));
 
 			fnvlist_add_string(innvl, "rebuild",
 			    rebuild_status_to_str(
