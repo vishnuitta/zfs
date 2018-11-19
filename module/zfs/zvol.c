@@ -356,35 +356,35 @@ uzfs_ioc_stats(zfs_cmd_t *zc, nvlist_t *nvl)
 		    (uzfs_zvol_name_compare(zv, zc->zc_name) == 0)) {
 			nvlist_t *innvl = fnvlist_alloc();
 
-			fnvlist_add_string(innvl, "name", zv->name);
+			fnvlist_add_string(innvl, "Name", zv->name);
 
-			fnvlist_add_string(innvl, "status",
+			fnvlist_add_string(innvl, "Status",
 			    status_to_str(zv));
 
-			fnvlist_add_string(innvl, "rebuild",
+			fnvlist_add_string(innvl, "Rebuild",
 			    rebuild_status_to_str(
 			    zv->main_zv->rebuild_info.zv_rebuild_status));
 
-			fnvlist_add_uint64(innvl, "is_io_ack_sender_created",
+			fnvlist_add_uint64(innvl, "isIOAckSenderCreated",
 			    zv->is_io_ack_sender_created);
-			fnvlist_add_uint64(innvl, "is_io_receiver_created",
+			fnvlist_add_uint64(innvl, "isIOReceiverCreated",
 			    zv->is_io_receiver_created);
-			fnvlist_add_uint64(innvl, "running_ionum",
+			fnvlist_add_uint64(innvl, "RunningIONum",
 			    zv->running_ionum);
-			fnvlist_add_uint64(innvl, "checkpointed_ionum",
+			fnvlist_add_uint64(innvl, "CheckpointedIONum",
 			    zv->checkpointed_ionum);
-			fnvlist_add_uint64(innvl, "degraded_checkpointed_ionum",
+			fnvlist_add_uint64(innvl, "DegradedCheckpointedIONum",
 			    zv->degraded_checkpointed_ionum);
-			fnvlist_add_uint64(innvl, "checkpointed_time",
+			fnvlist_add_uint64(innvl, "CheckpointedTime",
 			    zv->checkpointed_time);
 
-			fnvlist_add_uint64(innvl, "rebuild_bytes",
+			fnvlist_add_uint64(innvl, "RebuildBytes",
 			    zv->main_zv->rebuild_info.rebuild_bytes);
-			fnvlist_add_uint64(innvl, "rebuild_cnt",
+			fnvlist_add_uint64(innvl, "RebuildCnt",
 			    zv->main_zv->rebuild_info.rebuild_cnt);
-			fnvlist_add_uint64(innvl, "rebuild_done_cnt",
+			fnvlist_add_uint64(innvl, "RebuildDoneCnt",
 			    zv->main_zv->rebuild_info.rebuild_done_cnt);
-			fnvlist_add_uint64(innvl, "rebuild_failed_cnt",
+			fnvlist_add_uint64(innvl, "RebuildFailedCnt",
 			    zv->main_zv->rebuild_info.rebuild_failed_cnt);
 
 			fnvlist_add_nvlist(nvl, zv->name, innvl);
