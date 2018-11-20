@@ -7079,14 +7079,16 @@ zfs_do_stats(int argc, char **argv)
 	nvlist_t *outnvl = NULL, *cnv = NULL;
 	nvpair_t *elem = NULL;
 	struct json_object *jobj;
+	int error;
 
 	if (argc < 1) {
 		fprintf(stderr, "got stats command %d\n", argc);
 		usage(B_FALSE);
 		return (-1);
 	}
-	if (lzc_stats(argv[1], NULL, &outnvl) != 0) {
-		fprintf(stderr, "failed stats command for %s\n", argv[1]);
+	if ((error = lzc_stats(argv[1], NULL, &outnvl)) != 0) {
+		fprintf(stderr, "failed stats command for %s with err %d\n",
+		    argv[1], error);
 		return (-1);
 	}
 

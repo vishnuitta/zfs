@@ -328,6 +328,23 @@ zvol_create_cb(objset_t *os, void *arg, cred_t *cr, dmu_tx_t *tx)
 }
 
 #if !defined(_KERNEL)
+
+static const char *
+status_to_str(zvol_info_t *zv)
+{
+	zvol_rebuild_status_t rebuild_status;
+	if ((zv->is_io_receiver_created == 0) ||
+	    (zv->is_io_ack_sender_created == 0))
+		return ("Offline");
+	if (ZINFO_IS_HEALTHY(zv))
+		return ("Healthy");
+	rebuild_status = zv->main_zv->rebuild_info.zv_rebuild_status;
+	if ((rebuild_status != ZVOL_REBUILDING_INIT) &&
+	    (rebuild_status != ZVOL_REBUILDING_DONE))
+		return ("RebuildDuringDegrade");
+	return ("DegradedPerformance");
+}
+
 int
 uzfs_ioc_stats(zfs_cmd_t *zc, nvlist_t *nvl)
 {
@@ -335,6 +352,10 @@ uzfs_ioc_stats(zfs_cmd_t *zc, nvlist_t *nvl)
 
 	(void) mutex_enter(&zvol_list_mutex);
 	SLIST_FOREACH(zv, &zvol_list, zinfo_next) {
+
+		/*
+		 * No need to take lock of zv, as long as this is part of list
+		 */
 		if (zc->zc_name[0] == '\0' ||
 		    (uzfs_zvol_name_compare(zv, zc->zc_name) == 0)) {
 			nvlist_t *innvl = fnvlist_alloc();
@@ -342,37 +363,38 @@ uzfs_ioc_stats(zfs_cmd_t *zc, nvlist_t *nvl)
 			fnvlist_add_string(innvl, "name", zv->name);
 
 			fnvlist_add_string(innvl, "status",
-			    ZINFO_IS_HEALTHY(zv) ?
-			    "healthy" : "degraded");
+			    status_to_str(zv));
 
-			fnvlist_add_string(innvl, "rebuild",
+			fnvlist_add_string(innvl, "rebuildStatus",
 			    rebuild_status_to_str(
 			    zv->main_zv->rebuild_info.zv_rebuild_status));
 
-			fnvlist_add_uint64(innvl, "is_io_ack_sender_created",
+			fnvlist_add_uint64(innvl, "isIOAckSenderCreated",
 			    zv->is_io_ack_sender_created);
-			fnvlist_add_uint64(innvl, "is_io_receiver_created",
+			fnvlist_add_uint64(innvl, "isIOReceiverCreated",
 			    zv->is_io_receiver_created);
-			fnvlist_add_uint64(innvl, "running_ionum",
+			fnvlist_add_uint64(innvl, "runningIONum",
 			    zv->running_ionum);
-			fnvlist_add_uint64(innvl, "checkpointed_ionum",
+			fnvlist_add_uint64(innvl, "checkpointedIONum",
 			    zv->checkpointed_ionum);
-			fnvlist_add_uint64(innvl, "degraded_checkpointed_ionum",
+			fnvlist_add_uint64(innvl, "degradedCheckpointedIONum",
 			    zv->degraded_checkpointed_ionum);
-			fnvlist_add_uint64(innvl, "checkpointed_time",
+			fnvlist_add_uint64(innvl, "checkpointedTime",
 			    zv->checkpointed_time);
 
-			fnvlist_add_uint64(innvl, "rebuild_bytes",
+			fnvlist_add_uint64(innvl, "rebuildBytes",
 			    zv->main_zv->rebuild_info.rebuild_bytes);
-			fnvlist_add_uint64(innvl, "rebuild_cnt",
+			fnvlist_add_uint64(innvl, "rebuildCnt",
 			    zv->main_zv->rebuild_info.rebuild_cnt);
-			fnvlist_add_uint64(innvl, "rebuild_done_cnt",
+			fnvlist_add_uint64(innvl, "rebuildDoneCnt",
 			    zv->main_zv->rebuild_info.rebuild_done_cnt);
-			fnvlist_add_uint64(innvl, "rebuild_failed_cnt",
+			fnvlist_add_uint64(innvl, "rebuildFailedCnt",
 			    zv->main_zv->rebuild_info.rebuild_failed_cnt);
 
 			fnvlist_add_nvlist(nvl, zv->name, innvl);
 			fnvlist_free(innvl);
+			if (zc->zc_name[0] != '\0')
+				break;
 		}
 	}
 	(void) mutex_exit(&zvol_list_mutex);

@@ -919,6 +919,8 @@ TEST_F(ZreplDataTest, RebuildFlag) {
 	struct mgmt_ack mgmt_ack;
 	char buf[4096];
 	int rc;
+	std::string output;
+	std::string::size_type n;
 
 	init_buf(buf, sizeof (buf), "cStor-data");
 
@@ -928,12 +930,25 @@ TEST_F(ZreplDataTest, RebuildFlag) {
 	/* Get zvol status before rebuild */
 	get_zvol_status(m_zvol_name1, m_ioseq1, m_control_fd1, ZVOL_STATUS_DEGRADED, ZVOL_REBUILDING_INIT);
 
+	output = execCmd("zfs", std::string("stats ") + m_zvol_name1);
+	ASSERT_NE(output.find("DegradedPerformance"), std::string::npos);
+
 	/* transition the zvol to online state */
 	transition_zvol_to_online(m_ioseq1, m_control_fd1, m_zvol_name1);
+
+	output = execCmd("zfs", std::string("stats ") + m_zvol_name1);
+	n = output.find("RebuildDuringDegrade");
+	if (n == std::string::npos)
+		ASSERT_NE(output.find("Healthy"), std::string::npos);
+	else
+		ASSERT_NE(output.find("RebuildDuringDegrade"), std::string::npos);
 	sleep(5);
 
 	/* Get zvol status after rebuild */
 	get_zvol_status(m_zvol_name1, m_ioseq1, m_control_fd1, ZVOL_STATUS_HEALTHY, ZVOL_REBUILDING_DONE);
+
+	output = execCmd("zfs", std::string("stats ") + m_zvol_name1);
+	ASSERT_NE(output.find("Healthy"), std::string::npos);
 
 	/* read the block without rebuild flag */
 	read_data_start(m_datasock1.fd(), m_ioseq1, 0, sizeof (buf), &hdr_in, &read_hdr);
@@ -1009,11 +1024,16 @@ TEST(TargetIPTest, CreateAndDestroy) {
 	int fdImpl, fdExpl;
 	char buf[1];
 	int rc;
+	std::string output;
 
 	zrepl.start();
 	pool.create();
 	pool.createZvol("implicit1", "-o io.openebs:targetip=127.0.0.1:6060");
 	pool.createZvol("explicit1", "-o io.openebs:targetip=127.0.0.1:12345");
+
+	output = execCmd("zfs", std::string("stats ") + pool.getZvolName("implicit1"));
+	ASSERT_NE(output.find("Offline"), std::string::npos);
+
 	zrepl.kill();
 
 	rc = targetImpl.listen();
