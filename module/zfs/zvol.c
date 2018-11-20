@@ -352,6 +352,10 @@ uzfs_ioc_stats(zfs_cmd_t *zc, nvlist_t *nvl)
 
 	(void) mutex_enter(&zvol_list_mutex);
 	SLIST_FOREACH(zv, &zvol_list, zinfo_next) {
+
+		/*
+		 * No need to take lock of zv, as long as this is part of list
+		 */
 		if (zc->zc_name[0] == '\0' ||
 		    (uzfs_zvol_name_compare(zv, zc->zc_name) == 0)) {
 			nvlist_t *innvl = fnvlist_alloc();
@@ -389,6 +393,8 @@ uzfs_ioc_stats(zfs_cmd_t *zc, nvlist_t *nvl)
 
 			fnvlist_add_nvlist(nvl, zv->name, innvl);
 			fnvlist_free(innvl);
+			if (zc->zc_name[0] != '\0')
+				break;
 		}
 	}
 	(void) mutex_exit(&zvol_list_mutex);
