@@ -931,17 +931,17 @@ TEST_F(ZreplDataTest, RebuildFlag) {
 	get_zvol_status(m_zvol_name1, m_ioseq1, m_control_fd1, ZVOL_STATUS_DEGRADED, ZVOL_REBUILDING_INIT);
 
 	output = execCmd("zfs", std::string("stats ") + m_zvol_name1);
-	ASSERT_NE(output.find("DegradedPerformance"), std::string::npos);
+	ASSERT_NE(output.find("Degraded"), std::string::npos);
 
 	/* transition the zvol to online state */
 	transition_zvol_to_online(m_ioseq1, m_control_fd1, m_zvol_name1);
 
 	output = execCmd("zfs", std::string("stats ") + m_zvol_name1);
-	n = output.find("RebuildDuringDegrade");
+	n = output.find("Rebuilding");
 	if (n == std::string::npos)
 		ASSERT_NE(output.find("Healthy"), std::string::npos);
 	else
-		ASSERT_NE(output.find("RebuildDuringDegrade"), std::string::npos);
+		ASSERT_NE(output.find("Rebuilding"), std::string::npos);
 	sleep(5);
 
 	/* Get zvol status after rebuild */
