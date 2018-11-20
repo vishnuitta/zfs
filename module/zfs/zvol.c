@@ -341,8 +341,8 @@ status_to_str(zvol_info_t *zv)
 	rebuild_status = zv->main_zv->rebuild_info.zv_rebuild_status;
 	if ((rebuild_status != ZVOL_REBUILDING_INIT) &&
 	    (rebuild_status != ZVOL_REBUILDING_DONE))
-		return ("RebuildDuringDegrade");
-	return ("DegradedPerformance");
+		return ("Rebuilding");
+	return ("Degraded");
 }
 
 int
