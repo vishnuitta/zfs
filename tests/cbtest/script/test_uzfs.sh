@@ -729,7 +729,7 @@ run_fio_test()
 
 	stop_zrepl
 	while [ 1 ]; do
-		netstat -apnt |grep 6060
+		netstat -apnt | grep -w 6060
 		if [ $? -ne 0 ]; then
 			break
 		else
