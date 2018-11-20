@@ -77,8 +77,13 @@ typedef struct inject_delay_s {
 	int helping_replica_rebuild_complete;
 } inject_delay_t;
 
+typedef struct inject_rebuild_error_s {
+	uint64_t dw_replica_rebuild_error_io;
+} inject_rebuild_error_t;
+
 typedef struct inject_error_s {
 	inject_delay_t delay;
+	inject_rebuild_error_t inject_rebuild_error;
 } inject_error_t;
 
 extern inject_error_t inject_error;
