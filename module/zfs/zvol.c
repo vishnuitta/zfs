@@ -360,12 +360,12 @@ uzfs_ioc_stats(zfs_cmd_t *zc, nvlist_t *nvl)
 		    (uzfs_zvol_name_compare(zv, zc->zc_name) == 0)) {
 			nvlist_t *innvl = fnvlist_alloc();
 
-			fnvlist_add_string(innvl, "Name", zv->name);
+			fnvlist_add_string(innvl, "name", zv->name);
 
-			fnvlist_add_string(innvl, "Status",
+			fnvlist_add_string(innvl, "status",
 			    status_to_str(zv));
 
-			fnvlist_add_string(innvl, "Rebuild",
+			fnvlist_add_string(innvl, "rebuildStatus",
 			    rebuild_status_to_str(
 			    zv->main_zv->rebuild_info.zv_rebuild_status));
 
@@ -373,22 +373,22 @@ uzfs_ioc_stats(zfs_cmd_t *zc, nvlist_t *nvl)
 			    zv->is_io_ack_sender_created);
 			fnvlist_add_uint64(innvl, "isIOReceiverCreated",
 			    zv->is_io_receiver_created);
-			fnvlist_add_uint64(innvl, "RunningIONum",
+			fnvlist_add_uint64(innvl, "runningIONum",
 			    zv->running_ionum);
-			fnvlist_add_uint64(innvl, "CheckpointedIONum",
+			fnvlist_add_uint64(innvl, "checkpointedIONum",
 			    zv->checkpointed_ionum);
-			fnvlist_add_uint64(innvl, "DegradedCheckpointedIONum",
+			fnvlist_add_uint64(innvl, "degradedCheckpointedIONum",
 			    zv->degraded_checkpointed_ionum);
-			fnvlist_add_uint64(innvl, "CheckpointedTime",
+			fnvlist_add_uint64(innvl, "checkpointedTime",
 			    zv->checkpointed_time);
 
-			fnvlist_add_uint64(innvl, "RebuildBytes",
+			fnvlist_add_uint64(innvl, "rebuildBytes",
 			    zv->main_zv->rebuild_info.rebuild_bytes);
-			fnvlist_add_uint64(innvl, "RebuildCnt",
+			fnvlist_add_uint64(innvl, "rebuildCnt",
 			    zv->main_zv->rebuild_info.rebuild_cnt);
-			fnvlist_add_uint64(innvl, "RebuildDoneCnt",
+			fnvlist_add_uint64(innvl, "rebuildDoneCnt",
 			    zv->main_zv->rebuild_info.rebuild_done_cnt);
-			fnvlist_add_uint64(innvl, "RebuildFailedCnt",
+			fnvlist_add_uint64(innvl, "rebuildFailedCnt",
 			    zv->main_zv->rebuild_info.rebuild_failed_cnt);
 
 			fnvlist_add_nvlist(nvl, zv->name, innvl);
