@@ -7108,7 +7108,7 @@ zfs_do_stats(int argc, char **argv)
 	}
 
 	jobj = json_object_new_object();
-	json_object_object_add(jobj, "stats", jarray);
+	json_object_object_add(jobj, "Stats", jarray);
 	const char *json_string = json_object_to_json_string_ext(jobj,
 	    JSON_C_TO_STRING_PLAIN);
 
