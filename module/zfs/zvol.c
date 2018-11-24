@@ -333,6 +333,8 @@ static const char *
 status_to_str(zvol_info_t *zv)
 {
 	zvol_rebuild_status_t rebuild_status;
+	if (zv->mgmt_conn == NULL)
+		return ("Offline");
 	if ((zv->is_io_receiver_created == 0) ||
 	    (zv->is_io_ack_sender_created == 0))
 		return ("Offline");
