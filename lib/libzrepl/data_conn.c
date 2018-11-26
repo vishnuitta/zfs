@@ -828,17 +828,7 @@ exit:
 	 * to disk before making further progress
 	 */
 	if (wquiesce) {
-		/*
-		 * Lets ask io_receiver thread to flush
-		 * all outstanding IOs in taskq
-		 */
-		zinfo->quiesce_done = 0;
-		zinfo->quiesce_requested = 1;
-		quiesce_wait(zinfo);
-
 		uzfs_zvol_store_kv_pair(zinfo->clone_zv, STALE, 1);
-		/* This is to make sure that above kv is synced */
-		txg_wait_synced(spa_get_dsl(zinfo->main_zv->zv_spa), 0);
 
 		mutex_enter(&zinfo->main_zv->rebuild_mtx);
 		/* Mark replica healthy now */
@@ -848,6 +838,17 @@ exit:
 		    ZVOL_STATUS_HEALTHY);
 		uzfs_update_ionum_interval(zinfo, 0);
 		mutex_exit(&zinfo->main_zv->rebuild_mtx);
+
+		/*
+		 * Lets ask io_receiver thread to flush
+		 * all outstanding IOs in taskq
+		 */
+		zinfo->quiesce_done = 0;
+		zinfo->quiesce_requested = 1;
+		quiesce_wait(zinfo);
+
+		/* This is to make sure that above kv is synced */
+		txg_wait_synced(spa_get_dsl(zinfo->main_zv->zv_spa), 0);
 	}
 
 	kmem_free(arg, sizeof (rebuild_thread_arg_t));
@@ -2060,7 +2061,6 @@ uzfs_zvol_io_receiver(void *arg)
 		 * before taking snapshot on rebuild_clone
 		 */
 		if (zinfo->quiesce_requested) {
-			ASSERT(ZVOL_IS_REBUILDING_AFS(zinfo->main_zv));
 			taskq_wait_outstanding(zinfo->uzfs_zvol_taskq, 0);
 			zinfo->quiesce_requested = 0;
 			zinfo->quiesce_done = 1;
