@@ -31,6 +31,7 @@
 #include <arpa/inet.h>
 
 #include <sys/dsl_destroy.h>
+#include <sys/dsl_dir.h>
 #include <uzfs_io.h>
 #include <uzfs_rebuilding.h>
 #include <zrepl_mgmt.h>
@@ -828,7 +829,20 @@ exit:
 	 * to disk before making further progress
 	 */
 	if (wquiesce) {
+		/*
+		 * mark the cloned volume as STALE.
+		 * When zrepl got restarted/crashed before deleting
+		 * the cloned volume, do not use this cloned volume,
+		 * rather delete it.
+		 */
 		uzfs_zvol_store_kv_pair(zinfo->clone_zv, STALE, 1);
+
+		/*
+		 * set the quorum to 1 once rebuild is done. istgt will
+		 * start considering it in the quorum decision.
+		 */
+		VERIFY0(dsl_dataset_set_quorum(zinfo->main_zv->zv_name,
+		    ZPROP_SRC_LOCAL, 1));
 
 		mutex_enter(&zinfo->main_zv->rebuild_mtx);
 		/* Mark replica healthy now */
@@ -841,7 +855,9 @@ exit:
 
 		/*
 		 * Lets ask io_receiver thread to flush
-		 * all outstanding IOs in taskq
+		 * all outstanding IOs in taskq so that
+		 * no one is referring the cloned volume
+		 * and we can delete it safely.
 		 */
 		zinfo->quiesce_done = 0;
 		zinfo->quiesce_requested = 1;
