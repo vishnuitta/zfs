@@ -5,6 +5,8 @@
 #include <sys/uzfs_zvol.h>
 #include <sys/dnode.h>
 #include <sys/dsl_destroy.h>
+#include <sys/dsl_prop.h>
+#include <sys/dsl_dir.h>
 #include <zrepl_mgmt.h>
 #include <uzfs_mgmt.h>
 #include <uzfs_zap.h>
@@ -455,6 +457,25 @@ uzfs_zinfo_store_last_committed_degraded_io_no(zvol_info_t *zinfo,
 {
 	uzfs_zvol_store_kv_pair(zinfo->main_zv,
 	    DEGRADED_IO_SEQNUM, io_seq);
+}
+
+uint8_t
+uzfs_zinfo_get_quorum(zvol_info_t *zinfo)
+{
+	uint64_t quorum;
+	VERIFY0(dsl_prop_get_integer(zinfo->main_zv->zv_name,
+	    zfs_prop_to_name(ZFS_PROP_QUORUM), &quorum, NULL));
+	return (!!quorum);
+}
+
+int
+uzfs_zinfo_set_quorum(zvol_info_t *zinfo, uint64_t val)
+{
+	int err = dsl_dataset_set_quorum(zinfo->main_zv->zv_name,
+	    ZPROP_SRC_LOCAL, 1);
+	if (err)
+		return (err);
+	return (0);
 }
 
 /*
