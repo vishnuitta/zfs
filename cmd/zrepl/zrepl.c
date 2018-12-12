@@ -150,7 +150,7 @@ main(int argc, char **argv)
 	zfs_do_coalesce = 1;
 	env = getenv("DISABLE_COALESCE");
 	if (env != NULL)
-		if(strcmp(env, "1") == 0) {
+		if (strcmp(env, "1") == 0) {
 			LOG_INFO("Disabling coalescing IOs");
 			zfs_do_coalesce = 0;
 		}
