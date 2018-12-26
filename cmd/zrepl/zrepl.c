@@ -27,7 +27,7 @@
 extern unsigned long zfs_arc_max;
 extern unsigned long zfs_arc_min;
 extern int zfs_autoimport_disable;
-extern int zfs_do_coalesce;
+extern int zfs_do_write_coalesce;
 
 #if DEBUG
 inject_error_t	inject_error;
@@ -147,12 +147,12 @@ main(int argc, char **argv)
 		zfs_autoimport_disable = 1;
 	}
 
-	zfs_do_coalesce = 1;
-	env = getenv("DISABLE_COALESCE");
+	zfs_do_write_coalesce = 1;
+	env = getenv("DISABLE_WRITE_COALESCE");
 	if (env != NULL)
 		if (strcmp(env, "1") == 0) {
-			LOG_INFO("Disabling coalescing IOs");
-			zfs_do_coalesce = 0;
+			LOG_INFO("Disabling write IOs coalescing");
+			zfs_do_write_coalesce = 0;
 		}
 
 	SLIST_INIT(&uzfs_mgmt_conns);

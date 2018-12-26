@@ -44,7 +44,7 @@
 #include <sys/trace_zio.h>
 #include <sys/abd.h>
 
-extern int zfs_do_coalesce;
+extern int zfs_do_write_coalesce;
 
 /*
  * ==========================================================================
@@ -3280,7 +3280,8 @@ zio_vdev_io_start(zio_t *zio)
 		if (zio->io_type == ZIO_TYPE_READ && vdev_cache_read(zio))
 			return (ZIO_PIPELINE_CONTINUE);
 
-		if (zfs_do_coalesce == 0)
+		if ((zfs_do_write_coalesce == 0) &&
+		    (zio->io_type == ZIO_TYPE_WRITE))
 			zio->io_flags |= ZIO_FLAG_DONT_QUEUE;
 
 		if ((zio = vdev_queue_io(zio)) == NULL)
