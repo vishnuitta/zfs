@@ -493,7 +493,7 @@ uzfs_zvol_mgmt_get_handshake_info(zvol_io_hdr_t *in_hdr, const char *name,
 	 * Success condition for error2
 	 * error2 can be 0 (or)
 	 * error2 can be ENOENT when REPLICA_VERSION <= 3
-	*/
+	 */
 	if (!((error2 == 0) || (error2 == ENOENT && REPLICA_VERSION <= 3))) {
 		LOG_ERR("Failed to read degraded_io %s, err1: %d err2: %d",
 		    zinfo->name, error1, error2);
