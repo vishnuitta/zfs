@@ -125,6 +125,25 @@ typedef enum spa_all_vdev_zap_action {
 	AVZ_ACTION_INITIALIZE
 } spa_avz_action_t;
 
+#define	KB 1024
+#define	ZFS_HISTOGRAM_IO_SIZE (1024 * KB)
+#define	ZFS_HISTOGRAM_IO_BLOCK (32 * KB)
+
+#define	zfs_histogram_add(_array, _bucket, _size, _latency) \
+    atomic_inc_64(&(_array[_bucket / ZFS_HISTOGRAM_IO_BLOCK].count)); \
+    atomic_add_64(&(_array[_bucket / ZFS_HISTOGRAM_IO_BLOCK].size), _size); \
+    atomic_add_64(&(_array[_bucket / ZFS_HISTOGRAM_IO_BLOCK].latency), _latency)
+
+#define	zio_histogram_add(_array, _bucket, _size) \
+    atomic_inc_64(&(_array[_bucket / ZFS_HISTOGRAM_IO_BLOCK].count)); \
+    atomic_add_64(&(_array[_bucket / ZFS_HISTOGRAM_IO_BLOCK].size), _size);
+
+typedef struct zfs_histogram {
+	uint64_t size;
+	uint64_t count;
+	uint64_t latency;
+} zfs_histogram_t;
+
 struct spa {
 	/*
 	 * Fields protected by spa_namespace_lock.
@@ -289,6 +308,10 @@ struct spa {
 	refcount_t	spa_refcount;		/* number of opens */
 
 	taskq_t		*spa_upgrade_taskq;	/* taskq for upgrade jobs */
+	zfs_histogram_t zfs_rio_histogram[ZFS_HISTOGRAM_IO_SIZE /
+	    ZFS_HISTOGRAM_IO_BLOCK + 1];
+	zfs_histogram_t zfs_wio_histogram[ZFS_HISTOGRAM_IO_SIZE /
+	    ZFS_HISTOGRAM_IO_BLOCK + 1];
 };
 
 extern char *spa_config_path;

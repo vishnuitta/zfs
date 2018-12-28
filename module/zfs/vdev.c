@@ -3151,6 +3151,32 @@ vdev_stat_update(zio_t *zio, uint64_t psize)
 			vs->vs_ops[type]++;
 			vs->vs_bytes[type] += psize;
 
+#if !defined(_KERNEL)
+			if (type == ZIO_TYPE_READ) {
+				if (psize < ZFS_HISTOGRAM_IO_SIZE) {
+					zio_histogram_add(spa->
+					    zfs_rio_histogram,
+					    psize, psize);
+				} else {
+					zio_histogram_add(spa->
+					    zfs_rio_histogram,
+					    ZFS_HISTOGRAM_IO_SIZE, psize);
+				}
+			}
+
+			if (type == ZIO_TYPE_WRITE) {
+				if (psize < ZFS_HISTOGRAM_IO_SIZE) {
+					zio_histogram_add(spa->
+					    zfs_wio_histogram,
+					    psize, psize);
+				} else {
+					zio_histogram_add(spa->
+					    zfs_wio_histogram,
+					    ZFS_HISTOGRAM_IO_SIZE, psize);
+				}
+			}
+#endif
+
 			if (flags & ZIO_FLAG_DELEGATED) {
 				vsx->vsx_agg_histo[zio->io_priority]
 				    [RQ_HISTO(zio->io_size)]++;

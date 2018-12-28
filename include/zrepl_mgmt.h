@@ -31,6 +31,7 @@
 #include <uzfs_io.h>
 #include "zrepl_prot.h"
 #include <sys/zfs_context.h>
+#include <sys/spa_impl.h>
 
 #ifdef	__cplusplus
 extern "C" {
@@ -196,6 +197,12 @@ typedef struct zvol_info_s {
 	uint64_t 	write_byte;
 	uint64_t	sync_req_ack_cnt;
 	uint64_t 	sync_latency;
+
+	// histogram of IOs
+	zfs_histogram_t uzfs_rio_histogram[ZFS_HISTOGRAM_IO_SIZE /
+	    ZFS_HISTOGRAM_IO_BLOCK + 1];
+	zfs_histogram_t uzfs_wio_histogram[ZFS_HISTOGRAM_IO_SIZE /
+	    ZFS_HISTOGRAM_IO_BLOCK + 1];
 } zvol_info_t;
 
 typedef struct thread_args_s {

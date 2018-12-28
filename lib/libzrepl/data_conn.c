@@ -377,6 +377,7 @@ uzfs_zvol_worker(void *arg)
 			    (char *)zio_cmd->buf,
 			    hdr->offset, hdr->len,
 			    metadata_desc);
+
 			atomic_inc_64(&zinfo->read_req_received_cnt);
 			break;
 
@@ -1703,6 +1704,7 @@ uzfs_zvol_io_ack_sender(void *arg)
 	zvol_info_t		*zinfo;
 	thread_args_t 		*thrd_arg;
 	zvol_io_cmd_t 		*zio_cmd = NULL;
+	uint64_t len, latency;
 
 	thrd_arg = (thread_args_t *)arg;
 	fd = thrd_arg->fd;
@@ -1798,17 +1800,38 @@ error_check:
 					}
 				}
 			}
+			latency = gethrtime() - zio_cmd->io_start_time;
 			atomic_inc_64(&zinfo->read_req_ack_cnt);
 			atomic_add_64(&zinfo->read_byte, zio_cmd->hdr.len);
-			atomic_add_64(&zinfo->read_latency,
-			    gethrtime() - zio_cmd->io_start_time);
+			atomic_add_64(&zinfo->read_latency, latency);
+
+			len = zio_cmd->hdr.len;
+			if (len < ZFS_HISTOGRAM_IO_SIZE) {
+				zfs_histogram_add(zinfo->uzfs_rio_histogram,
+				    len, len, latency);
+			} else {
+				zfs_histogram_add(zinfo->uzfs_rio_histogram,
+				    ZFS_HISTOGRAM_IO_SIZE, len, latency);
+			}
 		} else {
 			if (zio_cmd->hdr.opcode == ZVOL_OPCODE_WRITE) {
+				latency = gethrtime() - zio_cmd->io_start_time;
 				atomic_inc_64(&zinfo->write_req_ack_cnt);
 				atomic_add_64(&zinfo->write_byte,
 				    zio_cmd->hdr.len);
-				atomic_add_64(&zinfo->write_latency,
-				    gethrtime() - zio_cmd->io_start_time);
+				atomic_add_64(&zinfo->write_latency, latency);
+
+				len = zio_cmd->hdr.len;
+				if (len < ZFS_HISTOGRAM_IO_SIZE) {
+					zfs_histogram_add(zinfo->
+					    uzfs_wio_histogram, len,
+					    len, latency);
+				} else {
+					zfs_histogram_add(zinfo->
+					    uzfs_wio_histogram,
+					    ZFS_HISTOGRAM_IO_SIZE,
+					    len, latency);
+				}
 			} else if (zio_cmd->hdr.opcode == ZVOL_OPCODE_SYNC) {
 				atomic_inc_64(&zinfo->sync_req_ack_cnt);
 				atomic_add_64(&zinfo->sync_latency,
