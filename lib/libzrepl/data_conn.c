@@ -41,6 +41,7 @@
 
 #define	MAXEVENTS 64
 
+#define	IO_THRESHOLD_TIME	30
 #define	ZVOL_REBUILD_STEP_SIZE  (10 * 1024ULL * 1024ULL * 1024ULL) // 10GB
 uint64_t zvol_rebuild_step_size = ZVOL_REBUILD_STEP_SIZE;
 
@@ -1703,7 +1704,7 @@ uzfs_zvol_io_ack_sender(void *arg)
 	zvol_info_t		*zinfo;
 	thread_args_t 		*thrd_arg;
 	zvol_io_cmd_t 		*zio_cmd = NULL;
-
+	uint64_t		latency = 0;
 	thrd_arg = (thread_args_t *)arg;
 	fd = thrd_arg->fd;
 	zinfo = thrd_arg->zinfo;
@@ -1785,6 +1786,7 @@ error_check:
 			}
 		}
 
+		latency = 0;
 		if (zio_cmd->hdr.opcode == ZVOL_OPCODE_READ) {
 			if (zio_cmd->hdr.status == ZVOL_OP_STATUS_OK) {
 				/* Send data read from disk */
@@ -1800,21 +1802,26 @@ error_check:
 			}
 			atomic_inc_64(&zinfo->read_req_ack_cnt);
 			atomic_add_64(&zinfo->read_byte, zio_cmd->hdr.len);
-			atomic_add_64(&zinfo->read_latency,
-			    gethrtime() - zio_cmd->io_start_time);
+			latency = (gethrtime() - zio_cmd->io_start_time);
+			atomic_add_64(&zinfo->read_latency, latency);
 		} else {
 			if (zio_cmd->hdr.opcode == ZVOL_OPCODE_WRITE) {
 				atomic_inc_64(&zinfo->write_req_ack_cnt);
 				atomic_add_64(&zinfo->write_byte,
 				    zio_cmd->hdr.len);
-				atomic_add_64(&zinfo->write_latency,
-				    gethrtime() - zio_cmd->io_start_time);
+				latency = (gethrtime() -
+				    zio_cmd->io_start_time);
+				atomic_add_64(&zinfo->write_latency, latency);
 			} else if (zio_cmd->hdr.opcode == ZVOL_OPCODE_SYNC) {
 				atomic_inc_64(&zinfo->sync_req_ack_cnt);
-				atomic_add_64(&zinfo->sync_latency,
-				    gethrtime() - zio_cmd->io_start_time);
+				latency = (gethrtime() -
+				    zio_cmd->io_start_time);
+				atomic_add_64(&zinfo->sync_latency, latency);
 			}
 		}
+		if ((latency >> 30) > IO_THRESHOLD_TIME)
+			LOG_INFO("IO %d with seq: %lu took %luns",
+			    zio_cmd->hdr.opcode, zio_cmd->hdr.io_seq, latency);
 		zinfo->zio_cmd_in_ack = NULL;
 		zio_cmd_free(&zio_cmd);
 	}
