@@ -283,6 +283,7 @@ static int get_nvlist(uint64_t nvl, uint64_t size, int iflag, nvlist_t **nvp);
 #include <sys/stat.h>
 #include <sys/dmu_impl.h>
 #include <uzfs_mgmt.h>
+#include <zrepl_mgmt.h>
 
 #include "zfs_fletcher.h"
 #include "zfs_namecheck.h"
@@ -2852,6 +2853,53 @@ clear_received_props(const char *dsname, nvlist_t *props,
 	return (err);
 }
 
+int
+zfs_set_targetip_prehook(const char *name, zprop_source_t source,
+    char *targetip, char *curtargetip)
+{
+	char zap_targetip[MAXNAMELEN];
+	int error;
+	nvlist_t *props;
+
+	zap_targetip[0] = '\0';
+	error = dsl_prop_get(name, zfs_prop_to_name(ZFS_PROP_TARGETIP),
+	    1, sizeof (zap_targetip), &zap_targetip, NULL);
+
+	if (error != 0)
+		return (error);
+
+	strcpy(curtargetip, zap_targetip);
+	if (strcasecmp(zap_targetip, targetip) == 0)
+		return (0);
+
+	if ((strlen(zap_targetip) != 0) && (strlen(targetip) != 0))
+		return (EINVAL);
+
+	if (strlen(zap_targetip) == 0) {
+		nvlist_alloc(&props, NV_UNIQUE_NAME, 0);
+		nvlist_add_string(props, ZFS_PROP_TARGET_IP, targetip);
+		error = uzfs_zvol_create_cb(name, props);
+		nvlist_free(props);
+	} else
+		error = uzfs_zvol_destroy_cb(name, NULL);
+
+	return (error);
+}
+
+void
+zfs_set_targetip_posthook(const char *name, char *targetip, char *curtargetip)
+{
+	nvlist_t *props;
+	if ((strlen(curtargetip) == 0) && (strlen(targetip) != 0))
+		uzfs_zvol_destroy_cb(name, NULL);
+	else if ((strlen(curtargetip) != 0) && (strlen(targetip) == 0)) {
+		nvlist_alloc(&props, NV_UNIQUE_NAME, 0);
+		nvlist_add_string(props, ZFS_PROP_TARGET_IP, curtargetip);
+		(void) uzfs_zvol_create_cb(name, props);
+		nvlist_free(props);
+	}
+}
+
 /*
  * inputs:
  * zc_name		name of filesystem
@@ -2870,7 +2918,9 @@ zfs_ioc_set_prop(zfs_cmd_t *zc)
 	zprop_source_t source = (received ? ZPROP_SRC_RECEIVED :
 	    ZPROP_SRC_LOCAL);
 	nvlist_t *errors;
-	int error;
+	int error, targetip_error;
+	char *targetip = NULL;
+	char curtargetip[MAXNAMELEN];
 
 	if ((error = get_nvlist(zc->zc_nvlist_src, zc->zc_nvlist_src_size,
 	    zc->zc_iflags, &nvl)) != 0)
@@ -2888,11 +2938,21 @@ zfs_ioc_set_prop(zfs_cmd_t *zc)
 		error = dsl_prop_set_hasrecvd(zc->zc_name);
 	}
 
+	curtargetip[0] = '\0';
+	(void) nvlist_lookup_string(nvl, ZFS_PROP_TARGET_IP, &targetip);
+	if (targetip != NULL)
+		error = zfs_set_targetip_prehook(zc->zc_name, source, targetip,
+		    &curtargetip[0]);
+
 	errors = fnvlist_alloc();
 	if (error == 0)
 		error = zfs_set_prop_nvlist(zc->zc_name, source, nvl, errors);
 
 	if (zc->zc_nvlist_dst != 0 && errors != NULL) {
+		if (nvlist_lookup_int32(errors, ZFS_PROP_TARGET_IP,
+		    &targetip_error) == 0)
+			zfs_set_targetip_posthook(zc->zc_name, targetip,
+			    &curtargetip[0]);
 		(void) put_nvlist(zc, errors);
 	}
 
