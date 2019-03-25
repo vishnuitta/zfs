@@ -212,6 +212,9 @@ run_zvol_targetip_tests()
 	log_must $ZFS set io.openebs:targetip=127.0.0.1:6162 $pool/$vol"_targetip_1"
 	log_must test_stats_len 2
 
+	log_must_not $ZFS set io.openebs:targetip=127.0.0.1:5959 $pool/$vol"_targetip_1"
+	log_must test_stats_len 2
+
 	log_must $ZFS set io.openebs:targetip="" $pool/$vol"_targetip_1"
 	log_must test_stats_len 1
 
