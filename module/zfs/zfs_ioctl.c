@@ -2853,6 +2853,28 @@ clear_received_props(const char *dsname, nvlist_t *props,
 	return (err);
 }
 
+#ifndef _KERNEL
+/*
+ * Setting or unsetting targetIP is allowed, but, doens't allow changing from
+ * one IP to another.
+ * inputs:
+ * - name: name of the dataset
+ * - source: source received in nvlist
+ * - targetip: targetip given in cmdline
+ * - curtargetip: memory to be filled by this fn with targetip currently
+ *                stored in ZAP
+ * output:
+ * - returns 0 in case of success
+ *
+ * This fn does the following:
+ * - gets the targetIP available in ZAP. ZAP returns the default value,
+ *   i.e., "" if this key doesn't exist.
+ * - copy the 'zap_targetip' to 'curtargetip' to use it in posthook.
+ * - return if 'zap_targetip' and 'targetip' received in cmdline are same.
+ * - error out if both of them are not empty
+ * - if 'zap_targetip' is empty, create zinfo using 'targetip' recvd in cmdline
+ * - if 'zap_targetip' is not empty, it is unset, so, destroy zinfo
+ */
 int
 zfs_set_targetip_prehook(const char *name, zprop_source_t source,
     char *targetip, char *curtargetip)
@@ -2886,6 +2908,14 @@ zfs_set_targetip_prehook(const char *name, zprop_source_t source,
 	return (error);
 }
 
+/*
+ * targetip_posthook is used to revert the work done in prehook in case of
+ * any error to sync this property.
+ * inputs:
+ * - name: name of the dataset
+ * - targetip: targetip given in cmd line
+ * - curtargetip: targetip that was stored in ZAP before executing this command
+ */
 void
 zfs_set_targetip_posthook(const char *name, char *targetip, char *curtargetip)
 {
@@ -2899,6 +2929,7 @@ zfs_set_targetip_posthook(const char *name, char *targetip, char *curtargetip)
 		nvlist_free(props);
 	}
 }
+#endif
 
 /*
  * inputs:
@@ -2918,9 +2949,13 @@ zfs_ioc_set_prop(zfs_cmd_t *zc)
 	zprop_source_t source = (received ? ZPROP_SRC_RECEIVED :
 	    ZPROP_SRC_LOCAL);
 	nvlist_t *errors;
-	int error, targetip_error;
+	int error;
+
+#ifndef _KERNEL
+	int targetip_error;
 	char *targetip = NULL;
 	char curtargetip[MAXNAMELEN];
+#endif
 
 	if ((error = get_nvlist(zc->zc_nvlist_src, zc->zc_nvlist_src_size,
 	    zc->zc_iflags, &nvl)) != 0)
@@ -2938,21 +2973,33 @@ zfs_ioc_set_prop(zfs_cmd_t *zc)
 		error = dsl_prop_set_hasrecvd(zc->zc_name);
 	}
 
+#ifndef _KERNEL
+	/*
+	 * Below code is to set/unset targetip property for zvol_info.
+	 * This should have been done during sync time similar to
+	 * dsl_dir_set_quorum_sync, but, doing it here as it involves
+	 * locks in zinfo layer in the form of 'prehook'.
+	 * Due to this prehook, posthook is also required, in case of any error
+	 * while syncing the property, to revert the changes done in prehook.
+	 */
 	curtargetip[0] = '\0';
 	(void) nvlist_lookup_string(nvl, ZFS_PROP_TARGET_IP, &targetip);
 	if (targetip != NULL)
 		error = zfs_set_targetip_prehook(zc->zc_name, source, targetip,
 		    &curtargetip[0]);
+#endif
 
 	errors = fnvlist_alloc();
 	if (error == 0)
 		error = zfs_set_prop_nvlist(zc->zc_name, source, nvl, errors);
 
 	if (zc->zc_nvlist_dst != 0 && errors != NULL) {
+#ifndef _KERNEL
 		if (nvlist_lookup_int32(errors, ZFS_PROP_TARGET_IP,
 		    &targetip_error) == 0)
 			zfs_set_targetip_posthook(zc->zc_name, targetip,
 			    &curtargetip[0]);
+#endif
 		(void) put_nvlist(zc, errors);
 	}
 
