@@ -27,6 +27,7 @@
 extern unsigned long zfs_arc_max;
 extern unsigned long zfs_arc_min;
 extern int zfs_autoimport_disable;
+extern int vdev_queue_io_disable;
 
 #if DEBUG
 inject_error_t	inject_error;
@@ -144,6 +145,14 @@ main(int argc, char **argv)
 	} else {
 		LOG_INFO("disabled auto import (reading of zpool.cache)");
 		zfs_autoimport_disable = 1;
+	}
+
+	if (getenv("VDEV_QUEUE_IO_DISABLE") == NULL) {
+		LOG_INFO("enables queueing IOs to vdev");
+		vdev_queue_io_disable = 0;
+	} else {
+		LOG_INFO("disables queueing IOs to vdev");
+		vdev_queue_io_disable = 1;
 	}
 
 	SLIST_INIT(&uzfs_mgmt_conns);
