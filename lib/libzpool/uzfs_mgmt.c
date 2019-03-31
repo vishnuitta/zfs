@@ -416,10 +416,6 @@ free_ret:
 	zv->zv_volblocksize = block_size;
 	zv->zv_volsize = vol_size;
 
-	/* On boot, mark zvol status health */
-	uzfs_zvol_set_status(zv, ZVOL_STATUS_DEGRADED);
-	uzfs_zvol_set_rebuild_status(zv, ZVOL_REBUILDING_INIT);
-
 	if (spa_writeable(dmu_objset_spa(os))) {
 //		if (zil_replay_disable)
 //			zil_destroy(dmu_objset_zil(os), B_FALSE);
@@ -448,6 +444,12 @@ uzfs_open_dataset(spa_t *spa, const char *ds_name, zvol_state_t **z)
 	(void) snprintf(name, sizeof (name), "%s/%s", spa_name(spa), ds_name);
 
 	error = uzfs_dataset_zv_create(name, z);
+
+	if (error == 0) {
+		uzfs_zvol_set_status(*z, ZVOL_STATUS_DEGRADED);
+		uzfs_zvol_set_rebuild_status(*z, ZVOL_REBUILDING_INIT);
+	}
+
 	return (error);
 }
 
@@ -514,13 +516,12 @@ is_internally_created_clone_volume(const char *ds_name)
  * this function for all zvols
  */
 int
-uzfs_zvol_create_cb(const char *ds_name, void *arg)
+uzfs_zvol_create(const char *ds_name, zvol_state_t **pzv, void *arg)
 {
 	zvol_state_t	*zv = NULL;
 	int 		error = 0;
 	nvlist_t	*nvprops = arg;
 	char		*ip;
-	char		*zvol_workers;
 
 	if (strrchr(ds_name, '@') != NULL) {
 		return (0);
@@ -537,10 +538,10 @@ uzfs_zvol_create_cb(const char *ds_name, void *arg)
 	error = uzfs_dataset_zv_create(ds_name, &zv);
 	if (error) {
 		/* happens normally for all non-zvol-type datasets */
-		return (0);
+		return (error);
 	}
 
-	/* if zvol is being created, read target address from nvlist */
+	/* priority for TARGET_IP given in CLI as part of its zfs set/create */
 	if (nvprops != NULL) {
 		error = nvlist_lookup_string(nvprops, ZFS_PROP_TARGET_IP, &ip);
 		if (error == 0)
@@ -549,21 +550,61 @@ uzfs_zvol_create_cb(const char *ds_name, void *arg)
 		else {
 			LOG_ERR("target IP address is not set for %s", ds_name);
 			uzfs_close_dataset(zv);
-			return (0);
+			return (error);
 		}
-
-		error = nvlist_lookup_string(nvprops, ZFS_PROP_ZVOL_WORKERS,
-		    &zvol_workers);
-		if (error == 0)
-			zv->zvol_workers = (uint8_t)strtol(zvol_workers, NULL,
-			    10);
 	} else {
 		if (zv->zv_target_host[0] == '\0') {
 			LOG_ERR("target IP address is empty for %s", ds_name);
 			uzfs_close_dataset(zv);
-			return (0);
+			return (EINVAL);
 		}
 	}
+
+	*pzv = zv;
+	return (0);
+}
+
+int
+uzfs_zvol_create_cb(const char *ds_name, void *arg)
+{
+	zvol_state_t	*zv = NULL;
+	uint64_t	quorum;
+	nvlist_t	*nvprops = arg;
+	int		error = 0;
+
+	error = uzfs_zvol_create(ds_name, &zv, nvprops);
+	if (zv == NULL)
+		return (error);
+
+	error = 0;
+	VERIFY0(dsl_prop_get_integer(ds_name,
+	    zfs_prop_to_name(ZFS_PROP_QUORUM), &quorum, NULL));
+
+	if (quorum == 1)
+		uzfs_zvol_set_status(zv, ZVOL_STATUS_NEWLY_CREATED);
+	else
+		uzfs_zvol_set_status(zv, ZVOL_STATUS_DEGRADED);
+
+	uzfs_zvol_set_rebuild_status(zv, ZVOL_REBUILDING_INIT);
+
+	uzfs_zinfo_init(zv, ds_name, nvprops);
+
+	return (0);
+}
+
+int
+uzfs_zvol_import_cb(const char *ds_name, void *args)
+{
+	zvol_state_t	*zv = NULL;
+	nvlist_t	*nvprops = args;
+
+	uzfs_zvol_create(ds_name, &zv, nvprops);
+	if (zv == NULL)
+		return (0);
+
+	uzfs_zvol_set_status(zv, ZVOL_STATUS_DEGRADED);
+	uzfs_zvol_set_rebuild_status(zv, ZVOL_REBUILDING_INIT);
+
 	uzfs_zinfo_init(zv, ds_name, nvprops);
 
 	return (0);
@@ -584,7 +625,7 @@ uzfs_zvol_create_minors(spa_t *spa, const char *name)
 
 	pool_name = kmem_zalloc(MAXNAMELEN, KM_SLEEP);
 	strncpy(pool_name, name, MAXNAMELEN);
-	dmu_objset_find(pool_name, uzfs_zvol_create_cb, NULL, DS_FIND_CHILDREN);
+	dmu_objset_find(pool_name, uzfs_zvol_import_cb, NULL, DS_FIND_CHILDREN);
 	kmem_free(pool_name, MAXNAMELEN);
 }
 

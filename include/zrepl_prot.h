@@ -167,6 +167,7 @@ typedef enum zvol_rebuild_status zvol_rebuild_status_t;
  * zvol status
  */
 enum zvol_status {
+	ZVOL_STATUS_NEWLY_CREATED,	/* zvol is created, not imported */
 	ZVOL_STATUS_DEGRADED,		/* zvol is missing some data */
 	ZVOL_STATUS_HEALTHY		/* zvol has latest data */
 } __attribute__((packed));

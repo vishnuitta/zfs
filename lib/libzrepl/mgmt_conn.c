@@ -267,7 +267,7 @@ scan_conn_list(void)
  * a new mgmt connection to iscsi target in response to this event.
  */
 void
-zinfo_create_cb(zvol_info_t *zinfo, nvlist_t *create_props)
+zinfo_create_cb(zvol_info_t *zinfo, nvlist_t *set_props)
 {
 	char target_host[MAXNAMELEN];
 	uint16_t target_port;
@@ -277,9 +277,9 @@ zinfo_create_cb(zvol_info_t *zinfo, nvlist_t *create_props)
 	uint64_t val = 1;
 	int rc;
 
-	/* if zvol is being created the zvol property does not exist yet */
-	if (create_props != NULL &&
-	    nvlist_lookup_string(create_props, ZFS_PROP_TARGET_IP, &ip) == 0) {
+	/* props are sent during zfs set TARGETIP */
+	if (set_props != NULL &&
+	    nvlist_lookup_string(set_props, ZFS_PROP_TARGET_IP, &ip) == 0) {
 		strlcpy(target_host, ip, sizeof (target_host));
 	} else {
 		/* get it from zvol properties */

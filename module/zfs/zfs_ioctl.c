@@ -2900,7 +2900,7 @@ zfs_set_targetip_prehook(const char *name, zprop_source_t source,
 	if (strlen(zap_targetip) == 0) {
 		nvlist_alloc(&props, NV_UNIQUE_NAME, 0);
 		nvlist_add_string(props, ZFS_PROP_TARGET_IP, targetip);
-		error = uzfs_zvol_create_cb(name, props);
+		error = uzfs_zvol_import_cb(name, props);
 		nvlist_free(props);
 	} else
 		error = uzfs_zvol_destroy_cb(name, NULL);
@@ -2925,7 +2925,7 @@ zfs_set_targetip_posthook(const char *name, char *targetip, char *curtargetip)
 	else if ((strlen(curtargetip) != 0) && (strlen(targetip) == 0)) {
 		nvlist_alloc(&props, NV_UNIQUE_NAME, 0);
 		nvlist_add_string(props, ZFS_PROP_TARGET_IP, curtargetip);
-		(void) uzfs_zvol_create_cb(name, props);
+		(void) uzfs_zvol_import_cb(name, props);
 		nvlist_free(props);
 	}
 }
@@ -3533,10 +3533,11 @@ zfs_ioc_create(const char *fsname, nvlist_t *innvl, nvlist_t *outnvl)
 				error2 = dsl_destroy_head(fsname);
 			}
 		}
-	}
 #if !defined(_KERNEL)
-	(void) uzfs_zvol_create_cb((char *)fsname, nvprops);
+		else
+			(void) uzfs_zvol_create_cb((char *)fsname, nvprops);
 #endif
+	}
 	return (error);
 }
 

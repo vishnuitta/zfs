@@ -370,7 +370,7 @@ end:
 }
 
 int
-uzfs_zinfo_init(zvol_state_t *zv, const char *ds_name, nvlist_t *create_props)
+uzfs_zinfo_init(zvol_state_t *zv, const char *ds_name, nvlist_t *set_props)
 {
 	zvol_info_t	*zinfo;
 
@@ -409,7 +409,7 @@ uzfs_zinfo_init(zvol_state_t *zv, const char *ds_name, nvlist_t *create_props)
 	uzfs_insert_zinfo_list(zinfo);
 
 	if (zinfo_create_hook)
-		(*zinfo_create_hook)(zinfo, create_props);
+		(*zinfo_create_hook)(zinfo, set_props);
 
 	return (0);
 }
