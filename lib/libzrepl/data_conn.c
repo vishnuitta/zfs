@@ -1903,6 +1903,37 @@ exit:
 
 	zk_thread_exit();
 }
+
+static int
+set_zvol_status(zvol_info_t *zinfo, zvol_op_open_data_t *open_data)
+{
+	int error = 0;
+	zvol_status_t status = ZVOL_STATUS_DEGRADED;
+	if (zinfo->snapshot_zv == NULL) {
+		ASSERT3P(zinfo->clone_zv, ==, NULL);
+		/* Get the clone */
+		if ((error = uzfs_zvol_get_internal_clone(zinfo->main_zv,
+		    &zinfo->snapshot_zv, &zinfo->clone_zv, NULL) != 0)) {
+			LOG_ERR("Failed to get internal clone for %s",
+			    zinfo->name);
+			goto ret;
+		}
+	}
+	if (zinfo->clone_zv != NULL)
+		goto ret;
+	if (open_data->replication_factor == open_data->consistency_factor) {
+		status = ZVOL_STATUS_HEALTHY;
+		goto ret;
+	}
+	if (open_data->io_seq == 0) {
+		status = ZVOL_STATUS_HEALTHY;
+		goto ret;
+	}
+ret:
+	uzfs_zvol_set_status(status);
+	return (error);
+}
+
 /*
  * Process open request on data connection, the first message.
  *
@@ -2019,6 +2050,9 @@ open_zvol(int fd, zvol_info_t **zinfopp)
 		LOG_ERR("Failed to set granularity of metadata");
 		goto error_ret;
 	}
+
+	if (set_zvol_status(zinfo, &open_data) != 0)
+		goto error_ret;
 
 	if (zinfo->snapshot_zv == NULL) {
 		ASSERT3P(zinfo->clone_zv, ==, NULL);

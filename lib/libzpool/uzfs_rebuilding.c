@@ -281,6 +281,30 @@ is_stale_clone(zvol_state_t *zv)
 }
 
 /*
+ */
+int
+uzfs_zvol_get_internal_clone(zvol_state_t *zv, zvol_state_t **snap_zv,
+    zvol_state_t **clone_zv, int *error)
+{
+	int ret = 0;
+	char *snapname = NULL;
+	char *clonename = NULL;
+	char *clone_subname = NULL;
+	zvol_state_t *l_snap_zv = NULL, *l_clone_zv = NULL;
+
+again:
+	ret = get_snapshot_zv(zv, REBUILD_SNAPSHOT_SNAPNAME, &l_snap_zv,
+	    B_FALSE, B_TRUE);
+	if (ret == ENOENT) {
+		LOG_ERR("internal snapshot for %s doesn't exists",
+		    zv->zv_name);
+		*snap_zv = *clone_zv = NULL;
+		return (0);
+	}
+
+}
+
+/*
  * This API is used to create internal clone for rebuild.
  * It will load the clone dataset if clone already exist.
  * Cloned volume created through this API can not be exposed
