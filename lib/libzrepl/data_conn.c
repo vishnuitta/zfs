@@ -1907,20 +1907,37 @@ exit:
 /*
  * This function finds the appropriate state of zvol based on quorum and
  * open_data contents.
- * Returns DEGRADED if quorum off
- * Returns HEALTHY if replication_factor is 1
- * Returns DEGRADED
+ * If quorum off, returns DEGRADED
+ * else if internal snapshot might exists, returns DEGRADED
+ * else if replication_factor is 1, returns HEALTHY
+ * else returns DEGRADED
  */
 static int
 find_apt_zvol_status(zvol_info_t *zinfo, zvol_op_open_data_t *open_data)
 {
 	uint8_t quorum = uzfs_zinfo_get_quorum(zinfo);
+	zvol_state_t *l_snap_zv = NULL;
+	int ret = 0;
 
-	if (quorum == 0)
+	if (quorum == 0) {
+		LOG_INFO("Quorum is off, so, degraded mode with rep: %d",
+		    open_data->replication_factor);
 		return (ZVOL_STATUS_DEGRADED);
+	}
 
-	if (open_data->replication_factor == 1)
+	ret = get_snapshot_zv(zinfo->main_zv, REBUILD_SNAPSHOT_SNAPNAME,
+	    &l_snap_zv, B_TRUE, B_TRUE);
+	if (ret != ENOENT) {
+		LOG_INFO("internal snapshot might exists.. err: %d "
+		    "so, degraded mode with rep: %d", ret,
+		    open_data->replication_factor);
+		return (ZVOL_STATUS_DEGRADED);
+	}
+
+	if (open_data->replication_factor == 1) {
+		LOG_INFO("Quorum is on, and rep factor 1");
 		return (ZVOL_STATUS_HEALTHY);
+	}
 
 	return (ZVOL_STATUS_DEGRADED);
 }

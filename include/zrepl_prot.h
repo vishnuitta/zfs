@@ -123,7 +123,6 @@ struct zvol_op_open_data {
 	uint32_t	timeout;	// replica timeout in seconds
 	char		volname[MAX_NAME_LEN];
 	uint8_t		replication_factor;
-	uint8_t 	padding[3];
 	uint64_t	io_seq;
 } __attribute__((packed));
 

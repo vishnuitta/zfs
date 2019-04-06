@@ -116,7 +116,7 @@ static void do_handshake(std::string zvol_name, std::string &host,
  */
 static void do_data_connection(int &data_fd, std::string host, uint16_t port,
     std::string zvol_name, int bs=4096, int timeout=120,
-    int res=ZVOL_OP_STATUS_OK) {
+    int res=ZVOL_OP_STATUS_OK, int rep_factor = 3, int version = REPLICA_VERSION) {
 	struct sockaddr_in addr;
 	zvol_io_hdr_t hdr_in, hdr_out = {0};
 	zvol_op_open_data_t open_data;
@@ -136,7 +136,7 @@ retry:
 		perror("connect");
 		ASSERT_EQ(errno, 0);
 	}
-	hdr_out.version = REPLICA_VERSION;
+	hdr_out.version = version;
 	hdr_out.opcode = ZVOL_OPCODE_OPEN;
 	hdr_out.status = ZVOL_OP_STATUS_OK;
 	hdr_out.len = sizeof (open_data);
@@ -148,6 +148,7 @@ retry:
 	open_data.timeout = timeout;
 	GtestUtils::strlcpy(open_data.volname, zvol_name.c_str(),
 	    sizeof (open_data.volname));
+	open_data.replication_factor = rep_factor;
 	rc = write(fd, &open_data, hdr_out.len);
 
 	rc = read(fd, &hdr_in, sizeof (hdr_in));
@@ -1002,6 +1003,88 @@ TEST_F(ZreplDataTest, ReadMetaDataFlag) {
 	m_datasock1.graceful_close();
 	m_datasock2.graceful_close();
 	sleep(5);
+}
+
+TEST(ReplicaState, SingleReplicaQuorumOff) {
+	Zrepl zrepl;
+	TestPool pool("replicaState");
+	Target targetQuorumOn, targetQuorumOff;
+	int rc;
+	int control_fd1, control_fd2, datasock1_fd, datasock2_fd;
+	std::string host1, host2, zvol_name1, zvol_name2;
+	uint16_t port1, port2;
+	uint64_t ioseq1, ioseq2;
+
+	zrepl.start();
+	pool.create();
+	pool.createZvol("quorumon", "-o quorum=on -o io.openebs:targetip=127.0.0.1:6060");
+	pool.createZvol("quorumoff", "-o io.openebs:targetip=127.0.0.1:6161");
+	zvol_name1 = pool.getZvolName("quorumon");
+	zvol_name2 = pool.getZvolName("quorumoff");
+
+	rc = targetQuorumOn.listen();
+	ASSERT_GE(rc, 0);
+	rc = targetQuorumOff.listen(6161);
+	ASSERT_GE(rc, 0);
+
+	control_fd1 = targetQuorumOn.accept(-1);
+	ASSERT_GE(control_fd1, 0);
+	do_handshake(zvol_name1, host1, port1, NULL, NULL, control_fd1,
+	    ZVOL_OP_STATUS_OK);
+	do_data_connection(datasock1_fd, host1, port1, zvol_name1, 4096, 120, ZVOL_OP_STATUS_OK, 1);
+
+	control_fd2 = targetQuorumOff.accept(-1);
+	ASSERT_GE(control_fd2, 0);
+	do_handshake(zvol_name2, host2, port2, NULL, NULL, control_fd2,
+	    ZVOL_OP_STATUS_OK);
+	do_data_connection(datasock2_fd, host2, port2, zvol_name2, 4096, 120, ZVOL_OP_STATUS_OK, 1);
+
+	get_zvol_status(zvol_name1, ioseq1, control_fd1, ZVOL_STATUS_HEALTHY, ZVOL_REBUILDING_DONE);
+	get_zvol_status(zvol_name2, ioseq1, control_fd2, ZVOL_STATUS_DEGRADED, ZVOL_REBUILDING_INIT);
+
+	zrepl.kill();
+}
+
+TEST(ReplicaState, MultiReplicaAndDegradedSingleReplicaDuringUpgrade) {
+	Zrepl zrepl;
+	TestPool pool("replicaState");
+	Target targetQuorumOn;
+	int rc;
+	int control_fd1, datasock1_fd;
+	std::string host1, host2, zvol_name1, zvol_name2;
+	uint16_t port1;
+	uint64_t ioseq1;
+
+	zrepl.start();
+	pool.create();
+	pool.createZvol("quorumon", "-o quorum=on -o io.openebs:targetip=127.0.0.1:6060");
+	zvol_name1 = pool.getZvolName("quorumon");
+
+	rc = targetQuorumOn.listen();
+	ASSERT_GE(rc, 0);
+
+	control_fd1 = targetQuorumOn.accept(-1);
+	ASSERT_GE(control_fd1, 0);
+	do_handshake(zvol_name1, host1, port1, NULL, NULL, control_fd1,
+	    ZVOL_OP_STATUS_OK);
+	do_data_connection(datasock1_fd, host1, port1, zvol_name1, 4096, 120, ZVOL_OP_STATUS_OK, 3);
+
+	get_zvol_status(zvol_name1, ioseq1, control_fd1, ZVOL_STATUS_DEGRADED, ZVOL_REBUILDING_INIT);
+
+	zrepl.kill();
+
+	zrepl.start();
+	pool.import();
+
+	control_fd1 = targetQuorumOn.accept(-1);
+	ASSERT_GE(control_fd1, 0);
+	do_handshake(zvol_name1, host1, port1, NULL, NULL, control_fd1,
+	    ZVOL_OP_STATUS_OK);
+	do_data_connection(datasock1_fd, host1, port1, zvol_name1, 4096, 120, ZVOL_OP_STATUS_OK, 1);
+
+	get_zvol_status(zvol_name1, ioseq1, control_fd1, ZVOL_STATUS_DEGRADED, ZVOL_REBUILDING_INIT);
+
+	zrepl.kill();
 }
 
 /*
