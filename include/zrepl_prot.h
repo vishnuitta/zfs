@@ -122,8 +122,8 @@ struct zvol_op_open_data {
 	uint32_t	tgt_block_size;	// used block size for rw in bytes
 	uint32_t	timeout;	// replica timeout in seconds
 	char		volname[MAX_NAME_LEN];
-	uint8_t		replication_factor;
-	uint64_t	io_seq;
+	uint8_t		replication_factor; // replicas config at target
+	uint8_t		is_IOs_not_happened; // true for vol with no IOs on it
 } __attribute__((packed));
 
 typedef struct zvol_op_open_data zvol_op_open_data_t;
