@@ -1232,6 +1232,8 @@ handle_start_rebuild_req(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp,
 {
 	int rc = 0;
 	zvol_info_t *zinfo;
+	zvol_status_t status;
+	zvol_rebuild_status_t rstatus;
 
 	/* Invalid payload size */
 	if ((payload_size == 0) || (payload_size % sizeof (mgmt_ack_t)) != 0) {
@@ -1258,12 +1260,24 @@ handle_start_rebuild_req(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp,
 	}
 
 	mutex_enter(&zinfo->main_zv->rebuild_mtx);
+
+	/* Check zinfo status */
+	if ((status = uzfs_zinfo_get_status(zinfo)) != ZVOL_STATUS_DEGRADED) {
+		mutex_exit(&zinfo->main_zv->rebuild_mtx);
+		LOG_ERR("rebuilding failed for %s due to improper zinfo "
+		    "status %d", zinfo->name, status);
+		uzfs_zinfo_drop_refcnt(zinfo);
+		rc = reply_nodata(conn, ZVOL_OP_STATUS_FAILED,
+		    hdrp->opcode, hdrp->io_seq);
+		goto end;
+	}
+
 	/* Check rebuild status of downgraded zinfo */
-	if (uzfs_zvol_get_rebuild_status(zinfo->main_zv) !=
+	if ((rstatus = uzfs_zvol_get_rebuild_status(zinfo->main_zv)) !=
 	    ZVOL_REBUILDING_INIT) {
 		mutex_exit(&zinfo->main_zv->rebuild_mtx);
 		LOG_ERR("rebuilding failed for %s due to improper rebuild "
-		    "status", zinfo->name);
+		    "status %d", zinfo->name, rstatus);
 		uzfs_zinfo_drop_refcnt(zinfo);
 		rc = reply_nodata(conn, ZVOL_OP_STATUS_FAILED,
 		    hdrp->opcode, hdrp->io_seq);

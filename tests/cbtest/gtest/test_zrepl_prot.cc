@@ -291,7 +291,7 @@ static void get_zvol_status(std::string zvol_name, uint64_t &ioseq, int control_
 }
 
 static void transition_zvol_to_online(uint64_t &ioseq, int control_fd,
-    std::string zvol_name)
+    std::string zvol_name, int res = ZVOL_OP_STATUS_OK)
 {
 	zvol_io_hdr_t hdr_in, hdr_out = {0};
 	struct mgmt_ack mgmt_ack = {0};
@@ -318,7 +318,7 @@ static void transition_zvol_to_online(uint64_t &ioseq, int control_fd,
 	ASSERT_EQ(rc, sizeof (hdr_in));
 	EXPECT_EQ(hdr_in.opcode, ZVOL_OPCODE_START_REBUILD);
 	EXPECT_EQ(hdr_in.io_seq, ioseq);
-	EXPECT_EQ(hdr_in.status, ZVOL_OP_STATUS_OK);
+	EXPECT_EQ(hdr_in.status, res);
 	EXPECT_EQ(hdr_in.len, 0);
 }
 
@@ -1041,6 +1041,9 @@ TEST(ReplicaState, SingleReplicaQuorumOff) {
 
 	get_zvol_status(zvol_name1, ioseq1, control_fd1, ZVOL_STATUS_HEALTHY, ZVOL_REBUILDING_DONE);
 	get_zvol_status(zvol_name2, ioseq1, control_fd2, ZVOL_STATUS_DEGRADED, ZVOL_REBUILDING_INIT);
+
+	/* transition the zvol to online state */
+	transition_zvol_to_online(ioseq1, control_fd1, zvol_name1, ZVOL_OP_STATUS_FAILED);
 
 	zrepl.kill();
 }
