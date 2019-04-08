@@ -1903,6 +1903,45 @@ exit:
 
 	zk_thread_exit();
 }
+
+/*
+ * This function finds the appropriate state of zvol based on quorum and
+ * open_data contents.
+ * If quorum off, returns DEGRADED
+ * else if internal snapshot might exists, returns DEGRADED
+ * else if replication_factor is 1, returns HEALTHY
+ * else returns DEGRADED
+ */
+static zvol_status_t
+find_apt_zvol_status(zvol_info_t *zinfo, zvol_op_open_data_t *open_data)
+{
+	uint8_t quorum = uzfs_zinfo_get_quorum(zinfo);
+	zvol_state_t *l_snap_zv = NULL;
+	int ret = 0;
+
+	if (quorum == 0) {
+		LOG_INFO("Quorum is off, so, degraded mode with rep: %d",
+		    open_data->replication_factor);
+		return (ZVOL_STATUS_DEGRADED);
+	}
+
+	ret = get_snapshot_zv(zinfo->main_zv, REBUILD_SNAPSHOT_SNAPNAME,
+	    &l_snap_zv, B_TRUE, B_TRUE);
+	if (ret != ENOENT) {
+		LOG_INFO("internal snapshot might exists.. err: %d "
+		    "so, degraded mode with rep: %d", ret,
+		    open_data->replication_factor);
+		return (ZVOL_STATUS_DEGRADED);
+	}
+
+	if (open_data->replication_factor == 1) {
+		LOG_INFO("Quorum is on, and rep factor 1");
+		return (ZVOL_STATUS_HEALTHY);
+	}
+
+	return (ZVOL_STATUS_DEGRADED);
+}
+
 /*
  * Process open request on data connection, the first message.
  *
@@ -1922,6 +1961,7 @@ open_zvol(int fd, zvol_info_t **zinfopp)
 	kthread_t	*thrd_info;
 	thread_args_t 	*thrd_arg;
 	int		rele_dataset_on_error = 0;
+	zvol_status_t	status;
 
 	/*
 	 * If we don't know the version yet, be more careful when
@@ -2020,24 +2060,31 @@ open_zvol(int fd, zvol_info_t **zinfopp)
 		goto error_ret;
 	}
 
-	if (zinfo->snapshot_zv == NULL) {
+	status = find_apt_zvol_status(zinfo, &open_data);
+	if (status == ZVOL_STATUS_HEALTHY) {
+		ASSERT3P(zinfo->snapshot_zv, ==, NULL);
 		ASSERT3P(zinfo->clone_zv, ==, NULL);
-		/* Create clone for rebuild */
-		if (uzfs_zvol_get_or_create_internal_clone(zinfo->main_zv,
-		    &zinfo->snapshot_zv, &zinfo->clone_zv, NULL) != 0) {
-			LOG_ERR("Failed to create clone for rebuild");
-			goto error_ret;
+	} else {
+		if (zinfo->snapshot_zv == NULL) {
+			ASSERT3P(zinfo->clone_zv, ==, NULL);
+			/* Create clone for rebuild */
+			if (uzfs_zvol_get_or_create_internal_clone(
+			    zinfo->main_zv, &zinfo->snapshot_zv,
+			    &zinfo->clone_zv, NULL) != 0) {
+				LOG_ERR("Failed to create clone for rebuild");
+				goto error_ret;
+			}
 		}
-	}
-	ASSERT3P(zinfo->clone_zv, !=, NULL);
-	if (zinfo->clone_zv == NULL) {
-		LOG_ERR("Failed to get clone");
+		ASSERT3P(zinfo->clone_zv, !=, NULL);
+		if (zinfo->clone_zv == NULL) {
+			LOG_ERR("Failed to get clone");
 error_ret:
-		if (rele_dataset_on_error == 1)
-			uzfs_rele_dataset(zv);
-		hdr.status = ZVOL_OP_STATUS_FAILED;
-		(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
-		goto open_reply;
+			if (rele_dataset_on_error == 1)
+				uzfs_rele_dataset(zv);
+			hdr.status = ZVOL_OP_STATUS_FAILED;
+			(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
+			goto open_reply;
+		}
 	}
 	/*
 	 * TODO: Once we support multiple concurrent data connections for a
@@ -2052,6 +2099,16 @@ error_ret:
 	zinfo->is_io_ack_sender_created = 1;
 	zinfo->is_io_receiver_created = 1;
 	(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
+
+	(void) mutex_enter(&zinfo->main_zv->rebuild_mtx);
+	if (status == ZVOL_STATUS_HEALTHY) {
+		uzfs_zvol_set_rebuild_status(zinfo->main_zv,
+		    ZVOL_REBUILDING_DONE);
+		uzfs_zvol_set_status(zinfo->main_zv, status);
+		uzfs_update_ionum_interval(zinfo, 0);
+	}
+	(void) mutex_exit(&zinfo->main_zv->rebuild_mtx);
+
 	thrd_arg = kmem_alloc(sizeof (thread_args_t), KM_SLEEP);
 	thrd_arg->fd = fd;
 	thrd_arg->zinfo = zinfo;

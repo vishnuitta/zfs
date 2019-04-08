@@ -45,7 +45,7 @@ extern "C" {
  * properly aligned (and packed).
  */
 
-#define	REPLICA_VERSION	3
+#define	REPLICA_VERSION	4
 #define	MAX_NAME_LEN	256
 #define	MAX_IP_LEN	64
 #define	TARGET_PORT	6060
@@ -122,6 +122,7 @@ struct zvol_op_open_data {
 	uint32_t	tgt_block_size;	// used block size for rw in bytes
 	uint32_t	timeout;	// replica timeout in seconds
 	char		volname[MAX_NAME_LEN];
+	uint8_t		replication_factor; // replicas config at target
 } __attribute__((packed));
 
 typedef struct zvol_op_open_data zvol_op_open_data_t;

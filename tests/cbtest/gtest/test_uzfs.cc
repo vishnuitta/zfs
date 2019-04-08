@@ -1385,6 +1385,7 @@ TEST(uZFSRebuildStart, TestStartRebuild) {
 #endif
 	/* rebuild in two replicas case with 'connect' failure */
 	conn->conn_buf = NULL;
+	uzfs_zinfo_set_status(zinfo, ZVOL_STATUS_DEGRADED);
 	uzfs_zvol_set_rebuild_status(zinfo->main_zv,
 	    ZVOL_REBUILDING_INIT);
 	set_start_rebuild_mgmt_ack(mack, "pool1/vol1", "vol2");
@@ -1402,6 +1403,7 @@ TEST(uZFSRebuildStart, TestStartRebuild) {
 
 	/* rebuild in three replicas case with invalid volname to rebuild */
 	conn->conn_buf = NULL;
+	uzfs_zinfo_set_status(zinfo, ZVOL_STATUS_DEGRADED);
 	uzfs_zvol_set_rebuild_status(zinfo->main_zv,
 	    ZVOL_REBUILDING_INIT);
 	set_start_rebuild_mgmt_ack(mack, "pool1/vol1", "vol3");
@@ -1420,6 +1422,7 @@ TEST(uZFSRebuildStart, TestStartRebuild) {
 
 	/* rebuild in three replicas case with 'connect' failing and mesh rebuild */
 	conn->conn_buf = NULL;
+	uzfs_zinfo_set_status(zinfo, ZVOL_STATUS_DEGRADED);
 	uzfs_zvol_set_rebuild_status(zinfo->main_zv,
 	    ZVOL_REBUILDING_INIT);
 	set_start_rebuild_mgmt_ack(mack, "pool1/vol1", "vol3", 1000);
@@ -1439,6 +1442,7 @@ TEST(uZFSRebuildStart, TestStartRebuild) {
 
 	/* rebuild in three replicas case with selecting replica of lower ioseq and mesh rebuild */
 	conn->conn_buf = NULL;
+	uzfs_zinfo_set_status(zinfo, ZVOL_STATUS_DEGRADED);
 	uzfs_zvol_set_rebuild_status(zinfo->main_zv,
 	    ZVOL_REBUILDING_INIT);
 	set_start_rebuild_mgmt_ack(mack, "pool1/vol1", "vol3", 1000);
@@ -1865,7 +1869,7 @@ exit:
  */
 static void do_data_connection(int &data_fd, std::string host, uint16_t port,
     std::string zvol_name, int bs=512, int timeout=120,
-    int res=ZVOL_OP_STATUS_OK) {
+    int res=ZVOL_OP_STATUS_OK, int rep_factor = 3, int version = REPLICA_VERSION) {
 	struct sockaddr_in addr;
 	zvol_io_hdr_t hdr_in, hdr_out = {0};
 	zvol_op_open_data_t open_data;
@@ -1897,6 +1901,7 @@ retry:
 	open_data.timeout = timeout;
 	GtestUtils::strlcpy(open_data.volname, zvol_name.c_str(),
 	    sizeof (open_data.volname));
+	open_data.replication_factor = rep_factor;
 	rc = write(fd, &open_data, hdr_out.len);
 
 	rc = read(fd, &hdr_in, sizeof (hdr_in));
@@ -3105,5 +3110,5 @@ TEST(MgmtThreadTest, RebuildFailureWrongRebuildState) {
 TEST(MgmtThreadTest, RebuildFailureSingleReplica) {
 	uzfs_mgmt_conn_t *conn = (uzfs_mgmt_conn_t *)zinfo->mgmt_conn;
 	mgmt_thread_test_case(24);
-	EXPECT_EQ(status, ZVOL_OP_STATUS_OK);
+	EXPECT_EQ(status, ZVOL_OP_STATUS_FAILED); // errout on healthy replica
 }
