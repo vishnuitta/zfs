@@ -1912,7 +1912,7 @@ exit:
  * else if replication_factor is 1, returns HEALTHY
  * else returns DEGRADED
  */
-static int
+static zvol_status_t
 find_apt_zvol_status(zvol_info_t *zinfo, zvol_op_open_data_t *open_data)
 {
 	uint8_t quorum = uzfs_zinfo_get_quorum(zinfo);
