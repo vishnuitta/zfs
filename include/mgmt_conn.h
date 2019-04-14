@@ -68,7 +68,9 @@ typedef struct uzfs_mgmt_conn {
 	void		*conn_buf;	// buffer to hold network data
 	int		conn_bufsiz;    // bytes to read/write in total
 	int		conn_procn;	// bytes already read/written
-	zvol_io_hdr_t	*conn_hdr;	// header of currently processed cmd
+	void		*conn_hdr;	// header of currently processed cmd
+	int		conn_hdrsiz;    // conn_hdr alloted size
+	uint16_t	zvol_io_recv_vers;
 	time_t		conn_last_connect;  // time of last attempted connect()
 } uzfs_mgmt_conn_t;
 

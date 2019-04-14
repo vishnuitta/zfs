@@ -1925,6 +1925,12 @@ find_apt_zvol_status(zvol_info_t *zinfo, zvol_op_open_data_t *open_data)
 		return (ZVOL_STATUS_DEGRADED);
 	}
 
+	if (open_data->replication_factor != 1) {
+		LOG_INFO("Quorum is on, but, degraded mode with rep: %d",
+		    open_data->replication_factor);
+		return (ZVOL_STATUS_DEGRADED);
+	}
+
 	ret = get_snapshot_zv(zinfo->main_zv, REBUILD_SNAPSHOT_SNAPNAME,
 	    &l_snap_zv, B_TRUE, B_TRUE);
 	if (ret != ENOENT) {

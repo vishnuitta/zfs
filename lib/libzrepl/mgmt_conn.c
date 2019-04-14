@@ -124,8 +124,9 @@ close_conn(uzfs_mgmt_conn_t *conn)
 	conn->conn_bufsiz = 0;
 	conn->conn_procn = 0;
 	if (conn->conn_hdr != NULL) {
-		kmem_free(conn->conn_hdr, sizeof (zvol_io_hdr_t));
+		kmem_free(conn->conn_hdr, conn->conn_hdrsiz);
 		conn->conn_hdr = NULL;
+		conn->conn_hdrsiz = 0;
 	}
 
 	if (epoll_ctl(epollfd, EPOLL_CTL_DEL, conn->conn_fd, NULL) == -1) {
@@ -398,6 +399,27 @@ reply_nodata(uzfs_mgmt_conn_t *conn, zvol_op_status_t status,
 	return (epoll_ctl(epollfd, EPOLL_CTL_MOD, conn->conn_fd, &ev));
 }
 
+static void
+switch_zvol_mgmt_io_resp_version(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp)
+{
+	hdrp->version = conn->zvol_io_recv_vers;
+}
+
+static void
+make_zvol_mgmt_io_resp(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp, void *buf,
+    int size)
+{
+	ASSERT3P(conn->conn_buf, ==, NULL);
+	switch_zvol_mgmt_io_resp_version(conn, hdrp);
+
+	conn->conn_procn = 0;
+	conn->conn_state = CS_INIT;
+	conn->conn_bufsiz = sizeof (*hdrp) + size;
+	conn->conn_buf = kmem_zalloc(conn->conn_bufsiz, KM_SLEEP);
+	memcpy(conn->conn_buf, hdrp, sizeof (*hdrp));
+	memcpy((char *)conn->conn_buf + sizeof (*hdrp), buf, size);
+}
+
 /*
  * Send reply to client which consists of a header and opaque payload.
  */
@@ -408,13 +430,7 @@ reply_data(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp, void *buf, int size)
 
 	DBGCONN(conn, "Data reply");
 
-	conn->conn_procn = 0;
-	conn->conn_state = CS_INIT;
-	ASSERT3P(conn->conn_buf, ==, NULL);
-	conn->conn_bufsiz = sizeof (*hdrp) + size;
-	conn->conn_buf = kmem_zalloc(conn->conn_bufsiz, KM_SLEEP);
-	memcpy(conn->conn_buf, hdrp, sizeof (*hdrp));
-	memcpy((char *)conn->conn_buf + sizeof (*hdrp), buf, size);
+	make_zvol_mgmt_io_resp(conn, hdrp, buf, size);
 
 	ev.events = EPOLLOUT;
 	ev.data.ptr = conn;
@@ -1378,6 +1394,7 @@ process_message(uzfs_mgmt_conn_t *conn)
 	int rc = 0;
 
 	conn->conn_hdr = NULL;
+	conn->conn_hdrsiz = 0;
 	conn->conn_buf = NULL;
 	conn->conn_bufsiz = 0;
 	conn->conn_procn = 0;
@@ -1414,10 +1431,21 @@ process_message(uzfs_mgmt_conn_t *conn)
 			    hdrp->opcode, hdrp->io_seq);
 			break;
 		}
+		if ((hdrp->opcode != ZVOL_OPCODE_HANDSHAKE) &&
+		    (zinfo->protocol_version != conn->zvol_io_recv_vers)) {
+			uzfs_zinfo_drop_refcnt(zinfo);
+			LOGERRCONN(conn, "Invalid protocol version %d for "
+			    "zvol %s.. should be %d", conn->zvol_io_recv_vers,
+			    zvol_name, zinfo->protocol_version);
+			rc = reply_nodata(conn, ZVOL_OP_STATUS_VERSION_MISMATCH,
+			    hdrp->opcode, hdrp->io_seq);
+			break;
+		}
 
 		if (hdrp->opcode == ZVOL_OPCODE_HANDSHAKE) {
 			LOGCONN(conn, "Handshake command for zvol %s",
 			    zvol_name);
+			zinfo->protocol_version = conn->zvol_io_recv_vers;
 			rc = uzfs_zvol_mgmt_do_handshake(conn, hdrp, zvol_name,
 			    zinfo);
 		} else if (hdrp->opcode == ZVOL_OPCODE_PREPARE_FOR_REBUILD) {
@@ -1562,6 +1590,70 @@ process_message(uzfs_mgmt_conn_t *conn)
 }
 
 /*
+ * Returns -1 on invalid vers
+ */
+static int
+get_header_size(uint16_t vers)
+{
+	switch (vers) {
+		case 4:
+		case 3:
+			return (sizeof (zvol_io_hdr_t));
+		default:
+			return (-1);
+	}
+}
+
+static int
+get_payload_len(void *ptr)
+{
+	uint16_t vers = *((uint16_t *)ptr);
+	zvol_io_hdr_t *hdrp;
+	switch (vers) {
+		case 4:
+		case 3:
+			hdrp = (zvol_io_hdr_t *)ptr;
+			return (hdrp->len);
+		default:
+			return (-1);
+	}
+}
+
+static int
+switch_zvol_mgmt_io_req_3_to_cur(uzfs_mgmt_conn_t *conn)
+{
+	zvol_io_hdr_t *hdrp = conn->conn_hdr;
+	zvol_op_open_data_t *buf;
+
+	switch (hdrp->opcode) {
+		case ZVOL_OPCODE_OPEN:
+			buf = kmem_zalloc(sizeof (zvol_op_open_data_t), KM_SLEEP);
+			memcpy(buf, conn->conn_buf, conn->conn_bufsiz);
+			buf->replication_factor = 0;
+			kmem_free(conn->conn_buf, conn->conn_bufsiz);
+			conn->conn_buf = buf;
+			conn->conn_bufsiz = sizeof (zvol_op_open_data_t);
+		default:
+			hdrp->version = REPLICA_VERSION;
+			return (0);
+	}
+}
+
+static int
+switch_zvol_mgmt_io_req(uzfs_mgmt_conn_t *conn)
+{
+	uint16_t vers = *((uint16_t *)conn->conn_hdr);
+	switch (vers) {
+		case 4:
+			return (0);
+		case 3:
+			return (switch_zvol_mgmt_io_req_3_to_cur(conn));
+		default:
+			return (-1);
+	}
+}
+
+/*
  * Transition to the next state. This is called only if IO buffer was fully
  * read or written.
  */
@@ -1569,9 +1661,11 @@ static int
 move_to_next_state(uzfs_mgmt_conn_t *conn)
 {
 	struct epoll_event ev;
-	zvol_io_hdr_t *hdrp;
+	void *bufp;
 	uint16_t vers;
 	int rc = 0;
+	int hdr_size;
+	int payload_len;
 
 	ASSERT3U(conn->conn_bufsiz, ==, conn->conn_procn);
 
@@ -1597,9 +1691,10 @@ move_to_next_state(uzfs_mgmt_conn_t *conn)
 		break;
 	case CS_READ_VERSION:
 		vers = *((uint16_t *)conn->conn_buf);
+		conn->zvol_io_recv_vers = vers;
 		kmem_free(conn->conn_buf, sizeof (uint16_t));
 		conn->conn_buf = NULL;
-		if (vers != REPLICA_VERSION) {
+		if (vers > REPLICA_VERSION) {
 			LOGERRCONN(conn, "Invalid replica protocol version %d",
 			    vers);
 			rc = reply_nodata(conn, ZVOL_OP_STATUS_VERSION_MISMATCH,
@@ -1608,31 +1703,39 @@ move_to_next_state(uzfs_mgmt_conn_t *conn)
 			conn->conn_state = CS_CLOSE;
 		} else {
 			DBGCONN(conn, "Reading header..");
-			hdrp = kmem_zalloc(sizeof (*hdrp), KM_SLEEP);
-			hdrp->version = vers;
-			conn->conn_buf = hdrp;
-			conn->conn_bufsiz = sizeof (*hdrp);
+			hdr_size = get_header_size(vers);
+			bufp = kmem_zalloc(hdr_size, KM_SLEEP);
+			*((uint16_t *)bufp) = vers;
+			conn->conn_buf = bufp;
+			conn->conn_bufsiz = hdr_size;
 			conn->conn_procn = sizeof (uint16_t); // skip version
 			conn->conn_state = CS_READ_HEADER;
 		}
 		break;
 	case CS_READ_HEADER:
-		hdrp = conn->conn_buf;
-		conn->conn_hdr = hdrp;
-		if (hdrp->len > 0) {
+		vers = *((uint16_t *)conn->conn_buf);
+		payload_len = get_payload_len(conn->conn_buf);
+		conn->conn_hdr = conn->conn_buf;
+		conn->conn_hdrsiz = conn->conn_bufsiz;
+		if (payload_len > 0) {
 			DBGCONN(conn, "Reading payload (%lu bytes)..",
-			    hdrp->len);
-			conn->conn_buf = kmem_zalloc(hdrp->len, KM_SLEEP);
-			conn->conn_bufsiz = hdrp->len;
+			    payload_len);
+			conn->conn_buf = kmem_zalloc(payload_len, KM_SLEEP);
+			conn->conn_bufsiz = payload_len;
 			conn->conn_procn = 0;
 			conn->conn_state = CS_READ_PAYLOAD;
 		} else {
 			conn->conn_buf = NULL;
 			conn->conn_bufsiz = 0;
+			if (vers != REPLICA_VERSION)
+				switch_zvol_mgmt_io_req(conn);
 			rc = process_message(conn);
 		}
 		break;
 	case CS_READ_PAYLOAD:
+		vers = *((uint16_t *)conn->conn_hdr);
+		if (vers != REPLICA_VERSION)
+			switch_zvol_mgmt_io_req(conn);
 		rc = process_message(conn);
 		break;
 	default:

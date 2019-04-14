@@ -178,6 +178,7 @@ typedef struct zvol_info_s {
 	uint8_t		quiesce_requested;
 	uint8_t		quiesce_done;
 	int32_t		io_fd;
+	uint16_t	protocol_version; // version with which handshake done
 
 	/* Pointer to mgmt connection for this zinfo */
 	void		*mgmt_conn;
