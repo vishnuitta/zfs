@@ -167,6 +167,23 @@ uzfs_zvol_socket_read(int fd, char *buf, uint64_t nbytes)
 }
 
 /*
+ * Copies from hdrp to hdr based on the need
+ */
+static int
+switch_zvol_data_io_req_hdr(zvol_io_hdr_t *hdr, void *hdrp)
+{
+	switch (hdr->version) {
+		case 4:
+		case 3:
+			hdr->version = REPLICA_VERSION;
+			break;
+		default:
+			return (-1);
+	}
+	return (0);
+}
+
+/*
  * Read header message from socket in safe manner, which is: first we read a
  * version number and if valid then we read the rest of the message.
  *
@@ -177,25 +194,41 @@ uzfs_zvol_socket_read(int fd, char *buf, uint64_t nbytes)
 int
 uzfs_zvol_read_header(int fd, zvol_io_hdr_t *hdr)
 {
-	int rc;
+	int rc, hdr_size;
+	void *hdrp;
 
 	rc = uzfs_zvol_socket_read(fd, (char *)hdr,
 	    sizeof (hdr->version));
 	if (rc != 0)
 		return (-1);
 
-	if (hdr->version != REPLICA_VERSION) {
+	if (hdr->version > REPLICA_VERSION) {
 		LOG_ERR("invalid replica protocol version %d",
 		    hdr->version);
 		return (1);
 	}
+	hdr_size = get_header_size(hdr->version);
+
+	if (hdr_size != sizeof (*hdr))
+		hdrp = kmem_zalloc(hdr_size, KM_SLEEP);
+	else
+		hdrp = hdr;
+
 	rc = uzfs_zvol_socket_read(fd,
-	    ((char *)hdr) + sizeof (hdr->version),
-	    sizeof (*hdr) - sizeof (hdr->version));
+	    ((char *)hdrp) + sizeof (hdr->version),
+	    hdr_size - sizeof (hdr->version));
 	if (rc != 0)
 		return (-1);
 
-	return (0);
+	rc = switch_zvol_data_io_req_hdr(hdr, hdrp);
+	if (hdr_size != sizeof (*hdr))
+		kmem_free(hdrp, hdr_size);
+	if (rc < 0) {
+		LOG_ERR("unsupported version %d", hdr->version);
+		return (-1);
+	}
+
+	return (rc);
 }
 
 /*

@@ -115,7 +115,7 @@ int uzfs_get_snap_zv_ionum(zvol_info_t *, uint64_t, zvol_state_t **);
 
 int uzfs_zvol_get_snap_dataset_with_io(zvol_info_t *zinfo,
     char *snapname, uint64_t *snapshot_io_num, zvol_state_t **snap_zv);
-
+int get_header_size(uint16_t vers);
 #ifdef __cplusplus
 }
 #endif

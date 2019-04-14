@@ -1592,7 +1592,7 @@ process_message(uzfs_mgmt_conn_t *conn)
 /*
  * Returns -1 on invalid vers
  */
-static int
+int
 get_header_size(uint16_t vers)
 {
 	switch (vers) {
@@ -1623,11 +1623,14 @@ static int
 switch_zvol_mgmt_io_req_3_to_cur(uzfs_mgmt_conn_t *conn)
 {
 	zvol_io_hdr_t *hdrp = conn->conn_hdr;
-	zvol_op_open_data_t *buf;
 
+	hdrp->version = REPLICA_VERSION;
+#if 0
+	zvol_op_open_data_t *buf;
 	switch (hdrp->opcode) {
 		case ZVOL_OPCODE_OPEN:
-			buf = kmem_zalloc(sizeof (zvol_op_open_data_t), KM_SLEEP);
+			buf = kmem_zalloc(sizeof (zvol_op_open_data_t),
+			    KM_SLEEP);
 			memcpy(buf, conn->conn_buf, conn->conn_bufsiz);
 			buf->replication_factor = 0;
 			kmem_free(conn->conn_buf, conn->conn_bufsiz);
@@ -1637,6 +1640,8 @@ switch_zvol_mgmt_io_req_3_to_cur(uzfs_mgmt_conn_t *conn)
 			hdrp->version = REPLICA_VERSION;
 			return (0);
 	}
+#endif
+	return (0);
 }
 
 static int
