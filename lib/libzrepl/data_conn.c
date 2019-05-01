@@ -466,7 +466,7 @@ static void zvol_rebuild_scanner_set_errored_fd(zvol_info_t *zinfo, int fd)
 	sinfo = STAILQ_FIRST(&zinfo->rebuild_scanner_list);
 	while (sinfo != NULL) {
 		if (sinfo->fd == fd) {
-			sinfo->is_fd_errored = B_TRUE;
+			sinfo->is_fd_errored = 1;
 			break;
 		}
 		sinfo = STAILQ_NEXT(sinfo, link);
@@ -1865,7 +1865,7 @@ uzfs_zvol_io_ack_sender(void *arg)
 		zinfo->zio_cmd_in_ack = zio_cmd;
 
 		if (zio_cmd->hdr.flags & ZVOL_OP_FLAG_REBUILD)
-			zvol_rebuild_scanner_inc_ack_cnt(zinfo, fd);
+			zvol_rebuild_scanner_inc_ack_cnt(zinfo, zio_cmd->conn);
 
 		(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
 
