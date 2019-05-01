@@ -599,8 +599,12 @@ uzfs_zvol_rebuild_status(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp,
 	 */
 	if (uzfs_zvol_get_rebuild_status(zinfo->main_zv) ==
 	    ZVOL_REBUILDING_FAILED) {
+		uzfs_zvol_set_rebuild_status(zinfo->main_zv,
+		    ZVOL_REBUILDING_INIT);
 		memset(&zinfo->main_zv->rebuild_info, 0,
 		    sizeof (zvol_rebuild_info_t));
+
+		/* Initialize rebuild status to INIT */
 		uzfs_zvol_set_rebuild_status(zinfo->main_zv,
 		    ZVOL_REBUILDING_INIT);
 	}

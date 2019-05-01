@@ -48,9 +48,9 @@ uint64_t zvol_rebuild_step_size = ZVOL_REBUILD_STEP_SIZE;
 #define	REBUILD_CMD_QUEUE_MAX_LIMIT (100)
 uint64_t zvol_rebuild_cmd_queue_limit = REBUILD_CMD_QUEUE_MAX_LIMIT;
 
-#define	IS_REBUILD_HIT_MAX_CMD_LIMIT(zinfo)	\
-	((zinfo->rebuild_cmd_queued_cnt -	\
-	    zinfo->rebuild_cmd_acked_cnt) >	\
+#define	IS_REBUILD_HIT_MAX_CMD_LIMIT(scanner_info)	\
+	((scanner_info->rebuild_cmd_queued_cnt -	\
+	    scanner_info->rebuild_cmd_acked_cnt) >	\
 	    zvol_rebuild_cmd_queue_limit)
 
 uint16_t io_server_port = IO_SERVER_PORT;
@@ -442,6 +442,81 @@ drop_refcount:
 	atomic_add_64(&zinfo->dispatched_io_cnt, -1);
 
 	uzfs_zinfo_drop_refcnt(zinfo);
+}
+
+static void zvol_rebuild_scanner_inc_ack_cnt(zvol_info_t *zinfo, int fd)
+{
+	zvol_rebuild_scanner_info_t *sinfo = NULL;
+
+	sinfo = STAILQ_FIRST(&zinfo->rebuild_scanner_list);
+	while (sinfo != NULL) {
+		if (sinfo->fd == fd) {
+			sinfo->rebuild_cmd_acked_cnt++;
+			break;
+		}
+		sinfo = STAILQ_NEXT(sinfo, link);
+	}
+}
+
+static void zvol_rebuild_scanner_set_errored_fd(zvol_info_t *zinfo, int fd)
+{
+	zvol_rebuild_scanner_info_t *sinfo = NULL;
+
+	(void) pthread_mutex_lock(&zinfo->zinfo_mutex);
+	sinfo = STAILQ_FIRST(&zinfo->rebuild_scanner_list);
+	while (sinfo != NULL) {
+		if (sinfo->fd == fd) {
+			sinfo->is_fd_errored = B_TRUE;
+			break;
+		}
+		sinfo = STAILQ_NEXT(sinfo, link);
+	}
+	(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
+}
+
+static void
+uzfs_zvol_append_to_rebuild_scanner(zvol_info_t *zinfo,
+    zvol_rebuild_scanner_info_t *scanner_info)
+{
+	(void) pthread_mutex_lock(&zinfo->zinfo_mutex);
+#ifdef DEBUG
+	zvol_rebuild_scanner_info_t *sinfo = NULL;
+	STAILQ_FOREACH(sinfo, &zinfo->rebuild_scanner_list, link) {
+		if (sinfo->fd == scanner_info->fd) {
+			ASSERT(1 == 0);
+		}
+	}
+#endif
+	STAILQ_INSERT_TAIL(&zinfo->rebuild_scanner_list, scanner_info, link);
+	LOG_DEBUG("Appending fd %d for zvol %s scanner", scanner_info->fd,
+	    zinfo->name);
+	(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
+}
+
+static void
+uzfs_zvol_remove_from_rebuild_scanner(zvol_info_t *zinfo, int fd)
+{
+	zvol_rebuild_scanner_info_t *sinfo;
+
+	(void) pthread_mutex_lock(&zinfo->zinfo_mutex);
+#ifdef DEBUG
+	int count = 0;
+	STAILQ_FOREACH(sinfo, &zinfo->rebuild_scanner_list, link) {
+		if (sinfo->fd == fd)
+			count++;
+	}
+	ASSERT(count == 1);
+#endif
+	sinfo = STAILQ_FIRST(&zinfo->rebuild_scanner_list);
+	while (sinfo != NULL) {
+		if (sinfo->fd == fd) {
+			STAILQ_REMOVE(&zinfo->rebuild_scanner_list, sinfo,
+			    zvol_rebuild_scanner_info_s, link);
+			break;
+		}
+		sinfo = STAILQ_NEXT(sinfo, link);
+	}
+	(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
 }
 
 static void
@@ -1293,10 +1368,10 @@ uzfs_zvol_rebuild_scanner_callback(off_t offset, size_t len,
 {
 	zvol_io_hdr_t	hdr;
 	zvol_io_cmd_t	*zio_cmd;
-	zvol_rebuild_t  *warg;
 	zvol_info_t	*zinfo;
+	zvol_rebuild_scanner_info_t  *warg;
 
-	warg = (zvol_rebuild_t *)args;
+	warg = (zvol_rebuild_scanner_info_t *)args;
 	zinfo = warg->zinfo;
 
 	hdr.version = REPLICA_VERSION;
@@ -1311,13 +1386,15 @@ uzfs_zvol_rebuild_scanner_callback(off_t offset, size_t len,
 		if ((zinfo->state == ZVOL_INFO_STATE_OFFLINE) ||
 		    (!zinfo->is_io_ack_sender_created))
 			return (-1);
-		if (IS_REBUILD_HIT_MAX_CMD_LIMIT(zinfo))
+		if (warg->is_fd_errored)
+			return (-1);
+		if (IS_REBUILD_HIT_MAX_CMD_LIMIT(warg))
 			usleep(100);
 		else
 			break;
 	}
 
-	zinfo->rebuild_cmd_queued_cnt++;
+	warg->rebuild_cmd_queued_cnt++;
 	LOG_DEBUG("IO number for rebuild %ld", metadata->io_num);
 	zio_cmd = zio_cmd_alloc(&hdr, warg->fd);
 	/* Take refcount for uzfs_zvol_worker to work on it */
@@ -1401,7 +1478,6 @@ uzfs_zvol_rebuild_scanner(void *arg)
 	zvol_state_t	*snap_zv = NULL;
 	zvol_io_hdr_t	hdr;
 	int 		rc = 0;
-	zvol_rebuild_t	warg;
 	char 		*name;
 	blk_metadata_t	metadata;
 	uint64_t	rebuild_req_offset;
@@ -1412,6 +1488,7 @@ uzfs_zvol_rebuild_scanner(void *arg)
 	uint64_t	checkpointed_io_seq = 0;
 	uint64_t	payload_size = 0;
 	char		*snap_name;
+	zvol_rebuild_scanner_info_t	*warg = NULL;
 
 	if ((rc = setsockopt(fd, SOL_SOCKET, SO_LINGER, &lo, sizeof (lo)))
 	    != 0) {
@@ -1477,12 +1554,14 @@ read_socket:
 			    "sock(%d)", name, fd);
 
 			uzfs_zvol_append_to_fd_list(zinfo, fd);
-			zinfo->rebuild_cmd_queued_cnt =
-			    zinfo->rebuild_cmd_acked_cnt = 0;
+
+			warg = kmem_zalloc(sizeof (zvol_rebuild_scanner_info_t),
+			    KM_SLEEP);
+			warg->zinfo = zinfo;
+			warg->fd = fd;
+			uzfs_zvol_append_to_rebuild_scanner(zinfo, warg);
 
 			kmem_free(name, hdr.len);
-			warg.zinfo = zinfo;
-			warg.fd = fd;
 			goto read_socket;
 
 		case ZVOL_OPCODE_REBUILD_STEP:
@@ -1542,7 +1621,7 @@ read_socket:
 
 			rc = uzfs_get_io_diff(zv, &metadata,
 			    snap_zv, uzfs_zvol_rebuild_scanner_callback,
-			    rebuild_req_offset, rebuild_req_len, &warg);
+			    rebuild_req_offset, rebuild_req_len, warg);
 			if (rc != 0) {
 				LOG_ERR("Rebuild scanning failed on zvol %s ",
 				    "err(%d)", zinfo->name, rc);
@@ -1642,6 +1721,10 @@ exit:
 		LOG_INFO("Closing rebuild connection for zvol %s from sock(%d)",
 		    zinfo->name, fd);
 		remove_pending_cmds_to_ack(fd, zinfo);
+
+		uzfs_zvol_remove_from_rebuild_scanner(zinfo, fd);
+		kmem_free(warg, sizeof (zvol_rebuild_scanner_info_t));
+
 		uzfs_zvol_remove_from_fd_list(zinfo, fd);
 
 		uzfs_zinfo_drop_refcnt(zinfo);
@@ -1780,8 +1863,9 @@ uzfs_zvol_io_ack_sender(void *arg)
 		zio_cmd = STAILQ_FIRST(&zinfo->complete_queue);
 		STAILQ_REMOVE_HEAD(&zinfo->complete_queue, cmd_link);
 		zinfo->zio_cmd_in_ack = zio_cmd;
+
 		if (zio_cmd->hdr.flags & ZVOL_OP_FLAG_REBUILD)
-			zinfo->rebuild_cmd_acked_cnt++;
+			zvol_rebuild_scanner_inc_ack_cnt(zinfo, fd);
 
 		(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
 
@@ -1814,7 +1898,8 @@ uzfs_zvol_io_ack_sender(void *arg)
 			    zio_cmd->buf, zio_cmd->hdr.len);
 error_check:
 			if (rc == -1) {
-				LOG_ERRNO("socket write err");
+				LOG_ERRNO("[fd:%d]socket write err",
+				    zio_cmd->conn);
 				zinfo->zio_cmd_in_ack = NULL;
 				/*
 				 * exit due to network errors on fd related
@@ -1823,6 +1908,9 @@ error_check:
 				if (zio_cmd->conn == fd) {
 					zio_cmd_free(&zio_cmd);
 					goto exit;
+				} else {
+					zvol_rebuild_scanner_set_errored_fd(
+					    zinfo, zio_cmd->conn);
 				}
 				zio_cmd_free(&zio_cmd);
 				continue;
@@ -1836,11 +1924,14 @@ error_check:
 				rc = uzfs_send_reads(zio_cmd->conn, zio_cmd);
 				if (rc == -1) {
 					zinfo->zio_cmd_in_ack = NULL;
-					LOG_ERRNO("socket write err");
+					LOG_ERRNO("[fd:%d]socket write err",
+					    zio_cmd->conn);
 					if (zio_cmd->conn == fd) {
 						zio_cmd_free(&zio_cmd);
 						goto exit;
 					}
+					zvol_rebuild_scanner_set_errored_fd(
+					    zinfo, zio_cmd->conn);
 				}
 			}
 			latency = gethrtime() - zio_cmd->io_start_time;

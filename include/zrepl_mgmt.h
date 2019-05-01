@@ -144,8 +144,6 @@ typedef struct zvol_info_s {
 	uint64_t	degraded_checkpointed_ionum;
 
 	time_t		checkpointed_time;	/* time of the last chkpoint */
-	uint64_t	rebuild_cmd_queued_cnt;
-	uint64_t	rebuild_cmd_acked_cnt;
 	/*
 	 * time of the last stored checkedpointed io sequence number
 	 * when ZVOL was in degraded state
@@ -168,6 +166,9 @@ typedef struct zvol_info_s {
 
 	/* fds related to this zinfo on which threads are waiting */
 	STAILQ_HEAD(, zinfo_fd_s)	fd_list;
+
+	/* rebuild scanner info related to this zinfo */
+	STAILQ_HEAD(, zvol_rebuild_scanner_info_s) rebuild_scanner_list;
 
 	uint8_t		io_ack_waiting;
 
@@ -210,6 +211,20 @@ typedef struct zvol_info_s {
 	    ZFS_HISTOGRAM_IO_BLOCK + 1];
 } zvol_info_t;
 
+typedef struct zvol_rebuild_scanner_info_s {
+	STAILQ_ENTRY(zvol_rebuild_scanner_info_s) link;
+	zvol_info_t	*zinfo;
+	uint64_t	rebuild_cmd_queued_cnt;
+	uint64_t	rebuild_cmd_acked_cnt;
+	union {
+		struct {
+			int	is_fd_errored: 1;
+		};
+		uint32_t flags;
+	};
+	int		fd;
+} zvol_rebuild_scanner_info_t;
+
 typedef struct thread_args_s {
 	char zvol_name[MAXNAMELEN];
 	zvol_info_t *zinfo;
@@ -234,11 +249,6 @@ typedef struct zvol_io_cmd_s {
 	metadata_desc_t	*metadata_desc;
 	int		conn;
 } zvol_io_cmd_t;
-
-typedef struct zvol_rebuild_s {
-	zvol_info_t	*zinfo;
-	int		fd;
-} zvol_rebuild_t;
 
 extern int uzfs_zinfo_init(zvol_state_t *zv, const char *ds_name,
     nvlist_t *create_props);
