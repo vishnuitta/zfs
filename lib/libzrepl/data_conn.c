@@ -450,7 +450,7 @@ drop_refcount:
  */
 static void zvol_rebuild_scanner_inc_ack_cnt(zvol_info_t *zinfo, int fd)
 {
-	zvol_rebuild_scanner_info_t *sinfo = NULL;
+	zvol_rebuild_scanner_info_t *sinfo;
 
 	sinfo = STAILQ_FIRST(&zinfo->rebuild_scanner_list);
 	while (sinfo != NULL) {
