@@ -78,6 +78,7 @@ typedef struct inject_delay_s {
 	int io_receiver_exit;
 	int helping_replica_rebuild_complete;
 	int rebuild_complete;
+	int helping_replica_ack_sender;
 } inject_delay_t;
 
 typedef struct inject_rebuild_error_s {
@@ -202,7 +203,6 @@ typedef struct zvol_info_s {
 	uint64_t 	sync_latency;
 	uint64_t 	inflight_io_cnt; // ongoing IOs count
 	uint64_t	dispatched_io_cnt; // total received but incomplete IOs
-
 
 	// histogram of IOs
 	zfs_histogram_t uzfs_rio_histogram[ZFS_HISTOGRAM_IO_SIZE /

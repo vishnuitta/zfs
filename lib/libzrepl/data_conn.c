@@ -444,6 +444,10 @@ drop_refcount:
 	uzfs_zinfo_drop_refcnt(zinfo);
 }
 
+/*
+ * This fn increments ack cnt on scanner info related to given fd
+ * This fn needs zinfo_mutex lock to access scanner list
+ */
 static void zvol_rebuild_scanner_inc_ack_cnt(zvol_info_t *zinfo, int fd)
 {
 	zvol_rebuild_scanner_info_t *sinfo = NULL;
@@ -458,6 +462,9 @@ static void zvol_rebuild_scanner_inc_ack_cnt(zvol_info_t *zinfo, int fd)
 	}
 }
 
+/*
+ * This fn sets error on scanner info related to given fd
+ */
 static void zvol_rebuild_scanner_set_errored_fd(zvol_info_t *zinfo, int fd)
 {
 	zvol_rebuild_scanner_info_t *sinfo = NULL;
@@ -474,6 +481,9 @@ static void zvol_rebuild_scanner_set_errored_fd(zvol_info_t *zinfo, int fd)
 	(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
 }
 
+/*
+ * This fn appends scanner details to zinfo scanner list
+ */
 static void
 uzfs_zvol_append_to_rebuild_scanner(zvol_info_t *zinfo,
     zvol_rebuild_scanner_info_t *scanner_info)
@@ -488,11 +498,12 @@ uzfs_zvol_append_to_rebuild_scanner(zvol_info_t *zinfo,
 	}
 #endif
 	STAILQ_INSERT_TAIL(&zinfo->rebuild_scanner_list, scanner_info, link);
-	LOG_DEBUG("Appending fd %d for zvol %s scanner", scanner_info->fd,
-	    zinfo->name);
 	(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
 }
 
+/*
+ * This fn removes scanner details with given fd from zinfo scanner list
+ */
 static void
 uzfs_zvol_remove_from_rebuild_scanner(zvol_info_t *zinfo, int fd)
 {
@@ -519,6 +530,9 @@ uzfs_zvol_remove_from_rebuild_scanner(zvol_info_t *zinfo, int fd)
 	(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
 }
 
+/*
+ * This fn appends zinfo related fd to zinfo fd list
+ */
 static void
 uzfs_zvol_append_to_fd_list(zvol_info_t *zinfo, int fd)
 {
@@ -539,6 +553,9 @@ uzfs_zvol_append_to_fd_list(zvol_info_t *zinfo, int fd)
 	(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
 }
 
+/*
+ * This fn removes given fd from zinfo fd list
+ */
 static void
 uzfs_zvol_remove_from_fd_list(zvol_info_t *zinfo, int fd)
 {
@@ -1370,6 +1387,7 @@ uzfs_zvol_rebuild_scanner_callback(off_t offset, size_t len,
 	zvol_io_cmd_t	*zio_cmd;
 	zvol_info_t	*zinfo;
 	zvol_rebuild_scanner_info_t  *warg;
+	int		count_to_print = 0;
 
 	warg = (zvol_rebuild_scanner_info_t *)args;
 	zinfo = warg->zinfo;
@@ -1382,20 +1400,33 @@ uzfs_zvol_rebuild_scanner_callback(off_t offset, size_t len,
 	hdr.flags = ZVOL_OP_FLAG_REBUILD;
 	hdr.status = ZVOL_OP_STATUS_OK;
 
+	LOG_DEBUG("IO number for rebuild %ld %ld %s", metadata->io_num, offset,
+	    zinfo->name);
 	while (1) {
 		if ((zinfo->state == ZVOL_INFO_STATE_OFFLINE) ||
-		    (!zinfo->is_io_ack_sender_created))
+		    (!zinfo->is_io_ack_sender_created)) {
+			LOG_ERR("[%s:%d] in err state", zinfo->name, warg->fd);
 			return (-1);
-		if (warg->is_fd_errored)
+		}
+		if (warg->is_fd_errored) {
+			LOG_ERR("[%s:%d] errored at ack_sender", zinfo->name,
+			    warg->fd);
 			return (-1);
-		if (IS_REBUILD_HIT_MAX_CMD_LIMIT(warg))
-			usleep(100);
+		}
+		if (IS_REBUILD_HIT_MAX_CMD_LIMIT(warg)) {
+			count_to_print++;
+			if (count_to_print >= 1000) {
+				LOG_ERR("[%s:%d] waiting for ack to send",
+				    zinfo->name, warg->fd);
+				count_to_print = 0;
+			}
+			sleep(1);
+		}
 		else
 			break;
 	}
 
 	warg->rebuild_cmd_queued_cnt++;
-	LOG_DEBUG("IO number for rebuild %ld", metadata->io_num);
 	zio_cmd = zio_cmd_alloc(&hdr, warg->fd);
 	/* Take refcount for uzfs_zvol_worker to work on it */
 	uzfs_zinfo_take_refcnt(zinfo);
@@ -1600,9 +1631,16 @@ read_socket:
 			/*
 			 * which means there is no user snapshot of given
 			 * io_num, but, TODO: we need to make sure that there
-			 * are no ongoing snapshots.
+			 * are no ongoing snapshots. This is made sure by tgt?
 			 */
 				if (all_snap_done == B_FALSE) {
+					if (rebuild_req_offset != 0) {
+						LOG_ERR("[%s:%d]invalid offset"
+						    " %d to send ALL_SNAP_DONE",
+						    rebuild_req_offset,
+						    zinfo->name);
+						goto exit;
+					}
 					uzfs_zvol_send_zio_cmd(zinfo, &hdr,
 					    ZVOL_OPCODE_REBUILD_ALL_SNAP_DONE,
 					    fd, NULL, 0, 0);
@@ -1623,8 +1661,8 @@ read_socket:
 			    snap_zv, uzfs_zvol_rebuild_scanner_callback,
 			    rebuild_req_offset, rebuild_req_len, warg);
 			if (rc != 0) {
-				LOG_ERR("Rebuild scanning failed on zvol %s ",
-				    "err(%d)", zinfo->name, rc);
+				LOG_ERR("[%s:%d]Rebuild scanning failed err:%d",
+				    zinfo->name, fd, rc);
 				goto exit;
 			}
 
@@ -1829,6 +1867,7 @@ uzfs_zvol_io_ack_sender(void *arg)
 	thread_args_t 		*thrd_arg;
 	zvol_io_cmd_t 		*zio_cmd = NULL;
 	uint64_t len, latency;
+	int			s = 0;
 
 	thrd_arg = (thread_args_t *)arg;
 	fd = thrd_arg->fd;
@@ -1864,11 +1903,18 @@ uzfs_zvol_io_ack_sender(void *arg)
 		STAILQ_REMOVE_HEAD(&zinfo->complete_queue, cmd_link);
 		zinfo->zio_cmd_in_ack = zio_cmd;
 
-		if (zio_cmd->hdr.flags & ZVOL_OP_FLAG_REBUILD)
+		if (zio_cmd->hdr.flags & ZVOL_OP_FLAG_REBUILD) {
+			s = 1;
 			zvol_rebuild_scanner_inc_ack_cnt(zinfo, zio_cmd->conn);
+		}
 
 		(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
 
+#if DEBUG
+		if (s == 1)
+			if (inject_error.delay.helping_replica_ack_sender == 1)
+				sleep(2);
+#endif
 		LOG_DEBUG("ACK for op: %d, seq-id: %ld",
 		    zio_cmd->hdr.opcode, zio_cmd->hdr.io_seq);
 

@@ -1126,8 +1126,6 @@ uzfs_zinfo_rebuild_start_threads(mgmt_ack_t *mack, zvol_info_t *zinfo,
 	rebuild_thread_arg_t	*thrd_arg;
 	kthread_t		*thrd_info;
 	for (; rebuild_op_cnt > 0; rebuild_op_cnt--, mack++) {
-		LOG_INFO("zvol %s at %s:%u helping in rebuild",
-		    mack->volname, mack->ip, mack->port);
 		if (uzfs_zvol_name_compare(zinfo, mack->dw_volname) != 0) {
 			LOG_ERR("zvol %s not matching with zinfo %s",
 			    mack->dw_volname, zinfo->name);
@@ -1164,6 +1162,8 @@ ret_error:
 			goto ret_error;
 		}
 
+		LOG_INFO("[%s:%d] at %s:%u helping in rebuild",
+		    mack->volname, io_sfd, mack->ip, mack->port);
 		uzfs_zinfo_take_refcnt(zinfo);
 
 		thrd_arg = kmem_alloc(sizeof (rebuild_thread_arg_t), KM_SLEEP);
