@@ -4,7 +4,7 @@ set -e
 pwd
 make clean
 sh autogen.sh
-./configure --enable-uzfs=yes --with-config=user --with-jemalloc
+./configure --enable-uzfs=yes --with-config=user --with-jemalloc --with-libcstor=$PWD/../libcstor/include
 make clean
 make
 
@@ -19,7 +19,6 @@ cp cmd/zpool/.libs/zpool ./docker/zfs/bin
 cp cmd/zfs/.libs/zfs ./docker/zfs/bin
 cp cmd/zstreamdump/.libs/zstreamdump ./docker/zfs/bin
 
-cp lib/libzrepl/.libs/*.so* ./docker/zfs/lib
 cp lib/libzpool/.libs/*.so* ./docker/zfs/lib
 cp lib/libuutil/.libs/*.so* ./docker/zfs/lib
 cp lib/libnvpair/.libs/*.so* ./docker/zfs/lib
