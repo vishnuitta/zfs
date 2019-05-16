@@ -1520,6 +1520,7 @@ uzfs_zvol_rebuild_scanner(void *arg)
 	uint64_t	payload_size = 0;
 	char		*snap_name;
 	zvol_rebuild_scanner_info_t	*warg = NULL;
+	char		*at_ptr = NULL;
 
 	if ((rc = setsockopt(fd, SOL_SOCKET, SO_LINGER, &lo, sizeof (lo)))
 	    != 0) {
@@ -1706,7 +1707,9 @@ read_socket:
 					    snap_zv->zv_name);
 					LOG_INFO("closing snap %s", snap_name);
 					uzfs_close_dataset(snap_zv);
-					VERIFY0(strncmp(snap_name,
+					at_ptr = strchr(snap_name, '@');
+					VERIFY3P(at_ptr, !=, NULL);
+					VERIFY0(strncmp(at_ptr + 1,
 					    IO_DIFF_SNAPNAME,
 					    sizeof (IO_DIFF_SNAPNAME) - 1));
 #if DEBUG
@@ -1744,7 +1747,9 @@ exit:
 			snap_name = kmem_asprintf("%s", snap_zv->zv_name);
 			LOG_INFO("closing snap on conn break %s", snap_name);
 			uzfs_close_dataset(snap_zv);
-			VERIFY0(strncmp(snap_name, IO_DIFF_SNAPNAME,
+			at_ptr = strchr(snap_name, '@');
+			VERIFY3P(at_ptr, !=, NULL);
+			VERIFY0(strncmp(at_ptr + 1, IO_DIFF_SNAPNAME,
 			    sizeof (IO_DIFF_SNAPNAME) - 1));
 #if DEBUG
 			if (inject_error.delay.helping_replica_rebuild_complete
