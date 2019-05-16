@@ -1520,6 +1520,7 @@ uzfs_zvol_rebuild_scanner(void *arg)
 	uint64_t	payload_size = 0;
 	char		*snap_name;
 	zvol_rebuild_scanner_info_t	*warg = NULL;
+	char		*at_ptr = NULL;
 
 	if ((rc = setsockopt(fd, SOL_SOCKET, SO_LINGER, &lo, sizeof (lo)))
 	    != 0) {
@@ -1706,6 +1707,11 @@ read_socket:
 					    snap_zv->zv_name);
 					LOG_INFO("closing snap %s", snap_name);
 					uzfs_close_dataset(snap_zv);
+					at_ptr = strchr(snap_name, '@');
+					VERIFY3P(at_ptr, !=, NULL);
+					VERIFY0(strncmp(at_ptr + 1,
+					    IO_DIFF_SNAPNAME,
+					    sizeof (IO_DIFF_SNAPNAME) - 1));
 #if DEBUG
 					if (inject_error.delay.
 					    helping_replica_rebuild_complete
@@ -1741,6 +1747,10 @@ exit:
 			snap_name = kmem_asprintf("%s", snap_zv->zv_name);
 			LOG_INFO("closing snap on conn break %s", snap_name);
 			uzfs_close_dataset(snap_zv);
+			at_ptr = strchr(snap_name, '@');
+			VERIFY3P(at_ptr, !=, NULL);
+			VERIFY0(strncmp(at_ptr + 1, IO_DIFF_SNAPNAME,
+			    sizeof (IO_DIFF_SNAPNAME) - 1));
 #if DEBUG
 			if (inject_error.delay.helping_replica_rebuild_complete
 			    == 1)
@@ -2197,6 +2207,9 @@ open_zvol(int fd, zvol_info_t **zinfopp)
 		goto error_ret;
 	}
 
+	/* Destroy snaps that are internally created to help during rebuild */
+	uzfs_destroy_all_iosnap_snapshots(zinfo->main_zv);
+
 	status = find_apt_zvol_status(zinfo, &open_data);
 	if (status == ZVOL_STATUS_HEALTHY) {
 		ASSERT3P(zinfo->snapshot_zv, ==, NULL);
@@ -2222,6 +2235,12 @@ error_ret:
 			(void) pthread_mutex_unlock(&zinfo->zinfo_mutex);
 			goto open_reply;
 		}
+
+		/*
+		 * Destroy snaps that are internally created to help
+		 * during rebuild
+		 */
+		uzfs_destroy_all_iosnap_snapshots(zinfo->clone_zv);
 	}
 	/*
 	 * TODO: Once we support multiple concurrent data connections for a
