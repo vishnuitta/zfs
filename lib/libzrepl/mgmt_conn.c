@@ -1658,6 +1658,7 @@ switch_zvol_mgmt_io_req(uzfs_mgmt_conn_t *conn)
 	}
 }
 
+#define	MIN_SUPPORTED_REPLICA_VERSION	3
 /*
  * Transition to the next state. This is called only if IO buffer was fully
  * read or written.
@@ -1699,7 +1700,8 @@ move_to_next_state(uzfs_mgmt_conn_t *conn)
 		conn->zvol_io_recv_vers = vers;
 		kmem_free(conn->conn_buf, sizeof (uint16_t));
 		conn->conn_buf = NULL;
-		if (vers > REPLICA_VERSION) {
+		if ((vers > REPLICA_VERSION) ||
+		    (vers < MIN_SUPPORTED_REPLICA_VERSION)) {
 			LOGERRCONN(conn, "Invalid replica protocol version %d",
 			    vers);
 			rc = reply_nodata(conn, ZVOL_OP_STATUS_VERSION_MISMATCH,
