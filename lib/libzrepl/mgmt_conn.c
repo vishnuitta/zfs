@@ -382,7 +382,7 @@ reply_nodata(uzfs_mgmt_conn_t *conn, zvol_op_status_t status,
 	}
 
 	hdrp = kmem_zalloc(sizeof (*hdrp), KM_SLEEP);
-	hdrp->version = REPLICA_VERSION;
+	hdrp->version = conn->conn_hdr->version;
 	hdrp->opcode = opcode;
 	hdrp->io_seq = io_seq;
 	hdrp->status = status;
@@ -535,7 +535,7 @@ uzfs_zvol_mgmt_get_handshake_info(zvol_io_hdr_t *in_hdr, const char *name,
 	LOG_INFO("Volume:%s has zvol_guid:%lu", zinfo->name, zinfo->zvol_guid);
 
 	bzero(out_hdr, sizeof (*out_hdr));
-	out_hdr->version = REPLICA_VERSION;
+	out_hdr->version = in_hdr->version;
 	out_hdr->opcode = in_hdr->opcode; // HANDSHAKE or PREPARE_FOR_REBUILD
 	out_hdr->io_seq = in_hdr->io_seq;
 	out_hdr->len = sizeof (*mgmt_ack);
@@ -583,7 +583,7 @@ uzfs_zvol_rebuild_status(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp,
 	status_ack.state = uzfs_zvol_get_status(zinfo->main_zv);
 
 	bzero(&hdr, sizeof (hdr));
-	hdr.version = REPLICA_VERSION;
+	hdr.version = hdrp->version;
 	hdr.opcode = hdrp->opcode;
 	hdr.io_seq = hdrp->io_seq;
 	hdr.len = sizeof (status_ack);
@@ -624,7 +624,7 @@ uzfs_zvol_stats(uzfs_mgmt_conn_t *conn, zvol_io_hdr_t *hdrp, zvol_info_t *zinfo)
 	    zv_objset->os_dsl_dataset->ds_dir)->dd_uncompressed_bytes;
 
 	bzero(&hdr, sizeof (hdr));
-	hdr.version = REPLICA_VERSION;
+	hdr.version = hdrp->version;
 	hdr.opcode = hdrp->opcode;
 	hdr.io_seq = hdrp->io_seq;
 	hdr.len = sizeof (zvol_op_stat_t);
@@ -1603,7 +1603,8 @@ move_to_next_state(uzfs_mgmt_conn_t *conn)
 		vers = *((uint16_t *)conn->conn_buf);
 		kmem_free(conn->conn_buf, sizeof (uint16_t));
 		conn->conn_buf = NULL;
-		if (vers != REPLICA_VERSION) {
+		if ((vers > REPLICA_VERSION) ||
+		    (vers < MIN_SUPPORTED_REPLICA_VERSION)) {
 			LOGERRCONN(conn, "Invalid replica protocol version %d",
 			    vers);
 			rc = reply_nodata(conn, ZVOL_OP_STATUS_VERSION_MISMATCH,

@@ -45,6 +45,8 @@ extern "C" {
  * properly aligned (and packed).
  */
 
+#define	MIN_SUPPORTED_REPLICA_VERSION	3
+
 #define	REPLICA_VERSION	4
 #define	MAX_NAME_LEN	256
 #define	MAX_IP_LEN	64

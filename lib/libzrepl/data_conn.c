@@ -184,7 +184,8 @@ uzfs_zvol_read_header(int fd, zvol_io_hdr_t *hdr)
 	if (rc != 0)
 		return (-1);
 
-	if (hdr->version != REPLICA_VERSION) {
+	if ((hdr->version > REPLICA_VERSION) ||
+	    (hdr->version < MIN_SUPPORTED_REPLICA_VERSION)) {
 		LOG_ERR("invalid replica protocol version %d",
 		    hdr->version);
 		return (1);
@@ -1392,7 +1393,7 @@ uzfs_zvol_rebuild_scanner_callback(off_t offset, size_t len,
 	warg = (zvol_rebuild_scanner_info_t *)args;
 	zinfo = warg->zinfo;
 
-	hdr.version = REPLICA_VERSION;
+	hdr.version = warg->version;
 	hdr.opcode = ZVOL_OPCODE_READ;
 	hdr.io_seq = metadata->io_num;
 	hdr.offset = offset;
@@ -1443,16 +1444,16 @@ uzfs_zvol_rebuild_scanner_callback(off_t offset, size_t len,
 	return (0);
 }
 
-void
+static void
 uzfs_zvol_send_zio_cmd(zvol_info_t *zinfo, zvol_io_hdr_t *hdrp,
     zvol_op_code_t opcode, int fd, char *payload, uint64_t payload_size,
-    uint64_t checkpointed_io_seq)
+    uint64_t checkpointed_io_seq, zvol_rebuild_scanner_info_t *warg)
 {
 
 	zvol_io_cmd_t	*zio_cmd;
 	bzero(hdrp, sizeof (*hdrp));
 	hdrp->status = ZVOL_OP_STATUS_OK;
-	hdrp->version = REPLICA_VERSION;
+	hdrp->version = warg->version;
 	hdrp->opcode = opcode;
 	hdrp->checkpointed_io_seq = checkpointed_io_seq;
 	hdrp->len = payload_size; // MAX_NAME_LEN + 1;
@@ -1591,6 +1592,7 @@ read_socket:
 			    KM_SLEEP);
 			warg->zinfo = zinfo;
 			warg->fd = fd;
+			warg->version = hdr.version;
 			uzfs_zvol_append_to_rebuild_scanner(zinfo, warg);
 
 			kmem_free(name, hdr.len);
@@ -1644,7 +1646,7 @@ read_socket:
 					}
 					uzfs_zvol_send_zio_cmd(zinfo, &hdr,
 					    ZVOL_OPCODE_REBUILD_ALL_SNAP_DONE,
-					    fd, NULL, 0, 0);
+					    fd, NULL, 0, 0, warg);
 					all_snap_done = B_TRUE;
 				}
 				if (ZINFO_IS_DEGRADED(zinfo))
@@ -1669,7 +1671,7 @@ read_socket:
 
 			uzfs_zvol_send_zio_cmd(zinfo, &hdr,
 			    ZVOL_OPCODE_REBUILD_STEP_DONE,
-			    fd, NULL, 0, 0);
+			    fd, NULL, 0, 0, warg);
 			goto read_socket;
 
 		case ZVOL_OPCODE_REBUILD_COMPLETE:
@@ -1694,7 +1696,7 @@ read_socket:
 				uzfs_zvol_send_zio_cmd(zinfo, &hdr,
 				    ZVOL_OPCODE_REBUILD_SNAP_DONE,
 				    fd, payload, payload_size,
-				    checkpointed_io_seq + 1);
+				    checkpointed_io_seq + 1, warg);
 				free(payload);
 				/* Close snapshot dataset */
 				LOG_INFO("closing snap %s", snap_zv->zv_name);
