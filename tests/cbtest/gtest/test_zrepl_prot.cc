@@ -569,7 +569,7 @@ TEST_F(ZreplHandshakeTest, HandshakeWrongVersion) {
 
 	rc = read(m_control_fd, &hdr_in, sizeof (hdr_in));
 	ASSERT_EQ(rc, sizeof (hdr_in));
-	EXPECT_EQ(hdr_in.version, REPLICA_VERSION);
+	EXPECT_EQ(hdr_in.version, hdr_out.version);
 	EXPECT_EQ(hdr_in.opcode, ZVOL_OPCODE_HANDSHAKE);
 	EXPECT_EQ(hdr_in.status, ZVOL_OP_STATUS_VERSION_MISMATCH);
 	EXPECT_EQ(hdr_in.io_seq, 0);

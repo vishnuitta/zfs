@@ -2091,6 +2091,33 @@ find_apt_zvol_status(zvol_info_t *zinfo, zvol_op_open_data_t *open_data)
 	return (ZVOL_STATUS_DEGRADED);
 }
 
+uint64_t
+get_open_opcode_data_len(zvol_io_hdr_t *hdr)
+{
+	switch (hdr->version) {
+		case 3:
+			return sizeof (zvol_op_open_data_ver_3_t);
+		case 4:
+			return sizeof (zvol_op_open_data_t);
+		default:
+			return (-1);
+	}
+}
+
+void
+fill_default_values_for_version_change(zvol_io_hdr_t *hdr,
+    zvol_op_open_data_t *op)
+{
+	switch (hdr->version) {
+		case 3:
+			op->replication_factor = 0;
+			break;
+		default:
+			break;
+	}
+	return;
+}
+
 /*
  * Process open request on data connection, the first message.
  *
@@ -2111,6 +2138,7 @@ open_zvol(int fd, zvol_info_t **zinfopp)
 	thread_args_t 	*thrd_arg;
 	int		rele_dataset_on_error = 0;
 	zvol_status_t	status;
+	uint64_t	exp_len;
 
 	/*
 	 * If we don't know the version yet, be more careful when
@@ -2124,16 +2152,18 @@ open_zvol(int fd, zvol_info_t **zinfopp)
 		LOG_ERR("zvol must be opened first");
 		return (-1);
 	}
-	if (hdr.len != sizeof (open_data)) {
+	exp_len = get_open_opcode_data_len(&hdr);
+	if (hdr.len != exp_len) {
 		LOG_ERR("Invalid payload length for open");
 		return (-1);
 	}
-	rc = uzfs_zvol_socket_read(fd, (char *)&open_data, sizeof (open_data));
+	rc = uzfs_zvol_socket_read(fd, (char *)&open_data, exp_len);
 	if (rc != 0) {
 		LOG_ERR("Payload read failed");
 		return (-1);
 	}
 
+	fill_default_values_for_version_change(&hdr, &open_data);
 	open_data.volname[MAX_NAME_LEN - 1] = '\0';
 	zinfo = uzfs_zinfo_lookup(open_data.volname);
 	if (zinfo == NULL) {
