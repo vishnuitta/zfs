@@ -550,8 +550,8 @@ TEST_F(ZreplHandshakeTest, HandshakeOk) {
 
 TEST_F(ZreplHandshakeTest, HandshakeMinVersion) {
 	zvol_io_hdr_t hdr_in, hdr_out = {0};
-	// use unique ptr to implicitly dealloc mem when exiting from func
-	std::unique_ptr<char[]> msgp(new char[sizeof (hdr_out) + m_zvol_name.length() + 1]);
+	std::string output;
+	mgmt_ack_t mgmt_ack;
 	int rc;
 
 	hdr_out.version = MIN_SUPPORTED_REPLICA_VERSION;
@@ -559,14 +559,10 @@ TEST_F(ZreplHandshakeTest, HandshakeMinVersion) {
 	hdr_out.status = ZVOL_OP_STATUS_OK;
 	hdr_out.len = m_zvol_name.length() + 1;
 
-	/*
-	 * It must be set in one chunk so that server does not close the
-	 * connection after sending header but before sending zvol name.
-	 */
-	memcpy(msgp.get(), &hdr_out, sizeof (hdr_out));
-	memcpy(msgp.get() + sizeof (hdr_out), m_zvol_name.c_str(), hdr_out.len);
-	rc = write(m_control_fd, msgp.get(), 2);
-	ASSERT_EQ(rc, 2);
+	rc = write(m_control_fd, &hdr_out, sizeof (hdr_out));
+	ASSERT_EQ(rc, sizeof (hdr_out));
+	rc = write(m_control_fd, m_zvol_name.c_str(), hdr_out.len);
+	ASSERT_EQ(rc, hdr_out.len);
 
 	rc = read(m_control_fd, &hdr_in, sizeof (hdr_in));
 	ASSERT_EQ(rc, sizeof (hdr_in));
@@ -575,9 +571,16 @@ TEST_F(ZreplHandshakeTest, HandshakeMinVersion) {
 	EXPECT_EQ(hdr_in.status, ZVOL_OP_STATUS_OK);
 	EXPECT_EQ(hdr_in.io_seq, 0);
 	EXPECT_EQ(hdr_in.offset, 0);
-	ASSERT_EQ(hdr_in.len, 0);
-	rc = read(m_control_fd, &hdr_in, sizeof (hdr_in));
-	ASSERT_EQ(rc, 0);
+	ASSERT_EQ(hdr_in.len, sizeof (mgmt_ack));
+	rc = read(m_control_fd, &mgmt_ack, sizeof (mgmt_ack));
+	ASSERT_EQ(rc, sizeof (mgmt_ack));
+	EXPECT_STREQ(mgmt_ack.volname, m_zvol_name.c_str());
+	output = execCmd("zpool", std::string("get guid -Hpo value ") +
+	    m_pool->m_name);
+	EXPECT_EQ(mgmt_ack.pool_guid, std::stoul(output));
+	output = execCmd("zfs", std::string("get guid -Hpo value ") +
+	    m_zvol_name);
+	EXPECT_EQ(mgmt_ack.zvol_guid, std::stoul(output));
 }
 
 TEST_F(ZreplHandshakeTest, HandshakeWrongVersion) {
@@ -632,7 +635,7 @@ TEST_F(ZreplHandshakeTest, HandshakeUnknownZvol) {
 	rc = read(m_control_fd, &hdr_in, sizeof (hdr_in));
 	ASSERT_ERRNO("read", rc >= 0);
 	ASSERT_EQ(rc, sizeof (hdr_in));
-	EXPECT_EQ(hdr_in.version, REPLICA_VERSION);
+	EXPECT_EQ(hdr_in.version, hdr_out.version);
 	EXPECT_EQ(hdr_in.opcode, ZVOL_OPCODE_HANDSHAKE);
 	EXPECT_EQ(hdr_in.status, ZVOL_OP_STATUS_FAILED);
 	EXPECT_EQ(hdr_in.io_seq, 0);

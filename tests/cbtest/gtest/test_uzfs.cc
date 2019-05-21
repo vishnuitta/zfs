@@ -1891,7 +1891,7 @@ exit:
  * This fn does data conn for a host:ip and volume, and fills data fd
  *
  * NOTE: Return value must be void otherwise we could not use asserts
- * (pecularity of gtest framework).
+ * (peculiarity of gtest framework).
  */
 static void do_data_connection(int &data_fd, std::string host, uint16_t port,
     std::string zvol_name, int bs=512, int timeout=120,
