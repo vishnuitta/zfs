@@ -723,7 +723,7 @@ uzfs_zvol_fetch_snapshot_list(zvol_info_t *zinfo, void **buf,
 	uint64_t total_len;
 	char err_msg[128];
 
-	snapname = kmem_alloc(ZFS_MAX_DATASET_NAME_LEN, KM_SLEEP);
+	snapname = kmem_zalloc(ZFS_MAX_DATASET_NAME_LEN, KM_SLEEP);
 	jarray = json_object_new_array();
 
 	while (error == 0) {

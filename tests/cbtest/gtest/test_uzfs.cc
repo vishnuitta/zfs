@@ -1580,7 +1580,7 @@ uzfs_mock_zvol_rebuild_dw_replica(void *arg)
 
 	int		rebuild_io_cnt = 0;
 	struct sockaddr_in replica_ip;
-
+	int		all_snap_done_received = 0;
 	int		rc = 0;
 	int		sfd = -1;
 	uint64_t	offset = 0;
@@ -1720,7 +1720,7 @@ next_step:
 		if (rc != 0) {
 			goto exit;
 		}
-	    	if (offset >= ZVOL_VOLUME_SIZE(zvol_state)) {
+		if ((all_snap_done_received == 1) && (offset >= ZVOL_VOLUME_SIZE(zvol_state))) {
 			LOG_INFO("Rebuilding zvol %s completed", zinfo->name);
 			goto exit;
 		}
@@ -1790,6 +1790,7 @@ next_step:
 		}
 
 		if (hdr.opcode == ZVOL_OPCODE_REBUILD_ALL_SNAP_DONE) {
+			all_snap_done_received = 1;
 			if (uzfs_zvol_get_rebuild_status(zinfo->main_zv) !=
 			    ZVOL_REBUILDING_AFS) {
 				uzfs_zvol_set_rebuild_status(zinfo->main_zv,
@@ -1918,7 +1919,10 @@ retry:
 	hdr_out.version = REPLICA_VERSION;
 	hdr_out.opcode = ZVOL_OPCODE_OPEN;
 	hdr_out.status = ZVOL_OP_STATUS_OK;
-	hdr_out.len = sizeof (open_data);
+	if (version == 3)
+		hdr_out.len = sizeof (zvol_op_open_data_ver_3_t);
+	else
+		hdr_out.len = sizeof (open_data);
 
 	rc = write(fd, &hdr_out, sizeof (hdr_out));
 	ASSERT_EQ(rc, sizeof (hdr_out));
@@ -1932,7 +1936,7 @@ retry:
 
 	rc = read(fd, &hdr_in, sizeof (hdr_in));
 	ASSERT_EQ(rc, sizeof (hdr_in));
-	ASSERT_EQ(hdr_in.version, REPLICA_VERSION);
+	ASSERT_EQ(hdr_in.version, hdr_out.version);
 	ASSERT_EQ(hdr_in.opcode, ZVOL_OPCODE_OPEN);
 	ASSERT_EQ(hdr_in.len, 0);
 	if (hdr_in.status != res) {
@@ -2571,6 +2575,10 @@ TEST(RebuildScanner, RebuildFailureWithAFS) {
 }
 
 TEST(RebuildScanner, RebuildSuccessWithAFS) {
+	int rc;
+	size_t snaplist_len;
+	void *snap_list;
+	std::string snapname="rebuildsuccesswithafs";
 	sleep(10);
 #if DEBUG
 	inject_error.delay.helping_replica_ack_sender = 0;
@@ -2578,6 +2586,15 @@ TEST(RebuildScanner, RebuildSuccessWithAFS) {
 	sleep(5);
 	close(data_conn_fd);
 	data_conn_fd = -1;
+
+	rc = uzfs_zvol_create_snapshot_update_zap(zinfo2, (char *)snapname.c_str(), 5000);
+	EXPECT_EQ(rc, 0);
+
+	rc = uzfs_zvol_create_snapshot_update_zap(zinfo, (char *)snapname.c_str(), 500);
+	EXPECT_EQ(rc, 0);
+
+	EXPECT_EQ(0, dsl_destroy_snapshot("pool1/vol1@rebuildsuccesswithafs", B_FALSE));
+
 	uzfs_zvol_set_rebuild_status(zv2, ZVOL_REBUILDING_INIT);
 	do_data_connection(data_conn_fd, "127.0.0.1", IO_SERVER_PORT, "vol3");
 	zvol_rebuild_step_size = (1024ULL * 1024ULL * 100);
@@ -2593,6 +2610,10 @@ TEST(RebuildScanner, RebuildSuccessWithAFS) {
 	sleep(10);
 	inject_error.delay.helping_replica_rebuild_complete = 0;
 #endif
+
+	rc = uzfs_zvol_create_snapshot_update_zap(zinfo, (char *)snapname.c_str(), 5000);
+	EXPECT_EQ(rc, 17);
+
 	uint64_t quorum = 0;
 	EXPECT_EQ(0, dsl_prop_get_integer(zinfo->main_zv->zv_name,
 	    zfs_prop_to_name(ZFS_PROP_QUORUM), &quorum, NULL));

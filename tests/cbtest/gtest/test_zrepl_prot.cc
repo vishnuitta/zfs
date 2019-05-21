@@ -112,7 +112,7 @@ static void do_handshake(std::string zvol_name, std::string &host,
  * This fn does data conn for a host:ip and volume, and fills data fd
  *
  * NOTE: Return value must be void otherwise we could not use asserts
- * (pecularity of gtest framework).
+ * (peculiarity of gtest framework).
  */
 static void do_data_connection(int &data_fd, std::string host, uint16_t port,
     std::string zvol_name, int bs=4096, int timeout=120,
@@ -139,7 +139,10 @@ retry:
 	hdr_out.version = version;
 	hdr_out.opcode = ZVOL_OPCODE_OPEN;
 	hdr_out.status = ZVOL_OP_STATUS_OK;
-	hdr_out.len = sizeof (open_data);
+	if (version == 3)
+		hdr_out.len = sizeof (zvol_op_open_data_ver_3_t);
+	else
+		hdr_out.len = sizeof (open_data);
 
 	rc = write(fd, &hdr_out, sizeof (hdr_out));
 	ASSERT_EQ(rc, sizeof (hdr_out));
@@ -153,7 +156,7 @@ retry:
 
 	rc = read(fd, &hdr_in, sizeof (hdr_in));
 	ASSERT_EQ(rc, sizeof (hdr_in));
-	ASSERT_EQ(hdr_in.version, REPLICA_VERSION);
+	ASSERT_EQ(hdr_in.version, hdr_out.version);
 	ASSERT_EQ(hdr_in.opcode, ZVOL_OPCODE_OPEN);
 	ASSERT_EQ(hdr_in.len, 0);
 	if (hdr_in.status != res) {
@@ -1126,7 +1129,8 @@ TEST(ReplicaState, SingleReplicaQuorumOff) {
 	ASSERT_GE(control_fd2, 0);
 	do_handshake(zvol_name2, host2, port2, NULL, NULL, control_fd2,
 	    ZVOL_OP_STATUS_OK);
-	do_data_connection(datasock2_fd, host2, port2, zvol_name2, 4096, 120, ZVOL_OP_STATUS_OK, 1);
+	do_data_connection(datasock2_fd, host2, port2, zvol_name2, 4096, 120, ZVOL_OP_STATUS_OK, 1,
+	    MIN_SUPPORTED_REPLICA_VERSION);
 
 	get_zvol_status(zvol_name1, ioseq1, control_fd1, ZVOL_STATUS_HEALTHY, ZVOL_REBUILDING_DONE);
 	get_zvol_status(zvol_name2, ioseq1, control_fd2, ZVOL_STATUS_DEGRADED, ZVOL_REBUILDING_INIT);
