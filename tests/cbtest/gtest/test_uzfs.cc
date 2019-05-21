@@ -224,6 +224,26 @@ uzfs_mock_rebuild_scanner_exit_after_rebuild_step(void *arg)
 }
 
 void
+uzfs_mock_rebuild_scanner_min_version(void *arg)
+{
+	int rc = 0;
+	zvol_io_hdr_t hdr;
+	int fd = (int)(uintptr_t)arg;
+
+	/* Establish a connection with DW replica */
+	uzfs_mock_rebuild_scanner_setup_connection(fd);
+
+	/* Read HANDSHAKE */
+	uzfs_mock_rebuild_scanner_handshake(fd, &hdr);
+
+	// Close fd to simulate min version
+	shutdown(fd, SHUT_RDWR);
+	close(fd);
+	rebuild_test_case = 0;
+	zk_thread_exit();
+}
+
+void
 uzfs_mock_rebuild_scanner_exit_after_write(void *arg)
 {
 	int rc = 0;
@@ -1593,6 +1613,7 @@ uzfs_mock_zvol_rebuild_dw_replica(void *arg)
 	char zvol_name[MAXNAMELEN];
 	int writelen = 0;
 	int thread_num = 0;
+	uint16_t	version = REPLICA_VERSION;
 
 	atomic_inc_64(&started_thread_count);
 	thread_num = started_thread_count;
@@ -1625,6 +1646,9 @@ uzfs_mock_zvol_rebuild_dw_replica(void *arg)
 		goto exit;
 	}
 
+	if (rebuild_test_case == 12)
+		version = MIN_SUPPORTED_REPLICA_VERSION;
+
 	if ((thread_num == 2) && (rebuild_test_case == 13))
 		sleep(5);
 send_hdr_again:
@@ -1640,7 +1664,7 @@ send_hdr_again:
 		hdr.version = REPLICA_VERSION + 1;
 		writelen = 4;
 	} else {
-		hdr.version = REPLICA_VERSION;
+		hdr.version = version;
 		hdr.opcode = ZVOL_OPCODE_HANDSHAKE;
 		hdr.len = strlen(rebuild_args->zvol_name) + 1;
 		if (rebuild_test_case == 2)
@@ -1676,7 +1700,7 @@ send_hdr_again:
 next_step:
 	bzero(&hdr, sizeof (hdr));
 	hdr.status = ZVOL_OP_STATUS_OK;
-	hdr.version = REPLICA_VERSION;
+	hdr.version = version;
 	hdr.opcode = ZVOL_OPCODE_REBUILD_STEP;
 	hdr.io_seq = checkpointed_ionum;
 	hdr.offset = offset;
@@ -1764,6 +1788,14 @@ next_step:
 			LOG_ERR("Socket read failed");
 			goto exit;
 		}
+
+		if (hdr.version != version) {
+			LOG_ERR("received mismatch %d:%d in version.. for %s..",
+			    hdr.version, version, zinfo->name);
+			rc = -1;
+			goto exit;
+		}
+
 
 		if (hdr.status != ZVOL_OP_STATUS_OK) {
 			LOG_ERR("received err in rebuild.. for %s..",
@@ -2297,6 +2329,16 @@ TEST(uZFSRebuild, TestRebuildErrorState) {
 	    ZVOL_REBUILDING_ERRORED, ZVOL_REBUILDING_FAILED);
 }
 
+TEST(uZFSRebuild, TestRebuildScannerMinVersion) {
+	rebuild_scanner = &uzfs_mock_rebuild_scanner_min_version;
+	dw_replica_fn = &uzfs_zvol_rebuild_dw_replica;
+
+	/* thread helping rebuild will exit after reading REBUILD_STEP */
+	execute_rebuild_test_case("rebuild scanner min version", 14,
+	    ZVOL_REBUILDING_SNAP, ZVOL_REBUILDING_FAILED);
+}
+
+
 TEST(uZFSRebuild, TestRebuildExitAfterStep) {
 	rebuild_scanner = &uzfs_mock_rebuild_scanner_exit_after_rebuild_step;
 	dw_replica_fn = &uzfs_zvol_rebuild_dw_replica;
@@ -2587,7 +2629,7 @@ TEST(RebuildScanner, RebuildSuccessWithAFS) {
 	close(data_conn_fd);
 	data_conn_fd = -1;
 
-	rc = uzfs_zvol_create_snapshot_update_zap(zinfo2, (char *)snapname.c_str(), 5000);
+	rc = uzfs_zvol_create_snapshot_update_zap(zinfo2, (char *)snapname.c_str(), 15000);
 	EXPECT_EQ(rc, 0);
 
 	rc = uzfs_zvol_create_snapshot_update_zap(zinfo, (char *)snapname.c_str(), 500);
@@ -2611,7 +2653,7 @@ TEST(RebuildScanner, RebuildSuccessWithAFS) {
 	inject_error.delay.helping_replica_rebuild_complete = 0;
 #endif
 
-	rc = uzfs_zvol_create_snapshot_update_zap(zinfo, (char *)snapname.c_str(), 5000);
+	rc = uzfs_zvol_create_snapshot_update_zap(zinfo, (char *)snapname.c_str(), 15000);
 	EXPECT_EQ(rc, 17);
 
 	uint64_t quorum = 0;
