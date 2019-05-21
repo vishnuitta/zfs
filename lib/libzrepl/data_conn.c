@@ -2096,9 +2096,9 @@ get_open_opcode_data_len(zvol_io_hdr_t *hdr)
 {
 	switch (hdr->version) {
 		case 3:
-			return sizeof (zvol_op_open_data_ver_3_t);
+			return (sizeof (zvol_op_open_data_ver_3_t));
 		case 4:
-			return sizeof (zvol_op_open_data_t);
+			return (sizeof (zvol_op_open_data_t));
 		default:
 			return (-1);
 	}
@@ -2115,7 +2115,6 @@ fill_default_values_for_version_change(zvol_io_hdr_t *hdr,
 		default:
 			break;
 	}
-	return;
 }
 
 /*
