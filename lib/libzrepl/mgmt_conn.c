@@ -1587,7 +1587,11 @@ move_to_next_state(uzfs_mgmt_conn_t *conn)
 		    (vers < MIN_SUPPORTED_REPLICA_VERSION)) {
 			LOGERRCONN(conn, "Invalid replica protocol version %d",
 			    vers);
-			hdr.version = vers;
+			/*
+			 * In case of version mismatch, max version that uzfs
+			 * supports will be sent
+			 */
+			hdr.version = REPLICA_VERSION;
 			rc = reply_nodata(conn, ZVOL_OP_STATUS_VERSION_MISMATCH,
 			    &hdr);
 			/* override the default next state from reply_nodata */
