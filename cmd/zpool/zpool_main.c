@@ -1786,8 +1786,6 @@ print_status_config(zpool_handle_t *zhp, status_cbdata_t *cb, const char *name,
 		    &islog);
 		(void) nvlist_lookup_uint64(child[c], ZPOOL_CONFIG_IS_HOLE,
 		    &ishole);
-		if (islog || ishole)
-			continue;
 		vname = zpool_vdev_name(g_zfs, zhp, child[c],
 		    cb->cb_name_flags | VDEV_NAME_TYPE_ID);
 		print_status_config(zhp, cb, vname, child[c], depth + 2,
@@ -6570,7 +6568,13 @@ jsonify_status_config(zpool_handle_t *zhp, status_cbdata_t *cb, const char *name
 	uint64_t notpresent;
 	char *state;
 	char *path = NULL;
-	struct json_object *jobj, *obj;
+	struct json_object *jobj;
+	struct json_object *obj;
+	struct json_object *jarray = json_object_new_array();
+	struct json_object *jsparearray = json_object_new_array();
+	struct json_object *jcachearray = json_object_new_array();
+	char *type;
+	uint64_t islog = B_FALSE, ishole = B_FALSE;
 
 	if (nvlist_lookup_nvlist_array(nv, ZPOOL_CONFIG_CHILDREN,
 	    &child, &children) != 0)
@@ -6591,9 +6595,17 @@ jsonify_status_config(zpool_handle_t *zhp, status_cbdata_t *cb, const char *name
 			state = "AVAIL";
 	}
 
+	(void) nvlist_lookup_uint64(nv, ZPOOL_CONFIG_IS_LOG, &islog);
+	(void) nvlist_lookup_uint64(nv, ZPOOL_CONFIG_IS_HOLE, &ishole);
+
 	jobj = json_object_new_object();
 	json_object_object_add(jobj, "name", json_object_new_string(name));
 	json_object_object_add(jobj, "state", json_object_new_string(state));
+	if(nvlist_lookup_string(nv, ZPOOL_CONFIG_TYPE, &type) == 0)
+		json_object_object_add(jobj, "type", json_object_new_string(type));
+	json_object_object_add(jobj, "children", json_object_new_int64(children));
+	json_object_object_add(jobj, "islog", json_object_new_int64(islog));
+	json_object_object_add(jobj, "ishole", json_object_new_int64(ishole));
 
 	if (!isspare) {
 		zfs_nicenum(vs->vs_read_errors, rbuf, sizeof (rbuf));
@@ -6623,21 +6635,40 @@ jsonify_status_config(zpool_handle_t *zhp, status_cbdata_t *cb, const char *name
 	}
 
 	for (c = 0; c < children; c++) {
-		uint64_t islog = B_FALSE, ishole = B_FALSE;
-
-		/* Don't print logs or holes here */
-		(void) nvlist_lookup_uint64(child[c], ZPOOL_CONFIG_IS_LOG,
-		    &islog);
-		(void) nvlist_lookup_uint64(child[c], ZPOOL_CONFIG_IS_HOLE,
-		    &ishole);
-		if (islog || ishole)
-			continue;
 		vname = zpool_vdev_name(g_zfs, zhp, child[c],
 		    cb->cb_name_flags | VDEV_NAME_TYPE_ID);
 		obj = jsonify_status_config(zhp, cb, vname, child[c], depth + 2,
 		    isspare);
-		json_object_object_add(jobj, vname, obj);
+		json_object_array_add(jarray, obj);
 		free(vname);
+	}
+	if (children != 0)
+		json_object_object_add(jobj, "vdev", jarray);
+
+	if (nvlist_lookup_nvlist_array(nv, ZPOOL_CONFIG_L2CACHE,
+	    &child, &children) == 0 && children) {
+		for (c = 0; c < children; c++) {
+			vname = zpool_vdev_name(g_zfs, zhp,
+			    child[c], cb->cb_name_flags | VDEV_NAME_TYPE_ID);
+			obj = json_object_new_object();
+			json_object_object_add(obj, "name", json_object_new_string(vname));
+			json_object_array_add(jcachearray, obj);
+			free(vname);
+		}
+		json_object_object_add(jobj, "cache", jcachearray);
+	}
+
+	if (nvlist_lookup_nvlist_array(nv, ZPOOL_CONFIG_SPARES,
+	    &child, &children) == 0 && children) {
+		for (c = 0; c < children; c++) {
+			vname = zpool_vdev_name(g_zfs, zhp,
+			    child[c], cb->cb_name_flags | VDEV_NAME_TYPE_ID);
+			obj = json_object_new_object();
+			json_object_object_add(obj, "name", json_object_new_string(vname));
+			json_object_array_add(jsparearray, obj);
+			free(vname);
+		}
+		json_object_object_add(jobj, "spares", jsparearray);
 	}
 	return (jobj);
 }
@@ -6676,7 +6707,7 @@ jsonify_status_callback(zpool_handle_t *zhp, void *data)
 
 	if (config != NULL) {
 		obj = jsonify_status_config(zhp, cbp, zpool_get_name(zhp), nvroot, 0, B_FALSE);
-		json_object_object_add(jobj, zpool_get_name(zhp), obj);
+		json_object_object_add(jobj, "pool", obj);
 	}
 
 	const char *json_string = json_object_to_json_string_ext(jobj,
@@ -6710,9 +6741,10 @@ zpool_do_status(int argc, char **argv)
 	unsigned long count = 0;
 	status_cbdata_t cb = { 0 };
 	char *cmd = NULL;
+	boolean_t json_output = B_FALSE;
 
 	/* check options */
-	while ((c = getopt(argc, argv, "c:gLPvxDT:")) != -1) {
+	while ((c = getopt(argc, argv, "c:gjLPvxDT:")) != -1) {
 		switch (c) {
 		case 'c':
 			if (cmd != NULL) {
@@ -6740,6 +6772,9 @@ zpool_do_status(int argc, char **argv)
 			break;
 		case 'g':
 			cb.cb_name_flags |= VDEV_NAME_GUID;
+			break;
+		case 'j':
+			json_output = B_TRUE;
 			break;
 		case 'L':
 			cb.cb_name_flags |= VDEV_NAME_FOLLOW_LINKS;
@@ -6790,8 +6825,12 @@ zpool_do_status(int argc, char **argv)
 			cb.vcdl = all_pools_for_each_vdev_run(argc, argv, cmd,
 			    NULL, NULL, 0, 0);
 
-		ret = for_each_pool(argc, argv, B_TRUE, NULL,
-		    jsonify_status_callback, &cb);
+		if (json_output == B_TRUE)
+			ret = for_each_pool(argc, argv, B_TRUE, NULL,
+			    jsonify_status_callback, &cb);
+		else
+			ret = for_each_pool(argc, argv, B_TRUE, NULL,
+			    status_callback, &cb);
 
 		if (cb.vcdl != NULL)
 			free_vdev_cmd_data_list(cb.vcdl);
