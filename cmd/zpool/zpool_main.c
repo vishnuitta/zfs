@@ -346,7 +346,7 @@ get_usage(zpool_help_t idx)
 	case HELP_SCRUB:
 		return (gettext("\tscrub [-s | -p] <pool> ...\n"));
 	case HELP_STATUS:
-		return (gettext("\tstatus [-c [script1,script2,...]] [-gLPvxD]"
+		return (gettext("\tstatus [-c [script1,script2,...]] [-gjLPvxD]"
 		    "[-T d|u] [pool] ... [interval [count]]\n"));
 	case HELP_UPGRADE:
 		return (gettext("\tupgrade\n"
@@ -6555,9 +6555,12 @@ status_callback(zpool_handle_t *zhp, void *data)
 	return (0);
 }
 
+/*
+ * This function returns json format of configuration related to given nv
+ */
 static struct json_object *
-jsonify_status_config(zpool_handle_t *zhp, status_cbdata_t *cb, const char *name,
-    nvlist_t *nv, int depth, boolean_t isspare)
+jsonify_status_config(zpool_handle_t *zhp, status_cbdata_t *cb,
+    const char *name, nvlist_t *nv, int depth, boolean_t isspare)
 {
 	nvlist_t **child;
 	uint_t c, children;
@@ -6570,6 +6573,7 @@ jsonify_status_config(zpool_handle_t *zhp, status_cbdata_t *cb, const char *name
 	char *path = NULL;
 	struct json_object *jobj;
 	struct json_object *obj;
+	struct json_object *jcacheobj, *jspareobj;
 	struct json_object *jarray = json_object_new_array();
 	struct json_object *jsparearray = json_object_new_array();
 	struct json_object *jcachearray = json_object_new_array();
@@ -6601,9 +6605,11 @@ jsonify_status_config(zpool_handle_t *zhp, status_cbdata_t *cb, const char *name
 	jobj = json_object_new_object();
 	json_object_object_add(jobj, "name", json_object_new_string(name));
 	json_object_object_add(jobj, "state", json_object_new_string(state));
-	if(nvlist_lookup_string(nv, ZPOOL_CONFIG_TYPE, &type) == 0)
-		json_object_object_add(jobj, "type", json_object_new_string(type));
-	json_object_object_add(jobj, "children", json_object_new_int64(children));
+	if (nvlist_lookup_string(nv, ZPOOL_CONFIG_TYPE, &type) == 0)
+		json_object_object_add(jobj, "type",
+		    json_object_new_string(type));
+	json_object_object_add(jobj, "children",
+	    json_object_new_int64(children));
 	json_object_object_add(jobj, "islog", json_object_new_int64(islog));
 	json_object_object_add(jobj, "ishole", json_object_new_int64(ishole));
 
@@ -6611,17 +6617,22 @@ jsonify_status_config(zpool_handle_t *zhp, status_cbdata_t *cb, const char *name
 		zfs_nicenum(vs->vs_read_errors, rbuf, sizeof (rbuf));
 		zfs_nicenum(vs->vs_write_errors, wbuf, sizeof (wbuf));
 		zfs_nicenum(vs->vs_checksum_errors, cbuf, sizeof (cbuf));
-		json_object_object_add(jobj, "rbuf", json_object_new_string(rbuf));
-		json_object_object_add(jobj, "wbuf", json_object_new_string(wbuf));
-		json_object_object_add(jobj, "cbuf", json_object_new_string(cbuf));
+		json_object_object_add(jobj, "rbuf",
+		    json_object_new_string(rbuf));
+		json_object_object_add(jobj, "wbuf",
+		    json_object_new_string(wbuf));
+		json_object_object_add(jobj, "cbuf",
+		    json_object_new_string(cbuf));
 	}
 
 	if (nvlist_lookup_uint64(nv, ZPOOL_CONFIG_NOT_PRESENT,
 	    &notpresent) == 0) {
 		verify(nvlist_lookup_string(nv, ZPOOL_CONFIG_PATH, &path) == 0);
-		json_object_object_add(jobj, "wasPath", json_object_new_string(path));
+		json_object_object_add(jobj, "wasPath",
+		    json_object_new_string(path));
 	} else if (vs->vs_aux != 0) {
-		json_object_object_add(jobj, "vs_aux", json_object_new_int64(vs->vs_aux));
+		json_object_object_add(jobj, "vs_aux",
+		    json_object_new_int64(vs->vs_aux));
 	}
 
 	(void) nvlist_lookup_uint64_array(nv, ZPOOL_CONFIG_SCAN_STATS,
@@ -6630,8 +6641,8 @@ jsonify_status_config(zpool_handle_t *zhp, status_cbdata_t *cb, const char *name
 	if (ps && ps->pss_state == DSS_SCANNING &&
 	    vs->vs_scan_processed != 0 && children == 0) {
 		json_object_object_add(jobj, "pss",
-		    json_object_new_string((ps->pss_func == POOL_SCAN_RESILVER) ?
-		    "resilvering" : "repairing"));
+		    json_object_new_string((ps->pss_func == POOL_SCAN_RESILVER)
+		    ? "resilvering" : "repairing"));
 	}
 
 	for (c = 0; c < children; c++) {
@@ -6645,34 +6656,50 @@ jsonify_status_config(zpool_handle_t *zhp, status_cbdata_t *cb, const char *name
 	if (children != 0)
 		json_object_object_add(jobj, "vdev", jarray);
 
-	if (nvlist_lookup_nvlist_array(nv, ZPOOL_CONFIG_L2CACHE,
-	    &child, &children) == 0 && children) {
+	if ((nvlist_lookup_nvlist_array(nv, ZPOOL_CONFIG_L2CACHE,
+	    &child, &children) == 0) && children) {
+		jcachearray = json_object_new_array();
+		jcacheobj = json_object_new_object();
 		for (c = 0; c < children; c++) {
 			vname = zpool_vdev_name(g_zfs, zhp,
 			    child[c], cb->cb_name_flags | VDEV_NAME_TYPE_ID);
 			obj = json_object_new_object();
-			json_object_object_add(obj, "name", json_object_new_string(vname));
+			json_object_object_add(obj, "name",
+			    json_object_new_string(vname));
 			json_object_array_add(jcachearray, obj);
 			free(vname);
 		}
-		json_object_object_add(jobj, "cache", jcachearray);
+		json_object_object_add(jcacheobj, "vdev", jcachearray);
+		json_object_object_add(jcacheobj, "children",
+		    json_object_new_int64(children));
+		json_object_object_add(jobj, "cache", jcacheobj);
 	}
 
-	if (nvlist_lookup_nvlist_array(nv, ZPOOL_CONFIG_SPARES,
-	    &child, &children) == 0 && children) {
+	if ((nvlist_lookup_nvlist_array(nv, ZPOOL_CONFIG_SPARES,
+	    &child, &children) == 0) && children) {
+		jsparearray = json_object_new_array();
+		jspareobj = json_object_new_object();
 		for (c = 0; c < children; c++) {
 			vname = zpool_vdev_name(g_zfs, zhp,
 			    child[c], cb->cb_name_flags | VDEV_NAME_TYPE_ID);
 			obj = json_object_new_object();
-			json_object_object_add(obj, "name", json_object_new_string(vname));
+			json_object_object_add(obj, "name",
+			    json_object_new_string(vname));
 			json_object_array_add(jsparearray, obj);
 			free(vname);
 		}
-		json_object_object_add(jobj, "spares", jsparearray);
+		json_object_object_add(jspareobj, "vdev", jsparearray);
+		json_object_object_add(jspareobj, "children",
+		    json_object_new_int64(children));
+		json_object_object_add(jobj, "spares", jspareobj);
 	}
+
 	return (jobj);
 }
 
+/*
+ * This function prints configuration of given pool in json format
+ */
 int
 jsonify_status_callback(zpool_handle_t *zhp, void *data)
 {
@@ -6706,7 +6733,8 @@ jsonify_status_callback(zpool_handle_t *zhp, void *data)
 	    json_object_new_int64(reason));
 
 	if (config != NULL) {
-		obj = jsonify_status_config(zhp, cbp, zpool_get_name(zhp), nvroot, 0, B_FALSE);
+		obj = jsonify_status_config(zhp, cbp, zpool_get_name(zhp),
+		    nvroot, 0, B_FALSE);
 		json_object_object_add(jobj, "pool", obj);
 	}
 
@@ -6723,6 +6751,7 @@ jsonify_status_callback(zpool_handle_t *zhp, void *data)
  *
  *	-c CMD	For each vdev, run command CMD
  *	-g	Display guid for individual vdev name.
+ *	-j	Prints in json format
  *	-L	Follow links when resolving vdev path name.
  *	-P	Display full path for vdev name.
  *	-v	Display complete error logs

@@ -1,0 +1,145 @@
+{
+  "name": "test_jsonify_pool",
+  "pool": {
+    "cache": {
+      "children": 2,
+      "vdev": [
+        {
+          "name": "/tmp/test_jsonify7.data"
+        },
+        {
+          "name": "/tmp/test_jsonify8.data"
+        }
+      ]
+    },
+    "cbuf": "0",
+    "children": 3,
+    "ishole": 0,
+    "islog": 0,
+    "name": "test_jsonify_pool",
+    "rbuf": "0",
+    "spares": {
+      "children": 2,
+      "vdev": [
+        {
+          "name": "/tmp/test_jsonify9.data"
+        },
+        {
+          "name": "/tmp/test_jsonify10.data"
+        }
+      ]
+    },
+    "state": "ONLINE",
+    "type": "root",
+    "vdev": [
+      {
+        "cbuf": "0",
+        "children": 2,
+        "ishole": 0,
+        "islog": 0,
+        "name": "mirror-0",
+        "rbuf": "0",
+        "state": "ONLINE",
+        "type": "mirror",
+        "vdev": [
+          {
+            "cbuf": "0",
+            "children": 0,
+            "ishole": 0,
+            "islog": 0,
+            "name": "/tmp/test_jsonify1.data",
+            "rbuf": "0",
+            "state": "ONLINE",
+            "type": "file",
+            "wbuf": "0"
+          },
+          {
+            "cbuf": "0",
+            "children": 0,
+            "ishole": 0,
+            "islog": 0,
+            "name": "/tmp/test_jsonify2.data",
+            "rbuf": "0",
+            "state": "ONLINE",
+            "type": "file",
+            "wbuf": "0"
+          }
+        ],
+        "wbuf": "0"
+      },
+      {
+        "cbuf": "0",
+        "children": 2,
+        "ishole": 0,
+        "islog": 0,
+        "name": "mirror-1",
+        "rbuf": "0",
+        "state": "ONLINE",
+        "type": "mirror",
+        "vdev": [
+          {
+            "cbuf": "0",
+            "children": 0,
+            "ishole": 0,
+            "islog": 0,
+            "name": "/tmp/test_jsonify3.data",
+            "rbuf": "0",
+            "state": "ONLINE",
+            "type": "file",
+            "wbuf": "0"
+          },
+          {
+            "cbuf": "0",
+            "children": 0,
+            "ishole": 0,
+            "islog": 0,
+            "name": "/tmp/test_jsonify4.data",
+            "rbuf": "0",
+            "state": "ONLINE",
+            "type": "file",
+            "wbuf": "0"
+          }
+        ],
+        "wbuf": "0"
+      },
+      {
+        "cbuf": "0",
+        "children": 2,
+        "ishole": 0,
+        "islog": 1,
+        "name": "mirror-2",
+        "rbuf": "0",
+        "state": "ONLINE",
+        "type": "mirror",
+        "vdev": [
+          {
+            "cbuf": "0",
+            "children": 0,
+            "ishole": 0,
+            "islog": 0,
+            "name": "/tmp/test_jsonify5.data",
+            "rbuf": "0",
+            "state": "ONLINE",
+            "type": "file",
+            "wbuf": "0"
+          },
+          {
+            "cbuf": "0",
+            "children": 0,
+            "ishole": 0,
+            "islog": 0,
+            "name": "/tmp/test_jsonify6.data",
+            "rbuf": "0",
+            "state": "ONLINE",
+            "type": "file",
+            "wbuf": "0"
+          }
+        ],
+        "wbuf": "0"
+      }
+    ],
+    "wbuf": "0"
+  },
+  "reason": 27,
+  "state": "ONLINE"
+}

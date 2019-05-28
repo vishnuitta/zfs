@@ -822,6 +822,34 @@ test_raidz_pool()
 	return 0
 }
 
+test_jsonify_zpool_status()
+{
+	log_must truncate -s 100MB /tmp/test_jsonify1.data
+	log_must truncate -s 100MB /tmp/test_jsonify2.data
+	log_must truncate -s 100MB /tmp/test_jsonify3.data
+	log_must truncate -s 100MB /tmp/test_jsonify4.data
+	log_must truncate -s 100MB /tmp/test_jsonify5.data
+	log_must truncate -s 100MB /tmp/test_jsonify6.data
+	log_must truncate -s 100MB /tmp/test_jsonify7.data
+	log_must truncate -s 100MB /tmp/test_jsonify8.data
+	log_must truncate -s 100MB /tmp/test_jsonify9.data
+	log_must truncate -s 100MB /tmp/test_jsonify10.data
+
+	log_must $ZPOOL create -f test_jsonify_pool \
+	    mirror /tmp/test_jsonify1.data /tmp/test_jsonify2.data \
+	    mirror /tmp/test_jsonify3.data /tmp/test_jsonify4.data \
+	    log mirror /tmp/test_jsonify5.data /tmp/test_jsonify6.data \
+	    cache /tmp/test_jsonify7.data /tmp/test_jsonify8.data \
+	    spare /tmp/test_jsonify9.data /tmp/test_jsonify10.data
+
+	$ZPOOL status -j test_jsonify_pool | jq -S '.' | cat > /tmp/zpool_status_jsonify.out
+	log_must diff /tmp/zpool_status_jsonify.out $SRC_PATH/tests/cbtest/script/sample_zpool_status_jsonify.out
+
+	log_must rm /tmp/test_jsonify*.data
+
+	return 0
+}
+
 run_fio_test()
 {
 	local fio_pool="fio_pool"
@@ -1255,6 +1283,7 @@ run_pool_test()
 	local stripe_pid mirror_pid raidz_pid
 
 	log_must run_zvol_targetip_tests pool_test_targetip/vol
+	log_must test_jsonify_zpool_status
 	log_must test_stripe_pool pool_test_ss_pool/ss_vol pool_test_ds_pool/ds_vol &
 	stripe_pid=$!
 
