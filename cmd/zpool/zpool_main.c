@@ -65,6 +65,7 @@
 #include "zfeature_common.h"
 
 #include "statcommon.h"
+#include <json-c/json_object.h>
 
 static int zpool_do_create(int, char **);
 static int zpool_do_destroy(int, char **);
@@ -6556,6 +6557,135 @@ status_callback(zpool_handle_t *zhp, void *data)
 	return (0);
 }
 
+static struct json_object *
+jsonify_status_config(zpool_handle_t *zhp, status_cbdata_t *cb, const char *name,
+    nvlist_t *nv, int depth, boolean_t isspare)
+{
+	nvlist_t **child;
+	uint_t c, children;
+	pool_scan_stat_t *ps = NULL;
+	vdev_stat_t *vs;
+	char rbuf[6], wbuf[6], cbuf[6];
+	char *vname;
+	uint64_t notpresent;
+	char *state;
+	char *path = NULL;
+	struct json_object *jobj, *obj;
+
+	if (nvlist_lookup_nvlist_array(nv, ZPOOL_CONFIG_CHILDREN,
+	    &child, &children) != 0)
+		children = 0;
+
+	verify(nvlist_lookup_uint64_array(nv, ZPOOL_CONFIG_VDEV_STATS,
+	    (uint64_t **)&vs, &c) == 0);
+
+	state = zpool_state_to_name(vs->vs_state, vs->vs_aux);
+	if (isspare) {
+		/*
+		 * For hot spares, we use the terms 'INUSE' and 'AVAILABLE' for
+		 * online drives.
+		 */
+		if (vs->vs_aux == VDEV_AUX_SPARED)
+			state = "INUSE";
+		else if (vs->vs_state == VDEV_STATE_HEALTHY)
+			state = "AVAIL";
+	}
+
+	jobj = json_object_new_object();
+	json_object_object_add(jobj, "name", json_object_new_string(name));
+	json_object_object_add(jobj, "state", json_object_new_string(state));
+
+	if (!isspare) {
+		zfs_nicenum(vs->vs_read_errors, rbuf, sizeof (rbuf));
+		zfs_nicenum(vs->vs_write_errors, wbuf, sizeof (wbuf));
+		zfs_nicenum(vs->vs_checksum_errors, cbuf, sizeof (cbuf));
+		json_object_object_add(jobj, "rbuf", json_object_new_string(rbuf));
+		json_object_object_add(jobj, "wbuf", json_object_new_string(wbuf));
+		json_object_object_add(jobj, "cbuf", json_object_new_string(cbuf));
+	}
+
+	if (nvlist_lookup_uint64(nv, ZPOOL_CONFIG_NOT_PRESENT,
+	    &notpresent) == 0) {
+		verify(nvlist_lookup_string(nv, ZPOOL_CONFIG_PATH, &path) == 0);
+		json_object_object_add(jobj, "wasPath", json_object_new_string(path));
+	} else if (vs->vs_aux != 0) {
+		json_object_object_add(jobj, "vs_aux", json_object_new_int64(vs->vs_aux));
+	}
+
+	(void) nvlist_lookup_uint64_array(nv, ZPOOL_CONFIG_SCAN_STATS,
+	    (uint64_t **)&ps, &c);
+
+	if (ps && ps->pss_state == DSS_SCANNING &&
+	    vs->vs_scan_processed != 0 && children == 0) {
+		json_object_object_add(jobj, "pss",
+		    json_object_new_string((ps->pss_func == POOL_SCAN_RESILVER) ?
+		    "resilvering" : "repairing"));
+	}
+
+	for (c = 0; c < children; c++) {
+		uint64_t islog = B_FALSE, ishole = B_FALSE;
+
+		/* Don't print logs or holes here */
+		(void) nvlist_lookup_uint64(child[c], ZPOOL_CONFIG_IS_LOG,
+		    &islog);
+		(void) nvlist_lookup_uint64(child[c], ZPOOL_CONFIG_IS_HOLE,
+		    &ishole);
+		if (islog || ishole)
+			continue;
+		vname = zpool_vdev_name(g_zfs, zhp, child[c],
+		    cb->cb_name_flags | VDEV_NAME_TYPE_ID);
+		obj = jsonify_status_config(zhp, cb, vname, child[c], depth + 2,
+		    isspare);
+		json_object_object_add(jobj, vname, obj);
+		free(vname);
+	}
+	return (jobj);
+}
+
+int
+jsonify_status_callback(zpool_handle_t *zhp, void *data)
+{
+	status_cbdata_t *cbp = data;
+	nvlist_t *config, *nvroot;
+	char *msgid;
+	zpool_status_t reason;
+	zpool_errata_t errata;
+	const char *health;
+	uint_t c;
+	vdev_stat_t *vs;
+	struct json_object *jobj, *obj;
+
+	config = zpool_get_config(zhp, NULL);
+	reason = zpool_get_status(zhp, &msgid, &errata);
+
+	cbp->cb_count++;
+
+	verify(nvlist_lookup_nvlist(config, ZPOOL_CONFIG_VDEV_TREE,
+	    &nvroot) == 0);
+	verify(nvlist_lookup_uint64_array(nvroot, ZPOOL_CONFIG_VDEV_STATS,
+	    (uint64_t **)&vs, &c) == 0);
+	health = zpool_state_to_name(vs->vs_state, vs->vs_aux);
+
+	jobj = json_object_new_object();
+	json_object_object_add(jobj, "name",
+	    json_object_new_string(zpool_get_name(zhp)));
+	json_object_object_add(jobj, "state",
+	    json_object_new_string(health));
+	json_object_object_add(jobj, "reason",
+	    json_object_new_int64(reason));
+
+	if (config != NULL) {
+		obj = jsonify_status_config(zhp, cbp, zpool_get_name(zhp), nvroot, 0, B_FALSE);
+		json_object_object_add(jobj, zpool_get_name(zhp), obj);
+	}
+
+	const char *json_string = json_object_to_json_string_ext(jobj,
+	    JSON_C_TO_STRING_PLAIN);
+	fprintf(stdout, "%s\n", json_string);
+	json_object_put(jobj);
+	return (0);
+}
+
 /*
  * zpool status [-c [script1,script2,...]] [-gLPvx] [-T d|u] [pool] ...
  *              [interval [count]]
@@ -6661,7 +6791,7 @@ zpool_do_status(int argc, char **argv)
 			    NULL, NULL, 0, 0);
 
 		ret = for_each_pool(argc, argv, B_TRUE, NULL,
-		    status_callback, &cb);
+		    jsonify_status_callback, &cb);
 
 		if (cb.vcdl != NULL)
 			free_vdev_cmd_data_list(cb.vcdl);
