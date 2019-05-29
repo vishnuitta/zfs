@@ -3334,11 +3334,6 @@ MODULE_AUTHOR(ZFS_META_AUTHOR);
 MODULE_LICENSE(ZFS_META_LICENSE);
 MODULE_VERSION(ZFS_META_VERSION "-" ZFS_META_RELEASE);
 
-#ifdef _UZFS
-EXPORT_SYMBOL(nvlist_dump_json);
-EXPORT_SYMBOL(nvlist_dump_json_free);
-#endif
-
 EXPORT_SYMBOL(nv_alloc_init);
 EXPORT_SYMBOL(nv_alloc_reset);
 EXPORT_SYMBOL(nv_alloc_fini);
