@@ -13,7 +13,10 @@
  * Copyright (c) 2017 by Delphix. All rights reserved.
  * Copyright © 2017-2019 The OpenEBS Authors
  */
-
+/*
+ * This file is copied from https://github.com/joyent/illumos-joyent/blob/\
+ *  5b6d8a45d43cad27424fe3742fc5420e5e621038/usr/src/lib/libnvpair/nvpair_json.c
+ */
 #include <stdio.h>
 #include <stdlib.h>
 #include <strings.h>
