@@ -11,7 +11,7 @@
 /*
  * Copyright (c) 2014, Joyent, Inc.
  * Copyright (c) 2017 by Delphix. All rights reserved.
- * Copyright © 2017-2019 The OpenEBS Authors
+ * Copyright (c) 2017-2019 The OpenEBS Authors
  */
 /*
  * This file is copied from https://github.com/joyent/illumos-joyent/blob/\
