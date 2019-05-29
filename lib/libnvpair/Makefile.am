@@ -14,10 +14,10 @@ lib_LTLIBRARIES = libnvpair.la
 
 USER_C = \
 	libnvpair.c \
+	nvpair_json.c \
 	nvpair_alloc_system.c
 
 KERNEL_C = \
-	nvpair_json.c \
 	nvpair_alloc_fixed.c \
 	nvpair.c \
 	fnvpair.c
