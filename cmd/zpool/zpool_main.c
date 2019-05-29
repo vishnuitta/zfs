@@ -75,9 +75,7 @@ static int zpool_do_labelclear(int, char **);
 
 static int zpool_do_list(int, char **);
 static int zpool_do_iostat(int, char **);
-#ifdef _UZFS
 static int zpool_do_dump(int, char **);
-#endif
 static int zpool_do_status(int, char **);
 
 static int zpool_do_online(int, char **);
@@ -258,9 +256,7 @@ static zpool_command_t command_table[] = {
 	{ "list",	zpool_do_list,		HELP_LIST		},
 	{ "iostat",	zpool_do_iostat,	HELP_IOSTAT		},
 	{ "status",	zpool_do_status,	HELP_STATUS		},
-#ifdef _UZFS
 	{ "dump",	zpool_do_dump,		HELP_DUMP		},
-#endif
 	{ NULL },
 	{ "online",	zpool_do_online,	HELP_ONLINE		},
 	{ "offline",	zpool_do_offline,	HELP_OFFLINE		},
@@ -6565,9 +6561,13 @@ status_callback(zpool_handle_t *zhp, void *data)
 	return (0);
 }
 
-#ifdef _UZFS
 /*
  * Dumps pool's config in json
+ * The current output is the raw configuration nvlist converted to JSON.
+ * Not all of the dumped values are represented by keys, some are arrays
+ * that represent internal structs. Hence their contents are not considered
+ * stable across different versions.
+ * TODO: convert struct arrays into key:value pairs
  */
 int
 dump_callback(zpool_handle_t *zhp, void *data)
@@ -6605,7 +6605,6 @@ zpool_do_dump(int argc, char **argv)
 	    dump_callback, &cb);
 	return (ret);
 }
-#endif
 
 /*
  * zpool status [-c [script1,script2,...]] [-gLPvx] [-T d|u] [pool] ...
