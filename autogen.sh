@@ -1,4 +1,4 @@
 #!/bin/sh
 
-autoreconf -fiv
+autoreconf -fiv --include tests/cstor
 rm -Rf autom4te.cache
