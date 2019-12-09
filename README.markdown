@@ -14,6 +14,8 @@ uZFS does the following:
 -   The DMU Layer(or ZVOL objects) IO operations are exposed as API that can be consumed by any embedded library as opposed to accessing via system calls. 
 -   The uZFS CLI operations that interact directly with the embedded IOCTL server in uZFS. uZFS CLI will be used to create Pool(zpool) and Volumes(zvol).
 
+For a full list of changes between ZFS and uZFS - refer to [wiki](https://github.com/openebs/cstor/wiki/Using-uZFS-for-storing-cStor-Volume-Data)
+
 uZFS embedds the [cStor Data Engine](https://github.com/openebs/libcstor) that helps with:
 -   Exposing a Logical Block volume as a network service
 -   Read/Write the data from/to the underlying uZFS ZVOL
