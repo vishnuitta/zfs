@@ -66,6 +66,9 @@
 #include "libzfs_impl.h"
 #include <libzfs.h>
 #include <libuzfs.h>
+#ifdef _UZFS
+#include <zrepl_mgmt.h>
+#endif
 
 /*
  * Intermediate structures used to gather configuration information.
@@ -1532,13 +1535,21 @@ zpool_open_func(void *arg)
 	free(dupname);
 	if (error)
 		return;
+#ifdef  _UZFS
+	LOG_INFO("Verifying pool existence on the device %s", rn->rn_name);
+#endif
 
 	/*
 	 * Ignore failed stats.  We only want regular files and block devices.
 	 */
 	if (stat64(rn->rn_name, &statbuf) != 0 ||
-	    (!S_ISREG(statbuf.st_mode) && !S_ISBLK(statbuf.st_mode)))
+	    (!S_ISREG(statbuf.st_mode) && !S_ISBLK(statbuf.st_mode))) {
+#ifdef  _UZFS
+		LOG_ERR("Skipping %s device due to failure in read stats "
+		    "or it is not a regular file/block device", rn->rn_name);
+#endif
 		return;
+	}
 
 	/*
 	 * Preferentially open using O_DIRECT to bypass the block device
@@ -1549,26 +1560,43 @@ zpool_open_func(void *arg)
 	if ((fd < 0) && (errno == EINVAL))
 		fd = open(rn->rn_name, O_RDONLY);
 
-	if (fd < 0)
+	if (fd < 0) {
+#ifdef  _UZFS
+		LOG_ERR("Skipping %s device due to error in open",
+		    rn->rn_name);
+#endif
 		return;
+	}
 
 	/*
 	 * This file is too small to hold a zpool
 	 */
 	if (S_ISREG(statbuf.st_mode) && statbuf.st_size < SPA_MINDEVSIZE) {
 		(void) close(fd);
+#ifdef  _UZFS
+		LOG_INFO("Skipping %s device due to small file size",
+		    rn->rn_name);
+#endif
 		return;
 	}
 
 	error = zpool_read_label(fd, &config, &num_labels);
 	if (error != 0) {
 		(void) close(fd);
+#ifdef  _UZFS
+		LOG_ERR("Skipping %s device due to error in reading labels",
+		    rn->rn_name);
+#endif
 		return;
 	}
 
 	if (num_labels == 0) {
 		(void) close(fd);
 		nvlist_free(config);
+#ifdef  _UZFS
+		LOG_INFO("Skipping %s device due to no labels on device",
+		    rn->rn_name);
+#endif
 		return;
 	}
 
@@ -1581,10 +1609,17 @@ zpool_open_func(void *arg)
 	if (error || (rn->rn_vdev_guid && rn->rn_vdev_guid != vdev_guid)) {
 		(void) close(fd);
 		nvlist_free(config);
+#ifdef  _UZFS
+		LOG_ERR("Skipping %s device due to error(%d) or mismatch "
+		    "of guid", rn->rn_name, error);
+#endif
 		return;
 	}
 
 	(void) close(fd);
+#ifdef  _UZFS
+	LOG_INFO("Verified the device %s for pool existence", rn->rn_name);
+#endif
 
 	rn->rn_config = config;
 	rn->rn_num_labels = num_labels;
@@ -1789,6 +1824,10 @@ zpool_find_import_blkid(libzfs_handle_t *hdl, kmutex_t *lock,
 	if (error != 0)
 		return (error);
 
+#ifdef _UZFS
+	LOG_INFO("Iterating over all the devices to find zfs devices "
+	    "using blkid");
+#endif
 	error = blkid_probe_all_new(cache);
 	if (error != 0) {
 		blkid_put_cache(cache);
@@ -1839,6 +1878,10 @@ zpool_find_import_blkid(libzfs_handle_t *hdl, kmutex_t *lock,
 
 	blkid_dev_iterate_end(iter);
 	blkid_put_cache(cache);
+
+#ifdef _UZFS
+	LOG_INFO("Iterated over cache devices to find zfs devices");
+#endif
 
 	return (0);
 }
