@@ -16,7 +16,9 @@ if [ -z "$LOGLEVEL" ]; then
 fi
 
 # Disabling coredumps by default in the shell where zrepl runs
-ulimit -c 0
+if [ -z "$ENABLE_COREDUMP" ]; then
+	ulimit -c 0
+fi
 # Being ulimit shell specific, ulimit -c in container shows as unlimited
 
 echo "sleeping for 2 sec"
