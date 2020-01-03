@@ -17,9 +17,15 @@ fi
 
 # Disabling coredumps by default in the shell where zrepl runs
 if [ -z "$ENABLE_COREDUMP" ]; then
+	echo "Disabling dumping core"
 	ulimit -c 0
+else
+	echo "Enabling coredumps"
+	ulimit -c unlimited
+	cd /var/openebs/sparse || exit
 fi
-# Being ulimit shell specific, ulimit -c in container shows as unlimited
+# ulimit being shell specific, ulimit -c in container shows as unlimited
+
 
 echo "sleeping for 2 sec"
 sleep 2
