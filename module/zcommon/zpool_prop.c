@@ -73,6 +73,11 @@ zpool_prop_init(void)
 	    PROP_DEFAULT, ZFS_TYPE_POOL, "<file> | none", "CACHEFILE");
 	zprop_register_string(ZPOOL_PROP_COMMENT, "comment", NULL,
 	    PROP_DEFAULT, ZFS_TYPE_POOL, "<comment-string>", "COMMENT");
+#ifdef	_UZFS
+	zprop_register_string(ZPOOL_PROP_UZFS_READONLY, "io.openebs:readonly",
+	    "", PROP_DEFAULT, ZFS_TYPE_POOL, "on | off", "ZPOOL_READONLY");
+#endif
+
 
 	/* readonly number properties */
 	zprop_register_number(ZPOOL_PROP_SIZE, "size", 0, PROP_READONLY,
