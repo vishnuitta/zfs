@@ -329,7 +329,7 @@ zvol_create_cb(objset_t *os, void *arg, cred_t *cr, dmu_tx_t *tx)
 }
 
 #ifdef  _UZFS
-
+#if 0
 static const char *
 status_to_str(zvol_info_t *zv)
 {
@@ -347,10 +347,64 @@ status_to_str(zvol_info_t *zv)
 		return ("Rebuilding");
 	return ("Degraded");
 }
+#endif
+
+uint64_t diskStats[201][301][11];
+uint64_t diskIOSize[201][301][11];
+uint64_t dbufStats[201][301][11];
+uint64_t dbufIOSize[201][301][11];
+uint64_t zioStats[201][301][11];
+uint64_t zioIOSize[201][301][11];
+extern uint64_t total_disk_ios;
+extern uint64_t total_disk_ios_size;
 
 int
 uzfs_ioc_stats(zfs_cmd_t *zc, nvlist_t *nvl)
 {
+	int i, j, k;
+	for (i = 0; i < 201; i++)
+		for (j = 0; j < 301; j++)
+			for (k = 0; k < 11; k++) {
+#if 0
+				if (diskStats[i][j][k] != 0) {
+					printf("di:%d: %d: %d: %lu %lu\n", i, j, k, diskStats[i][j][k], diskIOSize[i][j][k]);
+				}
+#endif
+				if (dbufStats[i][j][k] != 0) {
+					printf("db:%d: %d: %d: %lu %lu\n", i, j, k, dbufStats[i][j][k], dbufIOSize[i][j][k]);
+					dbufStats[i][j][k] = dbufIOSize[i][j][k] = 0;
+				}
+				if (zioStats[i][j][k] != 0) {
+					printf("zi:%d: %d: %d: %lu %lu\n\n", i, j, k, zioStats[i][j][k], zioIOSize[i][j][k]);
+					zioStats[i][j][k] = zioIOSize[i][j][k] = 0;
+				}
+			}
+
+	printf("Total disk IOs: %lu size: %lu\n", total_disk_ios, total_disk_ios_size);
+	total_disk_ios = total_disk_ios_size = 0;
+
+#if 0
+	for (i = 0; i < 101; i++) {
+		cnt = perfStats[i].new_writes_1 + perfStats[i].over_writes_1 +
+		    perfStats[i].new_writes_3 + perfStats[i].over_writes_3 +
+		    perfStats[i].sync_new_writes_1 + perfStats[i].sync_over_writes_1 +
+		    perfStats[i].sync_new_writes_3 + perfStats[i].sync_over_writes_3 +
+		    perfStats[i].writes_1 + perfStats[i].writes_3;
+		if (cnt != 0) {
+			printf("dsObj:%d obj1New:%lu Over:%lu obj3New:%lu Over:%lu "
+			    "obj1SyncNew:%lu Over:%lu obj3SyncNew:%lu Over:%lu "
+			    "TotalWrites1: %lu Writes3: %lu ios: %lu iosize: %lu "
+			    "diskIOs: %lu diskIOsSize: %lu\n",
+			    i, perfStats[i].new_writes_1, perfStats[i].over_writes_1,
+			    perfStats[i].new_writes_3, perfStats[i].over_writes_3,
+			    perfStats[i].sync_new_writes_1, perfStats[i].sync_over_writes_1,
+			    perfStats[i].sync_new_writes_3, perfStats[i].sync_over_writes_3,
+			    perfStats[i].writes_1, perfStats[i].writes_3, total_ios, total_ios_size,
+			    total_disk_ios, total_disk_ios_size);
+		}
+	}
+#endif
+#if 0
 	zvol_info_t *zv = NULL;
 	int i;
 	uint64_t len;
@@ -515,6 +569,7 @@ uzfs_ioc_stats(zfs_cmd_t *zc, nvlist_t *nvl)
 
 		mutex_exit(&spa_namespace_lock);
 	}
+#endif
 	return (0);
 }
 #endif

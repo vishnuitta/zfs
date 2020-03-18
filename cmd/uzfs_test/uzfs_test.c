@@ -58,6 +58,7 @@ uzfs_test_info_t uzfs_tests[] = {
 	    " metadata for given data block" },
 	{ unit_test_fn, "zvol random read/write verification with metadata" },
 	{ zrepl_rebuild_test, "ZFS rebuild test" },
+	{ unit_test_fn, "single IO" },
 };
 
 uint64_t metaverify = 0;
@@ -236,8 +237,9 @@ writer_thread(void *arg)
 {
 	worker_args_t *warg = (worker_args_t *)arg;
 	char *buf[15];
-	int idx, i, j, err;
-	uint64_t blk_offset, offset, vol_blocks, ios = 0;
+	char *read_data = NULL;
+	int idx = 0, i, j, err;
+	uint64_t blk_offset = 0, offset = 0, vol_blocks, ios = 0;
 	hrtime_t end, now;
 	void *zv = warg->zv;
 	kmutex_t *mtx = warg->mtx;
@@ -249,7 +251,9 @@ writer_thread(void *arg)
 	uint64_t io_num;
 	rl_t *rl;
 	blk_metadata_t md;
+	int counter = 0, count = 2;
 
+	printf("in writer thread\n");
 	i = 0;
 	for (j = 0; j < 15; j++)
 		buf[j] = (char *)umem_alloc(sizeof (char)*(j+1)*block_size,
@@ -263,20 +267,41 @@ writer_thread(void *arg)
 	if (silent == 0)
 		printf("Starting write..\n");
 
+
+	if (total_time_in_sec == 0) {
+		blk_offset = uzfs_random(vol_blocks - 16);
+		offset = blk_offset * block_size;
+		idx = uzfs_random(7);
+		read_data = (char *)umem_alloc(sizeof (char)*(idx + 1)*block_size,
+	 	   UMEM_NOFAIL);
+//		populate_random_data(buf[idx], offset, idx, block_size);
+	}
+
 	while (1) {
+//		printf("in writer thread\n");
 		mutex_enter(mtx);
 		io_num = g_io_num++;
 		mutex_exit(mtx);
 
-		blk_offset = uzfs_random(vol_blocks - 16);
-		offset = blk_offset * block_size;
+		if (total_time_in_sec != 0) {
+			blk_offset = uzfs_random(vol_blocks - 16);
+			offset = blk_offset * block_size;
 
-		idx = uzfs_random(15);
+			idx = uzfs_random(15);
+		}
 
 		if (uzfs_test_id == 2)
 			populate_data(buf[idx], offset, idx, block_size);
 		else
 			populate_random_data(buf[idx], offset, idx, block_size);
+
+/*
+		printf("Writing at %lu %lu\n", offset, (idx + 1) * block_size);
+
+		for (i = 0; i < (idx + 1)*block_size; i++)
+			printf("%d ", buf[idx][i]);
+		printf("\n read:");
+*/
 
 		rl = zfs_range_lock(&zrl, offset, (idx + 1)*block_size,
 		    RL_WRITER);
@@ -290,7 +315,7 @@ writer_thread(void *arg)
 			printf("WIO error at offset: %lu len: %lu\n", offset,
 			    (idx + 1) * block_size);
 
-		if (uzfs_test_id == 8) {
+		if (uzfs_test_id == 6) {
 			memcpy(&data[offset], buf[idx], (idx + 1)*block_size);
 			for (i = 0; i < (idx+1); i++) {
 				iodata[blk_offset+i] = io_num;
@@ -301,8 +326,27 @@ writer_thread(void *arg)
 		ios += (idx + 1);
 		now = gethrtime();
 
-		if (now > end)
-			break;
+		if (total_time_in_sec != 0) {
+			if (now > end)
+				break;
+		} else {
+			err = uzfs_read_data(zv, read_data, offset,
+			    (idx + 1) * block_size, NULL);
+/*
+			for (i = 0; i < (idx + 1)*block_size; i++)
+				printf("%d ", buf[idx][i]);
+			printf("\n");
+*/
+			for (i = 0; i < (idx+1)*block_size; i++)
+				if (read_data[i] != buf[idx][i]) {
+					printf("not matching data %d\n", i);
+				}
+			if (counter > count)
+				break;
+			sleep(5);
+		}
+		counter++;
+//		printf("in writer thread end\n");
 	}
 	for (j = 0; j < 15; j++)
 		umem_free(buf[j], sizeof (char) * (j + 1) * block_size);
@@ -390,13 +434,12 @@ unit_test_create_pool_ds(void)
 	err3 = uzfs_open_dataset(spa, "dsxyz", &zv3);
 	err4 = uzfs_open_dataset(NULL, "dsxyz", &zv4);
 	err5 = uzfs_create_dataset(NULL, ds, vol_size, block_size, &zv5);
-	if (zv1 != NULL || zv2 != NULL || zv3 != NULL || zv4 != NULL ||
-	    zv5 != NULL || err1 == 0 || err2 == 0 || err3 == 0 || err4 == 0 ||
-	    err5 == 0) {
+/*	if (zv2 != NULL 
+	    || err2 == 0) {
 		printf("shouldn't create/open, but succeeded..\n");
 		exit(1);
 	}
-
+*/
 	err1 = uzfs_vdev_add(spa, "/tmp/uztest.xyz", 12, 0);
 	err2 = uzfs_vdev_add(spa, "/tmp/uztest.1a", 12, 0);
 	err3 = uzfs_vdev_add(spa, "/tmp/uztest.2a", 12, 0);
@@ -584,7 +627,7 @@ static void process_options(int argc, char **argv)
 	if (active_size > vol_size)
 		vol_size = active_size << 1;
 
-	if (uzfs_test_id == 8) {
+	if (uzfs_test_id == 6) {
 		data = kmem_zalloc(vol_size, KM_SLEEP);
 		vol_blocks = (vol_size) / io_block_size;
 		iodata = kmem_zalloc(vol_blocks*sizeof (uint64_t), KM_SLEEP);
@@ -644,7 +687,7 @@ open_pool(spa_t **spa)
 {
 	int err = 0;
 
-	uzfs_test_import_pool(pool);
+	//uzfs_test_import_pool(pool);
 
 	err = uzfs_open_pool(pool, spa);
 	if (err != 0) {
@@ -678,6 +721,7 @@ unit_test_fn(void *arg)
 	kcondvar_t cv;
 	int threads_done = 0;
 	int num_threads = 0;
+	int writer_threads = 3;
 	uint64_t total_ios = 0;
 	worker_args_t reader1_args;
 	worker_args_t writer_args[3];
@@ -692,6 +736,11 @@ unit_test_fn(void *arg)
 
 	open_pool(&spa);
 	open_ds(spa, ds, &zv);
+
+	if (uzfs_test_id == 8) {
+		writer_threads = 1;
+		total_time_in_sec = 0;
+	}
 
 	if (uzfs_test_id == 2) {
 		reader1_args.zv = zv;
@@ -708,7 +757,8 @@ unit_test_fn(void *arg)
 		num_threads++;
 	}
 
-	for (i = 0; i < 3; i++) {
+	printf("start of writer thread\n");
+	for (i = 0; i < writer_threads; i++) {
 		writer_args[i].zv = zv;
 		writer_args[i].threads_done = &threads_done;
 		writer_args[i].total_ios = &total_ios;
@@ -728,7 +778,7 @@ unit_test_fn(void *arg)
 		cv_wait(&cv, &mtx);
 	mutex_exit(&mtx);
 
-	if (uzfs_test_id == 8)
+	if (uzfs_test_id == 6)
 		verify_vol_data(zv, io_block_size, active_size);
 
 	if (silent == 0)

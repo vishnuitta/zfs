@@ -592,6 +592,36 @@ zio_bookmark_compare(const void *x1, const void *x2)
 
 /*
  * ==========================================================================
+ * Reset the fields like I/O (read, write, free, etc)
+ * ==========================================================================
+ */
+zio_t *
+zio_reset(zio_t *zio, const blkptr_t *bp, zio_type_t type,
+    zio_done_func_t *done, void *private, enum zio_stage pipeline)
+{
+	if (bp != NULL) {
+		zio->io_bp = (blkptr_t *)bp;
+		zio->io_bp_copy = *bp;
+		zio->io_bp_orig = *bp;
+		if (type != ZIO_TYPE_WRITE ||
+		    zio->io_child_type == ZIO_CHILD_DDT)
+			zio->io_bp = &zio->io_bp_copy;	/* so caller can free */
+		if (zio->io_child_type == ZIO_CHILD_LOGICAL)
+			zio->io_logical = zio;
+		if (zio->io_child_type > ZIO_CHILD_GANG && BP_IS_GANG(bp))
+			pipeline |= ZIO_GANG_STAGES;
+	}
+
+	zio->io_type = type;
+	zio->io_done = done;
+	zio->io_private = private;
+	zio->io_orig_pipeline = zio->io_pipeline = pipeline;
+
+	return (zio);
+}
+
+/*
+ * ==========================================================================
  * Create the various types of I/O (read, write, free, etc)
  * ==========================================================================
  */
@@ -693,6 +723,23 @@ zio_destroy(zio_t *zio)
 	mutex_destroy(&zio->io_lock);
 	cv_destroy(&zio->io_cv);
 	kmem_cache_free(zio_cache, zio);
+}
+
+zio_t *
+zio_null_buf(zio_t *pio, spa_t *spa, uint64_t txg,
+    abd_t *data, uint64_t lsize, uint64_t psize, const zio_prop_t *zp,
+    zio_done_func_t *done, void *private, zio_priority_t priority, enum zio_flag flags,
+    const zbookmark_phys_t *zb)
+{
+	zio_t *zio;
+
+	zio = zio_create(pio, spa, txg, NULL, data, lsize, psize, done, private,
+	    ZIO_TYPE_NULL, priority, flags, NULL, 0, zb,
+	    ZIO_STAGE_OPEN, ZIO_INTERLOCK_PIPELINE);
+
+	zio->io_prop = *zp;
+
+	return (zio);
 }
 
 zio_t *
@@ -863,7 +910,7 @@ zio_write(zio_t *pio, spa_t *spa, uint64_t txg, blkptr_t *bp,
 zio_t *
 zio_rewrite(zio_t *pio, spa_t *spa, uint64_t txg, blkptr_t *bp, abd_t *data,
     uint64_t size, zio_done_func_t *done, void *private,
-    zio_priority_t priority, enum zio_flag flags, zbookmark_phys_t *zb)
+    zio_priority_t priority, enum zio_flag flags, const zbookmark_phys_t *zb)
 {
 	zio_t *zio;
 
@@ -1389,6 +1436,18 @@ zio_write_compress(zio_t *zio)
 				zio_buf_free(cbuf, lsize);
 				psize = lsize;
 			} else {
+#if 0
+				if ((zio->io_bookmark.zb_objset >= 0) &&
+				    (zio->io_bookmark.zb_object == 1) &&
+				    (zio->io_bookmark.zb_level == 0) &&
+				    (zio->io_bookmark.zb_blkid >= 0)) {
+					char *buf = (char *)abd_to_buf(zio->io_abd);
+					printf("p:%lu l:%lu blkid:%lu %c%c%c%c:%c%c%c%c\n",
+					    psize, lsize, zio->io_bookmark.zb_blkid,
+					    buf[0], buf[1], buf[2], buf[3], buf[lsize-4],
+					    buf[lsize-3], buf[lsize-2], buf[lsize-1]);
+				}
+#endif
 				abd_t *cdata = abd_get_from_buf(cbuf, lsize);
 				abd_take_ownership_of_buf(cdata, B_TRUE);
 				abd_zero_off(cdata, psize, rounded - psize);
@@ -3015,6 +3074,18 @@ zio_allocate_dispatch(spa_t *spa)
 	zio_taskq_dispatch(zio, ZIO_TASKQ_ISSUE, B_TRUE);
 }
 
+#if 0
+static boolean_t
+is_interested_zio(zio_t *zio)
+{
+	if ((zio->io_bookmark.zb_objset != DMU_META_OBJSET) &&
+	    ((zio->io_bookmark.zb_object == 1) ||
+	    (zio->io_bookmark.zb_object == 3)))
+	       return B_TRUE;
+	return B_FALSE;
+}
+#endif
+
 static int
 zio_dva_allocate(zio_t *zio)
 {
@@ -3023,7 +3094,12 @@ zio_dva_allocate(zio_t *zio)
 	blkptr_t *bp = zio->io_bp;
 	int error;
 	int flags = 0;
-
+#if 0
+	if (is_interested_zio(zio)) {
+		if (zio_wait_for_children(zio, ZIO_CHILD_VDEV_BIT, ZIO_WAIT_DONE))
+			return (ZIO_PIPELINE_STOP);
+	}
+#endif
 	if (zio->io_gang_leader == NULL) {
 		ASSERT(zio->io_child_type > ZIO_CHILD_GANG);
 		zio->io_gang_leader = zio;
@@ -3163,6 +3239,8 @@ zio_free_zil(spa_t *spa, uint64_t txg, blkptr_t *bp)
  * ==========================================================================
  */
 
+extern uint64_t zioStats[201][301][11];
+extern uint64_t zioIOSize[201][301][11];
 
 /*
  * Issue an I/O to the underlying vdev. Typically the issue pipeline
@@ -3276,6 +3354,18 @@ zio_vdev_io_start(zio_t *zio)
 
 	if (vd->vdev_ops->vdev_op_leaf &&
 	    (zio->io_type == ZIO_TYPE_READ || zio->io_type == ZIO_TYPE_WRITE)) {
+
+		if ((zio->io_type == ZIO_TYPE_WRITE) && (zio->io_done != vdev_queue_agg_io_done)) {
+			if ((zio->io_bookmark.zb_objset >= 0) && (zio->io_bookmark.zb_object >= 0) && (zio->io_bookmark.zb_level >= 0) &&
+			    (zio->io_bookmark.zb_objset < 200) && (zio->io_bookmark.zb_object < 300) && (zio->io_bookmark.zb_level < 10)) {
+				zioStats[zio->io_bookmark.zb_objset][zio->io_bookmark.zb_object][zio->io_bookmark.zb_level]++;
+				zioIOSize[zio->io_bookmark.zb_objset][zio->io_bookmark.zb_object][zio->io_bookmark.zb_level] += zio->io_size;
+			}
+			else {
+				zioStats[200][300][10]++;
+				zioIOSize[200][300][10] += zio->io_size;
+			}
+		}
 
 		if (zio->io_type == ZIO_TYPE_READ && vdev_cache_read(zio))
 			return (ZIO_PIPELINE_CONTINUE);

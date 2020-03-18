@@ -487,6 +487,7 @@ txg_sync_thread(dsl_pool_t *dp)
 	tx_state_t *tx = &dp->dp_tx;
 	callb_cpr_t cpr;
 	clock_t start, delta;
+	uint64_t dirty_amt;
 
 	(void) spl_fstrans_mark();
 	txg_thread_enter(tx, &cpr);
@@ -547,6 +548,7 @@ txg_sync_thread(dsl_pool_t *dp)
 		    txg, tx->tx_quiesce_txg_waiting, tx->tx_sync_txg_waiting);
 		mutex_exit(&tx->tx_sync_lock);
 
+		dirty_amt = dp->dp_dirty_pertxg[txg & TXG_MASK];
 		start = ddi_get_lbolt();
 		timestamp = gethrtime();
 		spa_sync(spa, txg);
@@ -556,6 +558,7 @@ txg_sync_thread(dsl_pool_t *dp)
 			zfs_ereport_post(FM_EREPORT_ZFS_SYNC_SLOW, spa,
 			    NULL, NULL, 0, 0);
 		}
+		printf("spa_sync: txg: %lu dirty: %lu time: %lld\n", txg, dirty_amt, timestamp);
 
 		mutex_enter(&tx->tx_sync_lock);
 		tx->tx_synced_txg = txg;

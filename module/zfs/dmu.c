@@ -53,6 +53,8 @@
 #ifdef _KERNEL
 #include <sys/vmsystm.h>
 #include <sys/zfs_znode.h>
+#else
+#include <uzfs_mgmt.h>
 #endif
 
 /*
@@ -1003,19 +1005,141 @@ dmu_write_impl(dmu_buf_t **dbp, int numbufs, uint64_t offset, uint64_t size,
 	}
 }
 
+#if 0
+static void
+debug_dmu_write_impl(dmu_buf_t **dbp, int numbufs, uint64_t offset, uint64_t size,
+    const void *buf, dmu_tx_t *tx)
+{
+	int i;
+
+	for (i = 0; i < numbufs; i++) {
+		uint64_t tocpy;
+		int64_t bufoff;
+		dmu_buf_t *db = dbp[i];
+
+		ASSERT(size > 0);
+
+		bufoff = offset - db->db_offset;
+		tocpy = MIN(db->db_size - bufoff, size);
+
+		ASSERT(i == 0 || i == numbufs-1 || tocpy == db->db_size);
+
+		if (tocpy == db->db_size)
+			debug_dmu_buf_will_fill(db, tx);
+		else
+			dmu_buf_will_dirty(db, tx);
+
+		(void) memcpy((char *)db->db_data + bufoff, buf, tocpy);
+
+		if (tocpy == db->db_size)
+			dmu_buf_fill_done(db, tx);
+
+		offset += tocpy;
+		size -= tocpy;
+		buf = (char *)buf + tocpy;
+	}
+}
+#endif
+
+//perf_stats_t perfStats[101];
+
+uint64_t total_ios_size;
+uint64_t total_ios;
+
+uint64_t total_disk_ios_size;
+uint64_t total_disk_ios;
+
+#if 0
+void
+debug_dmu_write(objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
+    const void *buf, dmu_tx_t *tx)
+{
+	dmu_buf_t **dbp;
+	int numbufs;
+//	int i;
+//	dmu_buf_impl_t *dbpi;
+//	dva_t *dva;
+	uint64_t dsobj = (os == NULL) ? 100 :
+	    (((os->os_dsl_dataset) == NULL) ? 100 : os->os_dsl_dataset->ds_object);
+
+	if (dsobj >= 100)
+		dsobj = 100;
+
+	if (size == 0)
+		return;
+
+	if (object == 1) {
+		total_ios_size += size;
+		total_ios++;
+	}
+
+	VERIFY0(dmu_buf_hold_array(os, object, offset, size,
+	    FALSE, FTAG, &numbufs, &dbp));
+	debug_dmu_write_impl(dbp, numbufs, offset, size, buf, tx);
+	for (i = 0; i < numbufs; i++) {
+		dbpi = (dmu_buf_impl_t *)dbp[i];
+		dva = &(dbpi->db_blkptr->blk_dva[0]);
+		if (dva == NULL) {
+			if (object == 1)
+				perfStats[dsobj].new_writes_1++;
+			if (object == 3)
+				perfStats[dsobj].new_writes_3++;
+		} else {
+			if (object == 1)
+				perfStats[dsobj].over_writes_1++;
+			if (object == 3)
+				perfStats[dsobj].over_writes_3++;
+		}
+//		printf("%d: obj: %lu offset: %lu size: %lu vd:off:%llu:%llu\n",
+//		    i, dbp[i]->db_object, dbp[i]->db_offset, dbp[i]->db_size,
+//		    (dva != NULL) ? DVA_GET_VDEV(dva) : 0, (dva != NULL) ? DVA_GET_OFFSET(dva) : 0);
+	}
+	dmu_buf_rele_array(dbp, numbufs, FTAG);
+}
+#endif
+
 void
 dmu_write(objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
     const void *buf, dmu_tx_t *tx)
 {
 	dmu_buf_t **dbp;
 	int numbufs;
+#if 0
+	int i;
+	dmu_buf_impl_t *dbpi;
+	dva_t *dva;
+	uint64_t dsobj = (os == NULL) ? 100 :
+	    (((os->os_dsl_dataset) == NULL) ? 100 : os->os_dsl_dataset->ds_object);
 
+	if (dsobj >= 100)
+		dsobj = 100;
+#endif
 	if (size == 0)
 		return;
 
 	VERIFY0(dmu_buf_hold_array(os, object, offset, size,
 	    FALSE, FTAG, &numbufs, &dbp));
 	dmu_write_impl(dbp, numbufs, offset, size, buf, tx);
+#if 0
+	for (i = 0; i < numbufs; i++) {
+		dbpi = (dmu_buf_impl_t *)dbp[i];
+		dva = &(dbpi->db_blkptr->blk_dva[0]);
+		if (dva == NULL) {
+			if (object == 1)
+				perfStats[dsobj].sync_new_writes_1++;
+			if (object == 3)
+				perfStats[dsobj].sync_new_writes_3++;
+		} else {
+			if (object == 1)
+				perfStats[dsobj].sync_over_writes_1++;
+			if (object == 3)
+				perfStats[dsobj].sync_over_writes_3++;
+		}
+//		printf("%d: obj: %lu offset: %lu size: %lu vd:off:%llu:%llu\n",
+//		    i, dbp[i]->db_object, dbp[i]->db_offset, dbp[i]->db_size,
+//		    (dva != NULL) ? DVA_GET_VDEV(dva) : 0, (dva != NULL) ? DVA_GET_OFFSET(dva) : 0);
+	}
+#endif
 	dmu_buf_rele_array(dbp, numbufs, FTAG);
 }
 
@@ -1025,13 +1149,43 @@ dmu_write_by_dnode(dnode_t *dn, uint64_t offset, uint64_t size,
 {
 	dmu_buf_t **dbp;
 	int numbufs;
+#if 0
+	int i;
+	dmu_buf_impl_t *dbpi;
+	dva_t *dva;
+	objset_t *os = dn->dn_objset;
+	uint64_t dsobj = (os == NULL) ? 100 :
+	    (((os->os_dsl_dataset) == NULL) ? 100 : os->os_dsl_dataset->ds_object);
 
+	if (dsobj >= 100)
+		dsobj = 100;
+#endif
 	if (size == 0)
 		return;
 
 	VERIFY0(dmu_buf_hold_array_by_dnode(dn, offset, size,
 	    FALSE, FTAG, &numbufs, &dbp, DMU_READ_PREFETCH));
 	dmu_write_impl(dbp, numbufs, offset, size, buf, tx);
+#if 0
+	for (i = 0; i < numbufs; i++) {
+		dbpi = (dmu_buf_impl_t *)dbp[i];
+		dva = &(dbpi->db_blkptr->blk_dva[0]);
+		if (dva == NULL) {
+			if (dn->dn_object == 1)
+				perfStats[dsobj].sync_new_writes_1++;
+			if (dn->dn_object == 3)
+				perfStats[dsobj].sync_new_writes_3++;
+		} else {
+			if (dn->dn_object == 1)
+				perfStats[dsobj].sync_over_writes_1++;
+			if (dn->dn_object == 3)
+				perfStats[dsobj].sync_over_writes_3++;
+		}
+//		printf("%d: obj: %lu offset: %lu size: %lu vd:off:%llu:%llu\n",
+//		    i, dbp[i]->db_object, dbp[i]->db_offset, dbp[i]->db_size,
+//		    (dva != NULL) ? DVA_GET_VDEV(dva) : 0, (dva != NULL) ? DVA_GET_OFFSET(dva) : 0);
+	}
+#endif
 	dmu_buf_rele_array(dbp, numbufs, FTAG);
 }
 
@@ -2007,13 +2161,18 @@ dmu_write_policy(objset_t *os, dnode_t *dn, int level, int wp, zio_prop_t *zp)
 		    compress != ZIO_COMPRESS_OFF && zfs_nopwrite_enabled);
 	}
 
-	zp->zp_checksum = checksum;
+	if (type == DMU_OT_ZVOL) {
+		zp->zp_checksum = ZIO_CHECKSUM_OFF;
+		zp->zp_copies = 1;
+	} else {
+		zp->zp_checksum = checksum;
+		zp->zp_copies = MIN(copies, spa_max_replication(os->os_spa));
+	}
 	zp->zp_compress = compress;
 	ASSERT3U(zp->zp_compress, !=, ZIO_COMPRESS_INHERIT);
 
 	zp->zp_type = (wp & WP_SPILL) ? dn->dn_bonustype : type;
 	zp->zp_level = level;
-	zp->zp_copies = MIN(copies, spa_max_replication(os->os_spa));
 	zp->zp_dedup = dedup;
 	zp->zp_dedup_verify = dedup && dedup_verify;
 	zp->zp_nopwrite = nopwrite;
@@ -2262,6 +2421,7 @@ EXPORT_SYMBOL(dmu_free_long_object);
 EXPORT_SYMBOL(dmu_read);
 EXPORT_SYMBOL(dmu_read_by_dnode);
 EXPORT_SYMBOL(dmu_write);
+EXPORT_SYMBOL(debug_dmu_write);
 EXPORT_SYMBOL(dmu_write_by_dnode);
 EXPORT_SYMBOL(dmu_prealloc);
 EXPORT_SYMBOL(dmu_object_info);

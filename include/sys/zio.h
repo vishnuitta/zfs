@@ -204,7 +204,8 @@ enum zio_flag {
 	ZIO_FLAG_NOPWRITE	= 1 << 27,
 	ZIO_FLAG_REEXECUTED	= 1 << 28,
 	ZIO_FLAG_DELEGATED	= 1 << 29,
-	ZIO_FLAG_FASTWRITE	= 1 << 30
+	ZIO_FLAG_FASTWRITE	= 1 << 30,
+	ZIO_FLAG_NOWRITE	= 1 << 31
 };
 
 #define	ZIO_FLAG_MUSTSUCCEED		0
@@ -488,6 +489,16 @@ extern int zio_bookmark_compare(const void *, const void *);
 extern zio_t *zio_null(zio_t *pio, spa_t *spa, vdev_t *vd,
     zio_done_func_t *done, void *priv, enum zio_flag flags);
 
+extern zio_t *
+zio_null_buf(zio_t *pio, spa_t *spa, uint64_t txg,
+    abd_t *data, uint64_t lsize, uint64_t psize, const zio_prop_t *zp,
+    zio_done_func_t *done, void *private, zio_priority_t priority, enum zio_flag flags,
+    const zbookmark_phys_t *zb);
+
+extern zio_t *
+zio_reset(zio_t *zio, const blkptr_t *bp, zio_type_t type,
+    zio_done_func_t *done, void *private, enum zio_stage pipeline);
+
 extern zio_t *zio_root(spa_t *spa,
     zio_done_func_t *done, void *priv, enum zio_flag flags);
 
@@ -504,7 +515,7 @@ extern zio_t *zio_write(zio_t *pio, spa_t *spa, uint64_t txg, blkptr_t *bp,
 
 extern zio_t *zio_rewrite(zio_t *pio, spa_t *spa, uint64_t txg, blkptr_t *bp,
     struct abd *data, uint64_t size, zio_done_func_t *done, void *priv,
-    zio_priority_t priority, enum zio_flag flags, zbookmark_phys_t *zb);
+    zio_priority_t priority, enum zio_flag flags, const zbookmark_phys_t *zb);
 
 extern void zio_write_override(zio_t *zio, blkptr_t *bp, int copies,
     boolean_t nopwrite);

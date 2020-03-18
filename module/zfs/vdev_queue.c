@@ -499,7 +499,7 @@ vdev_queue_pending_remove(vdev_queue_t *vq, zio_t *zio)
 	}
 }
 
-static void
+void
 vdev_queue_agg_io_done(zio_t *aio)
 {
 	if (aio->io_type == ZIO_TYPE_READ) {

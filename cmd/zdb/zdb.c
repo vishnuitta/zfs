@@ -2041,8 +2041,10 @@ dump_object(objset_t *os, uint64_t object, int verbosity, int *print_header,
 			char segsize[32];
 			error = dnode_next_offset(dn,
 			    0, &start, minlvl, blkfill, 0);
-			if (error)
+			if (error) {
+				printf("err %d at %lu %lu\n", error, start, end);
 				break;
+			}
 			end = start;
 			error = dnode_next_offset(dn,
 			    DNODE_FIND_HOLE, &end, minlvl, blkfill, 0);
@@ -2050,8 +2052,10 @@ dump_object(objset_t *os, uint64_t object, int verbosity, int *print_header,
 			(void) printf("\t\tsegment [%016llx, %016llx)"
 			    " size %5s\n", (u_longlong_t)start,
 			    (u_longlong_t)end, segsize);
-			if (error)
+			if (error) {
+				printf("err %d at %lu %lu\n", error, start, end);
 				break;
+			}
 			start = end;
 		}
 	}

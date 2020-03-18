@@ -41,6 +41,7 @@
 #include <sys/dmu_zfetch.h>
 #include <sys/sa.h>
 #include <sys/sa_impl.h>
+#include <sys/spa_impl.h>
 #include <sys/zfeature.h>
 #include <sys/blkptr.h>
 #include <sys/range_tree.h>
@@ -75,7 +76,7 @@ static int __dbuf_hold_impl(struct dbuf_hold_impl_data *dh);
 uint_t zfs_dbuf_evict_key;
 
 static boolean_t dbuf_undirty(dmu_buf_impl_t *db, dmu_tx_t *tx);
-static void dbuf_write(dbuf_dirty_record_t *dr, arc_buf_t *data, dmu_tx_t *tx);
+static boolean_t dbuf_write(dbuf_dirty_record_t *dr, arc_buf_t *data, dmu_tx_t *tx);
 
 extern inline void dmu_buf_init_user(dmu_buf_user_t *dbu,
     dmu_buf_evict_func_t *evict_func_sync,
@@ -1971,6 +1972,23 @@ dmu_buf_will_not_fill(dmu_buf_t *db_fake, dmu_tx_t *tx)
 }
 
 void
+debug_dmu_buf_will_fill(dmu_buf_t *db_fake, dmu_tx_t *tx)
+{
+	dmu_buf_impl_t *db = (dmu_buf_impl_t *)db_fake;
+
+	ASSERT(db->db_blkid != DMU_BONUS_BLKID);
+	ASSERT(tx->tx_txg != 0);
+	ASSERT(db->db_level == 0);
+	ASSERT(!refcount_is_zero(&db->db_holds));
+
+	ASSERT(db->db.db_object != DMU_META_DNODE_OBJECT ||
+	    dmu_tx_private_ok(tx));
+
+	dbuf_noread(db);
+	(void) dbuf_dirty(db, tx);
+}
+
+void
 dmu_buf_will_fill(dmu_buf_t *db_fake, dmu_tx_t *tx)
 {
 	dmu_buf_impl_t *db = (dmu_buf_impl_t *)db_fake;
@@ -3165,17 +3183,31 @@ dbuf_check_blkptr(dnode_t *dn, dmu_buf_impl_t *db)
 	}
 }
 
+static void
+dbuf_write_ready(zio_t *zio, arc_buf_t *buf, void *vdb);
+
+static void
+dbuf_write_physdone(zio_t *zio, arc_buf_t *buf, void *arg);
+
+static void
+dbuf_write_children_ready(zio_t *zio, arc_buf_t *buf, void *vdb);
+
+static void
+dbuf_write_done(zio_t *zio, arc_buf_t *buf, void *vdb);
+
 /*
  * dbuf_sync_indirect() is called recursively from dbuf_sync_list() so it
  * is critical the we not allow the compiler to inline this function in to
  * dbuf_sync_list() thereby drastically bloating the stack usage.
  */
-noinline static void
+noinline static int
 dbuf_sync_indirect(dbuf_dirty_record_t *dr, dmu_tx_t *tx)
 {
 	dmu_buf_impl_t *db = dr->dr_dbuf;
 	dnode_t *dn;
 	zio_t *zio;
+	int new_writes = 0;
+	arc_write_callback_t *callback;
 
 	ASSERT(dmu_tx_is_syncing(tx));
 
@@ -3210,10 +3242,30 @@ dbuf_sync_indirect(dbuf_dirty_record_t *dr, dmu_tx_t *tx)
 
 	zio = dr->dr_zio;
 	mutex_enter(&dr->dt.di.dr_mtx);
-	dbuf_sync_list(&dr->dt.di.dr_children, db->db_level - 1, tx);
+	new_writes = dbuf_sync_list(&dr->dt.di.dr_children, db->db_level - 1, tx);
 	ASSERT(list_head(&dr->dt.di.dr_children) == NULL);
 	mutex_exit(&dr->dt.di.dr_mtx);
+
+	// Default assuming no new write for indirect zio. Reason is: its difficult to
+	// revert few things in arc if default is assumed as new write.
+	if (new_writes == 0) {
+		zio->io_flags |= ZIO_FLAG_NOWRITE;
+		zio->io_orig_flags = zio->io_flags;
+	} else {
+// This won't work with L2ARC, DEDUP, any data vdev other than stripe, no data checksum, no data compression
+// Also, REEXECUTED_IOs need to be checked
+		callback = arc_write_setup(db->db_buf, B_FALSE, dbuf_write_ready, dbuf_write_children_ready,
+		    dbuf_write_physdone, dbuf_write_done, db, zio->io_flags);
+		zio_reset(zio, &dr->dr_bp_copy, ZIO_TYPE_WRITE, arc_write_done, callback, ZIO_WRITE_PIPELINE);
+		zio->io_ready = arc_write_ready;
+		zio->io_children_ready = arc_write_children_ready;
+		zio->io_physdone = arc_write_physdone;
+
+		new_writes++;
+	}
+
 	zio_nowait(zio);
+	return new_writes;
 }
 
 /*
@@ -3221,7 +3273,7 @@ dbuf_sync_indirect(dbuf_dirty_record_t *dr, dmu_tx_t *tx)
  * critical the we not allow the compiler to inline this function in to
  * dbuf_sync_list() thereby drastically bloating the stack usage.
  */
-noinline static void
+noinline static boolean_t
 dbuf_sync_leaf(dbuf_dirty_record_t *dr, dmu_tx_t *tx)
 {
 	arc_buf_t **datap = &dr->dt.dl.dr_data;
@@ -3229,6 +3281,7 @@ dbuf_sync_leaf(dbuf_dirty_record_t *dr, dmu_tx_t *tx)
 	dnode_t *dn;
 	objset_t *os;
 	uint64_t txg = tx->tx_txg;
+	boolean_t new_write = B_TRUE;
 
 	ASSERT(dmu_tx_is_syncing(tx));
 
@@ -3312,7 +3365,7 @@ dbuf_sync_leaf(dbuf_dirty_record_t *dr, dmu_tx_t *tx)
 		ASSERT(db->db_dirtycnt > 0);
 		db->db_dirtycnt -= 1;
 		dbuf_rele_and_unlock(db, (void *)(uintptr_t)txg);
-		return;
+		return new_write;
 	}
 
 	os = dn->dn_objset;
@@ -3369,7 +3422,7 @@ dbuf_sync_leaf(dbuf_dirty_record_t *dr, dmu_tx_t *tx)
 
 	mutex_exit(&db->db_mtx);
 
-	dbuf_write(dr, *datap, tx);
+	new_write = dbuf_write(dr, *datap, tx);
 
 	ASSERT(!list_link_active(&dr->dr_dirty_node));
 	if (dn->dn_object == DMU_META_DNODE_OBJECT) {
@@ -3386,13 +3439,65 @@ dbuf_sync_leaf(dbuf_dirty_record_t *dr, dmu_tx_t *tx)
 		DB_DNODE_EXIT(db);
 		zio_nowait(dr->dr_zio);
 	}
+	return new_write;
+}
+
+#if 0
+boolean_t
+dbuf_remove_sync_leaf()
+{
 }
 
 void
+dbuf_remove_unwanted_drs(list_t *list, int level, dmu_tx_t *tx)
+{
+	dbuf_dirty_record_t *dr;
+	while (dr = list_head(list)) {
+		if (dr->dr_zio != NULL) {
+			/*
+			 * If we find an already initialized zio then we
+			 * are processing the meta-dnode, and we have finished.
+			 * The dbufs for all dnodes are put back on the list
+			 * during processing, so that we can zio_wait()
+			 * these IOs after initiating all child IOs.
+			 */
+			ASSERT3U(dr->dr_dbuf->db.db_object, ==,
+			    DMU_META_DNODE_OBJECT);
+			break;
+		}
+		if (dr->dr_dbuf->db_blkid != DMU_BONUS_BLKID &&
+		    dr->dr_dbuf->db_blkid != DMU_SPILL_BLKID) {
+			VERIFY3U(dr->dr_dbuf->db_level, ==, level);
+		}
+		list_remove(list, dr);
+		if (dr->dr_dbuf->db_level > 0)
+			yes = dbuf_remove_sync_indirect(dr, tx);
+		else
+			yes = dbuf_remove_sync_leaf(dr, tx);
+	}
+}
+#endif
+
+int
 dbuf_sync_list(list_t *list, int level, dmu_tx_t *tx)
 {
 	dbuf_dirty_record_t *dr;
+	boolean_t new_write;
+	int new_writes = 0;
+#if 0
+	zbookmark_phys_t zb;
+	dmu_buf_impl_t *db;
+	dnode_t *dn;
+	objset_t *os;
 
+	dnode_t *dn;
+	dn = DB_DNODE(db);
+	dbuf_check_blkptr(dn, db);
+
+			list_insert_tail(&di->dt.di.dr_children, dr);
+		if ((db->db_level == 0) && (dn->dn_type == DMU_OT_ZVOL) &&
+		    (!(BP_IS_HOLE(db->db_blkptr))) && (db->db_blkid >= 0))
+#endif
 	while ((dr = list_head(list))) {
 		if (dr->dr_zio != NULL) {
 			/*
@@ -3412,10 +3517,23 @@ dbuf_sync_list(list_t *list, int level, dmu_tx_t *tx)
 		}
 		list_remove(list, dr);
 		if (dr->dr_dbuf->db_level > 0)
-			dbuf_sync_indirect(dr, tx);
-		else
-			dbuf_sync_leaf(dr, tx);
+			new_writes += dbuf_sync_indirect(dr, tx);
+		else {
+#if 0
+			db = dr->dr_dbuf;
+			dn = DB_DNODE(db);
+			os = dn->dn_objset;
+			SET_BOOKMARK(&zb, os->os_dsl_dataset ?
+			    os->os_dsl_dataset->ds_object : DMU_META_OBJSET,
+			    db->db.db_object, db->db_level, db->db_blkid);
+			if (!((zb.zb_objset != 0) && ((zb.zb_object == 1) || zb.zb_object == 3)))
+				dbuf_sync_leaf(dr, tx);
+#endif
+			new_write = dbuf_sync_leaf(dr, tx);
+			new_writes += new_write;
+		}
 	}
+	return new_writes;
 }
 
 /* ARGSUSED */
@@ -3602,7 +3720,7 @@ dbuf_write_done(zio_t *zio, arc_buf_t *buf, void *vdb)
 	 * For nopwrites and rewrites we ensure that the bp matches our
 	 * original and bypass all the accounting.
 	 */
-	if (zio->io_flags & (ZIO_FLAG_IO_REWRITE | ZIO_FLAG_NOPWRITE)) {
+	if (zio->io_flags & (ZIO_FLAG_IO_REWRITE | ZIO_FLAG_NOPWRITE | ZIO_FLAG_NOWRITE)) {
 		ASSERT(BP_EQUAL(bp, bp_orig));
 	} else {
 		dsl_dataset_t *ds = os->os_dsl_dataset;
@@ -3683,6 +3801,31 @@ dbuf_write_nofill_done(zio_t *zio)
 }
 
 static void
+dbuf_rewrite_done(zio_t *zio, arc_buf_t *buf, void *vdb)
+{
+	dnode_t *dn;
+	dbuf_dirty_record_t *dr;
+	dmu_buf_impl_t *db = vdb;
+
+	dr = db->db_data_pending;
+
+	DB_DNODE_ENTER(db);
+	dn = DB_DNODE(db);
+
+	dsl_pool_undirty_space(dmu_objset_pool(dn->dn_objset),
+	    dr->dr_accounted, zio->io_txg);
+
+	dbuf_write_done(zio, buf, vdb);
+}
+
+static void
+dbuf_rewrite_done_cb(zio_t *zio)
+{
+	dmu_buf_impl_t *db = zio->io_private;
+	dbuf_rewrite_done(zio, db->db_buf, zio->io_private);
+}
+
+static void
 dbuf_write_override_ready(zio_t *zio)
 {
 	dbuf_dirty_record_t *dr = zio->io_private;
@@ -3712,8 +3855,11 @@ dbuf_write_override_done(zio_t *zio)
 		abd_put(zio->io_abd);
 }
 
+extern uint64_t dbufStats[201][301][11];
+extern uint64_t dbufIOSize[201][301][11];
+
 /* Issue I/O to commit a dirty buffer to disk. */
-static void
+static boolean_t
 dbuf_write(dbuf_dirty_record_t *dr, arc_buf_t *data, dmu_tx_t *tx)
 {
 	dmu_buf_impl_t *db = dr->dr_dbuf;
@@ -3725,6 +3871,7 @@ dbuf_write(dbuf_dirty_record_t *dr, arc_buf_t *data, dmu_tx_t *tx)
 	zio_prop_t zp;
 	zio_t *zio;
 	int wp_flag = 0;
+	boolean_t new_write = B_TRUE;
 
 	ASSERT(dmu_tx_is_syncing(tx));
 
@@ -3833,14 +3980,103 @@ dbuf_write(dbuf_dirty_record_t *dr, arc_buf_t *data, dmu_tx_t *tx)
 		 */
 		if (db->db_level != 0)
 			children_ready_cb = dbuf_write_children_ready;
+		if ((zb.zb_objset >= 0) && (zb.zb_object >= 0) && (zb.zb_level >= 0) &&
+		    (zb.zb_objset < 200) && (zb.zb_object < 300) && (zb.zb_level < 10)) {
+			dbufStats[zb.zb_objset][zb.zb_object][zb.zb_level]++;
+			dbufIOSize[zb.zb_objset][zb.zb_object][zb.zb_level] += db->db.db_size;
+		}
+		else {
+			dbufStats[200][300][10]++;
+			dbufIOSize[200][300][10] += db->db.db_size;
+		}
 
-		dr->dr_zio = arc_write(zio, os->os_spa, txg,
-		    &dr->dr_bp_copy, data, DBUF_IS_L2CACHEABLE(db),
-		    &zp, dbuf_write_ready,
-		    children_ready_cb, dbuf_write_physdone,
-		    dbuf_write_done, db, ZIO_PRIORITY_ASYNC_WRITE,
-		    ZIO_FLAG_MUSTSUCCEED, &zb);
+		/* send/recv need to be tested..
+		 * test with embedded data for both send/recv and normal, like,
+		 * old content being embedded, new is not and vice versa, also,
+		 * old and new being embedded..*/
+		if ((dn->dn_type == DMU_OT_ZVOL) && (!zp.zp_dedup) &&
+		    (db->db_blkid >= 0) && (!BP_IS_EMBEDDED(db->db_blkptr)) && !DVA_IS_EMPTY(BP_IDENTITY(db->db_blkptr))) {
+			if (db->db_level == 0) {
+				size_t lsize = buf_get_lsize(data);
+				char *buf = (char *)(data->b_data);
+#if 0
+				if (db->db_blkid == 0x84003)
+					printf("write l:%lu o:%lu blkid:%lu %c%c%c%c:%c%c%c%c\n",
+					    lsize, buf_get_psize(data), db->db_blkid,
+					    buf[0], buf[1], buf[2], buf[3], buf[lsize-4], buf[lsize-3], buf[lsize-2], buf[lsize-1]);
+#endif
+				/*
+				 * in case of existing lsize and psize are same, we can jump to no compress writes as well
+				 */
+				if ((buf_get_psize(data) == 0) || (lsize == buf_get_psize(data)))
+					goto new_writes;
+				if (zp.zp_compress != ZIO_COMPRESS_OFF) {
+					void *cbuf = zio_buf_alloc(lsize);
+					VERIFY(lsize == arc_buf_size(data));
+					abd_t *cabd = abd_get_from_buf(buf, arc_buf_size(data));
+					size_t psize = zio_compress_data(zp.zp_compress, cabd, cbuf, lsize);
+					abd_put(cabd);
+					memset(cbuf + psize, 0, (lsize - psize));
+					size_t rounded = (size_t)P2ROUNDUP(psize, 1ULL << os->os_spa->spa_min_ashift);
+					if ((rounded > buf_get_psize(data)) || (psize <= BPE_PAYLOAD_SIZE) || (rounded == lsize)) {
+						zio_buf_free(cbuf, lsize);
+#if 0
+						if (db->db_blkid == 0x84003)
+						printf("new write due to l:%lu n:%lu r:%lu o:%lu blkid:%lu %c%c%c%c:%c%c%c%c\n",
+						    lsize, psize, rounded, buf_get_psize(data), db->db_blkid,
+						    buf[0], buf[1], buf[2], buf[3], buf[lsize-4], buf[lsize-3], buf[lsize-2], buf[lsize-1]);
+#endif
+					} else {
+//						if (db->db_blkid == 0x84003)
+						printf("overwrite due to l:%lu n:%lu r:%lu o:%lu blkid:%lu\n",
+						    lsize, psize, rounded, buf_get_psize(data), db->db_blkid);
+						dr->dr_zio = arc_rewrite_compress(zio, os->os_spa, txg,
+						    &dr->dr_bp_copy, data, cbuf, B_FALSE, &zp, NULL,
+						    NULL, NULL, dbuf_rewrite_done, db,
+						    ZIO_PRIORITY_ASYNC_WRITE, ZIO_FLAG_MUSTSUCCEED, &zb);
+						new_write = B_FALSE;
+					}
+				} else {
+					dr->dr_zio = arc_rewrite(zio, os->os_spa, txg,
+					    &dr->dr_bp_copy, data, B_FALSE, &zp, NULL,
+					    NULL, NULL, dbuf_rewrite_done, db,
+					    ZIO_PRIORITY_ASYNC_WRITE, ZIO_FLAG_MUSTSUCCEED, &zb);
+					new_write = B_FALSE;
+				}
+			} else {
+				dr->dr_zio = arc_null(zio, os->os_spa, txg,
+				    data, B_FALSE, &zp,
+				    dbuf_rewrite_done_cb, db,
+				    ZIO_PRIORITY_ASYNC_WRITE, ZIO_FLAG_MUSTSUCCEED, &zb);
+				new_write = B_FALSE;
+			}
+		}
+#if 0
+		if (new_write == B_FALSE) {
+			if (db->db_level == 0)
+				dr->dr_zio = arc_rewrite(zio, os->os_spa, txg,
+				    &dr->dr_bp_copy, data, cbuf, B_FALSE, &zp, NULL,
+				    NULL, NULL, dbuf_rewrite_done, db,
+				    ZIO_PRIORITY_ASYNC_WRITE, ZIO_FLAG_MUSTSUCCEED, &zb);
+			else
+				dr->dr_zio = arc_null(zio, os->os_spa, txg,
+				    data, B_FALSE, &zp,
+				    dbuf_rewrite_done_cb, db,
+				    ZIO_PRIORITY_ASYNC_WRITE, ZIO_FLAG_MUSTSUCCEED, &zb);
+		}
+		else
+#endif
+new_writes:
+		if (new_write == B_TRUE) {
+			dr->dr_zio = arc_write(zio, os->os_spa, txg,
+			    &dr->dr_bp_copy, data, DBUF_IS_L2CACHEABLE(db),
+			    &zp, dbuf_write_ready,
+			    children_ready_cb, dbuf_write_physdone,
+			    dbuf_write_done, db, ZIO_PRIORITY_ASYNC_WRITE,
+			    ZIO_FLAG_MUSTSUCCEED, &zb);
+		}
 	}
+	return new_write;
 }
 
 #if defined(_KERNEL) && defined(HAVE_SPL)
@@ -3858,6 +4094,7 @@ EXPORT_SYMBOL(dbuf_dirty);
 EXPORT_SYMBOL(dmu_buf_will_dirty);
 EXPORT_SYMBOL(dmu_buf_will_not_fill);
 EXPORT_SYMBOL(dmu_buf_will_fill);
+EXPORT_SYMBOL(debug_dmu_buf_will_fill);
 EXPORT_SYMBOL(dmu_buf_fill_done);
 EXPORT_SYMBOL(dmu_buf_rele);
 EXPORT_SYMBOL(dbuf_assign_arcbuf);

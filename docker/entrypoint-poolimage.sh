@@ -8,6 +8,7 @@ call_exit()
 echo "at call_exit.."     
 echo  "exit code:" $?
 echo "reference: "  $0 
+exit 1
 }
 
 
@@ -22,7 +23,7 @@ if [ -z "$ENABLE_COREDUMP" ]; then
 else
 	echo "Enabling coredumps"
 	ulimit -c unlimited
-	cd /var/openebs/sparse || exit
+	cd /var/openebs/sparse || exit 1
 fi
 # ulimit being shell specific, ulimit -c in container shows as unlimited
 

@@ -33,6 +33,13 @@
 #include <sys/fm/fs/zfs.h>
 #include <sys/abd.h>
 
+#include <uzfs_mgmt.h>
+
+extern uint64_t diskStats[201][301][11];
+extern uint64_t diskIOSize[201][301][11];
+extern uint64_t total_disk_ios;
+extern uint64_t total_disk_ios_size;
+
 /*
  * Virtual device vector for files.
  */
@@ -157,8 +164,35 @@ vdev_file_io_strategy(void *arg)
 
 	if (zio->io_type == ZIO_TYPE_READ)
 		buf = abd_borrow_buf(zio->io_abd, zio->io_size);
-	else
+	else {
 		buf = abd_borrow_buf_copy(zio->io_abd, zio->io_size);
+
+		if ((zio->io_bookmark.zb_objset >= 0) && (zio->io_bookmark.zb_objset >= 0) && (zio->io_bookmark.zb_level >= 0) &&
+		    (zio->io_bookmark.zb_objset < 200) && (zio->io_bookmark.zb_objset < 300) && (zio->io_bookmark.zb_level < 10)) {
+			diskStats[zio->io_bookmark.zb_objset][zio->io_bookmark.zb_object][zio->io_bookmark.zb_level]++;
+			diskIOSize[zio->io_bookmark.zb_objset][zio->io_bookmark.zb_object][zio->io_bookmark.zb_level] += zio->io_size;
+		}
+		else {
+			diskStats[200][300][10]++;
+			diskIOSize[200][300][10] += zio->io_size;
+		}
+
+		total_disk_ios++;
+		total_disk_ios_size += zio->io_size;
+#if 0
+		if (zio->io_bookmark.zb_objset != 0) {
+			if (zio->io_bookmark.zb_object == 1)
+				perfStats[zio->io_bookmark.zb_objset].writes_1++;
+			if (zio->io_bookmark.zb_object == 3)
+				perfStats[zio->io_bookmark.zb_objset].writes_3++;
+		}
+
+		if (zio->io_bookmark.zb_object == 0) {
+			perfStats[zio->io_bookmark.zb_objset].sync_new_writes_1++;
+			perfStats[zio->io_bookmark.zb_objset].sync_over_writes_1 += zio->io_size;
+		}
+#endif
+	}
 
 	zio->io_error = vn_rdwr(zio->io_type == ZIO_TYPE_READ ?
 	    UIO_READ : UIO_WRITE, vf->vf_vnode, buf, zio->io_size,

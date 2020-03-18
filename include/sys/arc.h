@@ -231,6 +231,27 @@ void arc_buf_thaw(arc_buf_t *buf);
 int arc_referenced(arc_buf_t *buf);
 #endif
 
+void
+arc_write_ready(zio_t *zio);
+void
+arc_write_children_ready(zio_t *zio);
+void
+arc_write_physdone(zio_t *zio);
+void
+arc_write_done(zio_t *zio);
+
+typedef struct arc_write_callback arc_write_callback_t;
+
+struct arc_write_callback {
+	void		*awcb_private;
+	arc_done_func_t	*awcb_ready;
+	arc_done_func_t	*awcb_children_ready;
+	arc_done_func_t	*awcb_physdone;
+	arc_done_func_t	*awcb_done;
+	arc_buf_t	*awcb_buf;
+};
+
+
 int arc_read(zio_t *pio, spa_t *spa, const blkptr_t *bp,
     arc_done_func_t *done, void *priv, zio_priority_t priority, int flags,
     arc_flags_t *arc_flags, const zbookmark_phys_t *zb);
@@ -240,6 +261,31 @@ zio_t *arc_write(zio_t *pio, spa_t *spa, uint64_t txg,
     arc_done_func_t *physdone, arc_done_func_t *done,
     void *priv, zio_priority_t priority, int zio_flags,
     const zbookmark_phys_t *zb);
+zio_t *arc_rewrite(zio_t *pio, spa_t *spa, uint64_t txg,
+    blkptr_t *bp, arc_buf_t *buf, boolean_t l2arc, const zio_prop_t *zp,
+    arc_done_func_t *ready, arc_done_func_t *child_ready,
+    arc_done_func_t *physdone, arc_done_func_t *done,
+    void *priv, zio_priority_t priority, int zio_flags,
+    const zbookmark_phys_t *zb);
+zio_t *arc_rewrite_compress(zio_t *pio, spa_t *spa, uint64_t txg,
+    blkptr_t *bp, arc_buf_t *buf, void *cbuf, boolean_t l2arc, const zio_prop_t *zp,
+    arc_done_func_t *ready, arc_done_func_t *child_ready,
+    arc_done_func_t *physdone, arc_done_func_t *done,
+    void *priv, zio_priority_t priority, int zio_flags,
+    const zbookmark_phys_t *zb);
+zio_t *arc_null(zio_t *pio, spa_t *spa, uint64_t txg, arc_buf_t *buf,
+    boolean_t l2arc, const zio_prop_t *zp,
+    zio_done_func_t *done, void *private,
+    zio_priority_t priority, int zio_flags, const zbookmark_phys_t *zb);
+size_t buf_get_lsize(arc_buf_t *);
+size_t buf_get_psize(arc_buf_t *);
+
+arc_write_callback_t *
+arc_write_setup(arc_buf_t *buf, boolean_t l2arc,
+    arc_done_func_t *ready, arc_done_func_t *children_ready,
+    arc_done_func_t *physdone, arc_done_func_t *done, void *private,
+    int zio_flags);
+
 
 arc_prune_t *arc_add_prune_callback(arc_prune_func_t *func, void *priv);
 void arc_remove_prune_callback(arc_prune_t *p);

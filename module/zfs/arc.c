@@ -374,7 +374,7 @@ int zfs_arc_shrink_shift = 0;
 int zfs_arc_p_min_shift = 0;
 int zfs_arc_average_blocksize = 8 * 1024; /* 8KB */
 
-int zfs_compressed_arc_enabled = B_TRUE;
+int zfs_compressed_arc_enabled = B_FALSE;
 
 /*
  * ARC will evict meta buffers that exceed arc_meta_limit. This
@@ -5866,7 +5866,7 @@ arc_referenced(arc_buf_t *buf)
 }
 #endif
 
-static void
+void
 arc_write_ready(zio_t *zio)
 {
 	arc_write_callback_t *callback = zio->io_private;
@@ -5900,7 +5900,8 @@ arc_write_ready(zio_t *zio)
 	ASSERT(!HDR_SHARED_DATA(hdr));
 	ASSERT(!arc_buf_is_shared(buf));
 
-	callback->awcb_ready(zio, buf, callback->awcb_private);
+	if (callback->awcb_ready)
+		callback->awcb_ready(zio, buf, callback->awcb_private);
 
 	if (HDR_IO_IN_PROGRESS(hdr))
 		ASSERT(zio->io_flags & ZIO_FLAG_REEXECUTED);
@@ -5961,7 +5962,7 @@ arc_write_ready(zio_t *zio)
 	spl_fstrans_unmark(cookie);
 }
 
-static void
+void
 arc_write_children_ready(zio_t *zio)
 {
 	arc_write_callback_t *callback = zio->io_private;
@@ -5974,7 +5975,7 @@ arc_write_children_ready(zio_t *zio)
  * The SPA calls this callback for each physical write that happens on behalf
  * of a logical write.  See the comment in dbuf_write_physdone() for details.
  */
-static void
+void
 arc_write_physdone(zio_t *zio)
 {
 	arc_write_callback_t *cb = zio->io_private;
@@ -5982,7 +5983,16 @@ arc_write_physdone(zio_t *zio)
 		cb->awcb_physdone(zio, cb->awcb_buf, cb->awcb_private);
 }
 
-static void
+void
+arc_rewrite_done(zio_t *zio)
+{
+	void *cbuf = zio->io_abd->abd_u.abd_linear.abd_buf;
+	size_t size = zio->io_abd->abd_size;
+	arc_write_done(zio);
+	zio_buf_free(cbuf, size);
+}
+	
+void
 arc_write_done(zio_t *zio)
 {
 	arc_write_callback_t *callback = zio->io_private;
@@ -6066,18 +6076,14 @@ arc_write_done(zio_t *zio)
 	kmem_free(callback, sizeof (arc_write_callback_t));
 }
 
-zio_t *
-arc_write(zio_t *pio, spa_t *spa, uint64_t txg,
-    blkptr_t *bp, arc_buf_t *buf, boolean_t l2arc,
-    const zio_prop_t *zp, arc_done_func_t *ready,
-    arc_done_func_t *children_ready, arc_done_func_t *physdone,
-    arc_done_func_t *done, void *private, zio_priority_t priority,
-    int zio_flags, const zbookmark_phys_t *zb)
+arc_write_callback_t *
+arc_write_setup(arc_buf_t *buf, boolean_t l2arc,
+    arc_done_func_t *ready, arc_done_func_t *children_ready,
+    arc_done_func_t *physdone, arc_done_func_t *done, void *private,
+    int zio_flags)
 {
 	arc_buf_hdr_t *hdr = buf->b_hdr;
 	arc_write_callback_t *callback;
-	zio_t *zio;
-	zio_prop_t localprop = *zp;
 
 	ASSERT3P(ready, !=, NULL);
 	ASSERT3P(done, !=, NULL);
@@ -6087,17 +6093,6 @@ arc_write(zio_t *pio, spa_t *spa, uint64_t txg,
 	ASSERT3U(hdr->b_l1hdr.b_bufcnt, >, 0);
 	if (l2arc)
 		arc_hdr_set_flags(hdr, ARC_FLAG_L2CACHE);
-	if (ARC_BUF_COMPRESSED(buf)) {
-		/*
-		 * We're writing a pre-compressed buffer.  Make the
-		 * compression algorithm requested by the zio_prop_t match
-		 * the pre-compressed buffer's compression algorithm.
-		 */
-		localprop.zp_compress = HDR_GET_COMPRESS(hdr);
-
-		ASSERT3U(HDR_GET_LSIZE(hdr), !=, arc_buf_size(buf));
-		zio_flags |= ZIO_FLAG_RAW;
-	}
 	callback = kmem_zalloc(sizeof (arc_write_callback_t), KM_SLEEP);
 	callback->awcb_ready = ready;
 	callback->awcb_children_ready = children_ready;
@@ -6131,15 +6126,133 @@ arc_write(zio_t *pio, spa_t *spa, uint64_t txg,
 
 	ASSERT(!arc_buf_is_shared(buf));
 	ASSERT3P(hdr->b_l1hdr.b_pabd, ==, NULL);
+	return callback;
+}
 
+zio_t *
+arc_null(zio_t *pio, spa_t *spa, uint64_t txg, arc_buf_t *buf,
+    boolean_t l2arc, const zio_prop_t *zp,
+    zio_done_func_t *done, void *private,
+    zio_priority_t priority, int zio_flags, const zbookmark_phys_t *zb)
+{
+	zio_t *zio;
+	arc_buf_hdr_t *hdr = buf->b_hdr;
+
+	zio_prop_t localprop = *zp;
+	if (ARC_BUF_COMPRESSED(buf)) {
+		/*
+		 * We're writing a pre-compressed buffer.  Make the
+		 * compression algorithm requested by the zio_prop_t match
+		 * the pre-compressed buffer's compression algorithm.
+		 */
+		localprop.zp_compress = HDR_GET_COMPRESS(hdr);
+
+		ASSERT3U(HDR_GET_LSIZE(hdr), !=, arc_buf_size(buf));
+		zio_flags |= ZIO_FLAG_RAW;
+	}
+
+	zio = zio_null_buf(pio, spa, txg,
+	    abd_get_from_buf(buf->b_data, HDR_GET_LSIZE(hdr)),
+	    HDR_GET_LSIZE(hdr), arc_buf_size(buf), &localprop, done, private,
+	    priority, zio_flags, zb);
+
+	return (zio);
+}
+
+zio_t *
+arc_write(zio_t *pio, spa_t *spa, uint64_t txg,
+    blkptr_t *bp, arc_buf_t *buf, boolean_t l2arc,
+    const zio_prop_t *zp, arc_done_func_t *ready,
+    arc_done_func_t *children_ready, arc_done_func_t *physdone,
+    arc_done_func_t *done, void *private, zio_priority_t priority,
+    int zio_flags, const zbookmark_phys_t *zb)
+{
+	zio_t *zio;
+	arc_buf_hdr_t *hdr = buf->b_hdr;
+	arc_write_callback_t *callback;
+
+	zio_prop_t localprop = *zp;
+	if (ARC_BUF_COMPRESSED(buf)) {
+		/*
+		 * We're writing a pre-compressed buffer.  Make the
+		 * compression algorithm requested by the zio_prop_t match
+		 * the pre-compressed buffer's compression algorithm.
+		 */
+		localprop.zp_compress = HDR_GET_COMPRESS(hdr);
+
+		ASSERT3U(HDR_GET_LSIZE(hdr), !=, arc_buf_size(buf));
+		zio_flags |= ZIO_FLAG_RAW;
+	}
+
+	callback = arc_write_setup(buf, l2arc, ready, children_ready,
+	    physdone, done, private, zio_flags);
 	zio = zio_write(pio, spa, txg, bp,
 	    abd_get_from_buf(buf->b_data, HDR_GET_LSIZE(hdr)),
 	    HDR_GET_LSIZE(hdr), arc_buf_size(buf), &localprop, arc_write_ready,
 	    (children_ready != NULL) ? arc_write_children_ready : NULL,
 	    arc_write_physdone, arc_write_done, callback,
 	    priority, zio_flags, zb);
-
 	return (zio);
+}
+
+zio_t *
+arc_rewrite_compress(zio_t *pio, spa_t *spa, uint64_t txg,
+    blkptr_t *bp, arc_buf_t *buf, void *cbuf, boolean_t l2arc,
+    const zio_prop_t *zp, arc_done_func_t *ready,
+    arc_done_func_t *children_ready, arc_done_func_t *physdone,
+    arc_done_func_t *done, void *private, zio_priority_t priority,
+    int zio_flags, const zbookmark_phys_t *zb)
+{
+	zio_t *zio;
+	arc_buf_hdr_t *hdr = buf->b_hdr;
+	arc_write_callback_t *callback;
+
+	callback = arc_write_setup(buf, l2arc, ready, children_ready,
+	    physdone, done, private, zio_flags);
+
+	VERIFY(HDR_GET_LSIZE(hdr) == arc_buf_size(buf));
+	zio = zio_rewrite(pio, spa, txg, bp,
+	    abd_get_from_buf(cbuf, HDR_GET_PSIZE(hdr)),
+	    HDR_GET_PSIZE(hdr), arc_rewrite_done, callback,
+	    priority, zio_flags, zb);
+	arc_write_ready(zio);
+	return (zio);
+}
+
+zio_t *
+arc_rewrite(zio_t *pio, spa_t *spa, uint64_t txg,
+    blkptr_t *bp, arc_buf_t *buf, boolean_t l2arc,
+    const zio_prop_t *zp, arc_done_func_t *ready,
+    arc_done_func_t *children_ready, arc_done_func_t *physdone,
+    arc_done_func_t *done, void *private, zio_priority_t priority,
+    int zio_flags, const zbookmark_phys_t *zb)
+{
+	zio_t *zio;
+	arc_buf_hdr_t *hdr = buf->b_hdr;
+	arc_write_callback_t *callback;
+
+	callback = arc_write_setup(buf, l2arc, ready, children_ready,
+	    physdone, done, private, zio_flags);
+
+	VERIFY(HDR_GET_LSIZE(hdr) == arc_buf_size(buf));
+	zio = zio_rewrite(pio, spa, txg, bp,
+	    abd_get_from_buf(buf->b_data, HDR_GET_LSIZE(hdr)),
+	    HDR_GET_LSIZE(hdr), arc_write_done, callback,
+	    priority, zio_flags, zb);
+	arc_write_ready(zio);
+	return (zio);
+}
+
+size_t
+buf_get_lsize(arc_buf_t *buf)
+{
+	return (buf->b_hdr->b_lsize << SPA_MINBLOCKSHIFT);
+}
+
+size_t
+buf_get_psize(arc_buf_t *buf)
+{
+	return (buf->b_hdr->b_psize << SPA_MINBLOCKSHIFT);
 }
 
 static int
@@ -7880,6 +7993,10 @@ l2arc_stop(void)
 #if defined(_KERNEL) && defined(HAVE_SPL)
 EXPORT_SYMBOL(arc_buf_size);
 EXPORT_SYMBOL(arc_write);
+EXPORT_SYMBOL(arc_rewrite);
+EXPORT_SYMBOL(arc_rewrite_compress);
+EXPORT_SYMBOL(buf_get_psize);
+EXPORT_SYMBOL(buf_get_lsize);
 EXPORT_SYMBOL(arc_read);
 EXPORT_SYMBOL(arc_buf_info);
 EXPORT_SYMBOL(arc_getbuf_func);
