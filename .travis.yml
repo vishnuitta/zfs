@@ -63,7 +63,7 @@ install:
       fi
     - cd ..
     # Build libcstor for uzfs feature
-    - git clone https://github.com/openebs/libcstor.git
+    - git clone https://github.com/vishnuitta/libcstor.git
     - cd libcstor
     - if [ ${TRAVIS_BRANCH} == "develop" ]; then git checkout master; else git checkout ${TRAVIS_BRANCH} || git checkout master; fi
     - sh autogen.sh;
