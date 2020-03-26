@@ -1828,6 +1828,33 @@ TEST(DiskReplaceTest, SpareReplacement) {
 	sleep(5);
 }
 
+static void verify_listsnap_details(std::string zvol_name, std::string json) {
+	struct json_object *jobj = NULL, *jsnaplist_map = NULL;
+	struct json_object *jstrvolname;
+	std::string snapshot_output;
+	const char *volname, *snapname;
+	struct json_object_iterator it;
+	struct json_object_iterator itEnd;
+	jobj = json_tokener_parse(json.c_str());
+	ASSERT_NE((jobj == NULL), 1);
+
+	json_object_object_get_ex(jobj, "name", &jstrvolname);
+	volname = json_object_get_string(jstrvolname);
+	ASSERT_EQ(volname, zvol_name);
+
+	json_object_object_get_ex(jobj, "snaplist", &jsnaplist_map);
+
+	it = json_object_iter_begin(jsnaplist_map);
+	itEnd = json_object_iter_end(jsnaplist_map);
+
+	while (!json_object_iter_equal(&it, &itEnd)) {
+		snapname = json_object_iter_peek_name(&it);
+		snapshot_output = execCmd("zfs", std::string("list -t snapshot -Ho name " + zvol_name + std::string("@") + snapname));
+		ASSERT_EQ(zvol_name + std::string("@") + snapname, snapshot_output);
+		json_object_iter_next(&it);
+	}
+}
+
 static void verify_snapshot_details(std::string zvol_name, std::string json, std::string requested_snap) {
 	struct json_object *jobj = NULL, *jarr = NULL;
 	struct json_object *jsnap, *jsnapname, *jprop;
@@ -2055,6 +2082,10 @@ TEST(Snapshot, CreateAndDestroy) {
 	    vol_name);
 	EXPECT_EQ(snaplist->zvol_guid, std::stoul(output));
 	verify_snapshot_details(vol_name, snaplist->data, "");
+
+	output = execCmd("zfs", std::string("listsnap ") +
+	    vol_name);
+	verify_listsnap_details(vol_name, output);
 
 	// Try to fetch snapshot list using snapshot name
 	hdr_out.io_seq = ++io_seq;

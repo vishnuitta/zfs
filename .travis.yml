@@ -4,6 +4,7 @@ branches:
   only:
     - develop
     - zfs-0.7-release
+    - listsnap
     - /^\d+\.\d+(\.\d+)?(-\S*)?$/
     - /^v\d+\.\d+(\.\S*)?$/
 env:
