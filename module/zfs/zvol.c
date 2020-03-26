@@ -354,7 +354,7 @@ uzfs_ioc_list_snap(zfs_cmd_t *zc, nvlist_t *nvl)
 	zvol_info_t *zinfo;
 	int error;
 
-	zvol_info_t *zinfo = uzfs_zinfo_lookup(zc->zc_name);
+	zinfo = uzfs_zinfo_lookup(zc->zc_name);
 	if (zinfo == NULL)
 		return (ENOENT);
 
