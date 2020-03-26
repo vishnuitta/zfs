@@ -7095,12 +7095,12 @@ zfs_do_list_snap(int argc, char **argv)
 	char *str_val;
 
 	if (argc != 2) {
-		fprintf(stderr, "got list snap command %d\n", argc);
+		fprintf(stderr, "got listsnap command %d\n", argc);
 		usage(B_FALSE);
 	}
 
 	if ((error = lzc_list_snap(argv[1], NULL, &outnvl)) != 0) {
-		fprintf(stderr, "failed list snap command for %s with err %d\n",
+		fprintf(stderr, "failed listsnap command for %s with err %d\n",
 		    argv[1], error);
 		return (error);
 	}
@@ -7109,11 +7109,10 @@ zfs_do_list_snap(int argc, char **argv)
 		switch (nvpair_type(elem)) {
 			case DATA_TYPE_STRING:
 				nvpair_value_string(elem, &str_val);
-				fprintf(stdout, "%s: %s\n", nvpair_name(elem),
-				    str_val);
+				fprintf(stdout, "%s\n", str_val);
 				break;
 			default:
-				error = 2;
+				error = EAGAIN;
 				fprintf(stderr, "nvpair type : %d name:%s\n",
 				    nvpair_type(elem), nvpair_name(elem));
 		}

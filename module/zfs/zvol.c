@@ -354,17 +354,9 @@ uzfs_ioc_list_snap(zfs_cmd_t *zc, nvlist_t *nvl)
 	zvol_info_t *zinfo;
 	int error;
 
-	mutex_enter(&zvol_list_mutex);
-	SLIST_FOREACH(zinfo, &zvol_list, zinfo_next) {
-		if (uzfs_zvol_name_compare(zinfo, zc->zc_name) == 0) {
-			uzfs_zinfo_take_refcnt(zinfo);
-			break;
-		}
-	}
-	mutex_exit(&zvol_list_mutex);
-
+	zvol_info_t *zinfo = uzfs_zinfo_lookup(zc->zc_name);
 	if (zinfo == NULL)
-		return (0);
+		return (ENOENT);
 
 	error = uzfs_zvol_add_nvl_snapshot_list(zinfo, nvl);
 
