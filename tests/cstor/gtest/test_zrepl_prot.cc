@@ -1835,12 +1835,13 @@ static void verify_listsnap_details(std::string zvol_name) {
 	const char *volname, *snapname;
 	struct json_object_iterator it;
 	struct json_object_iterator itEnd;
-	std::string json, snap;
+	std::string json, volsnap, snap;
 
 	json = execCmd("zfs", std::string("listsnap ") +
 	    zvol_name);
 
 	jobj = json_tokener_parse(json.c_str());
+	printf("%s\n", json.c_str());
 	ASSERT_NE((jobj == NULL), 1);
 
 	json_object_object_get_ex(jobj, "name", &jstrvolname);
@@ -1855,18 +1856,24 @@ static void verify_listsnap_details(std::string zvol_name) {
 	while (!json_object_iter_equal(&it, &itEnd)) {
 		snapname = json_object_iter_peek_name(&it);
 		snapshot_output = execCmd("zfs", std::string("list -t snapshot -Ho name " + zvol_name + std::string("@") + snapname));
+		printf("%s\n", snapshot_output.c_str());
 		ASSERT_EQ(zvol_name + std::string("@") + snapname, snapshot_output);
 		json_object_iter_next(&it);
 	}
 
 	snapshot_output = execCmd("zfs", std::string("list -t snapshot -Ho name"));
 	std::stringstream ss(snapshot_output);
-	if (snapshot_output != NULL) {
-		while (std::getline(ss, snap, "\n")) {
-			jsnap = NULL;
-			json_object_object_get_ex(jsnaplist_map, snap.c_str(), &jsnap);
-			ASSERT_NE(jsnap, NULL);
+	while (std::getline(ss, volsnap, '\n')) {
+		std::stringstream volss(volsnap);
+		int count = 1;
+		while (std::getline(volss, snap, '@')) {
+			if (count == 2)
+				break;
+			count = count + 1;
 		}
+		json_bool ret = json_object_object_get_ex(jsnaplist_map, snap.c_str(), &jsnap);
+		printf("%s\n", snap.c_str());
+		ASSERT_EQ(ret, 1);
 	}
 }
 
