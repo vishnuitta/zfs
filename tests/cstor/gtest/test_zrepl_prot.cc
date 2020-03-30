@@ -1856,7 +1856,6 @@ static void verify_listsnap_details(std::string zvol_name) {
 	while (!json_object_iter_equal(&it, &itEnd)) {
 		snapname = json_object_iter_peek_name(&it);
 		snapshot_output = execCmd("zfs", std::string("list -t snapshot -Ho name " + zvol_name + std::string("@") + snapname));
-		printf("%s\n", snapshot_output.c_str());
 		ASSERT_EQ(zvol_name + std::string("@") + snapname, snapshot_output);
 		json_object_iter_next(&it);
 	}
